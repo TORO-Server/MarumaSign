@@ -1,4 +1,4 @@
-package marumasa.marumasign.client;
+package marumasa.marumasa_sign.client;
 
 import net.fabricmc.api.ClientModInitializer;
 
