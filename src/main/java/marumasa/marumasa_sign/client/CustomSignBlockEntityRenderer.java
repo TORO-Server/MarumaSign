@@ -2,6 +2,7 @@ package marumasa.marumasa_sign.client;
 
 import net.minecraft.block.entity.SignBlockEntity;
 import net.minecraft.client.MinecraftClient;
+import net.minecraft.client.network.ClientPlayerEntity;
 import net.minecraft.client.render.RenderLayer;
 import net.minecraft.client.render.VertexConsumer;
 import net.minecraft.client.render.VertexConsumerProvider;
@@ -21,11 +22,16 @@ import java.net.URL;
 public class CustomSignBlockEntityRenderer extends SignBlockEntityRenderer {
 
     private final TextureManager textureManager;
+    private final ClientPlayerEntity player;
+    private final MinecraftClient client;
 
     public CustomSignBlockEntityRenderer(BlockEntityRendererFactory.Context ctx) {
         super(ctx);
 
-        textureManager = MinecraftClient.getInstance().getTextureManager();
+        client = MinecraftClient.getInstance();
+
+        textureManager = client.getTextureManager();
+        player = client.player;
 
         try {
             textureManager.registerTexture(
@@ -41,6 +47,17 @@ public class CustomSignBlockEntityRenderer extends SignBlockEntityRenderer {
     @Override
     public void render(SignBlockEntity sign, float tickDelta, MatrixStack matrices, VertexConsumerProvider vertexConsumers, int light, int overlay) {
         if (true) {
+
+
+            final ClientPlayerEntity clientPlayer = client.player;
+
+            // もし プレイヤーがスペクテイターモードだったら
+            // 通常のMinecraft看板 も レンダリングするようにする
+            if (clientPlayer != null && clientPlayer.isSpectator()) {
+                // 親クラスのrenderメソッドを呼び出して 看板のレンダリング処理をする
+                super.render(sign, tickDelta, matrices, vertexConsumers, light, overlay);
+            }
+
             // 看板URLから画像をレンダリングする
 
             // getEntityCutout で 透過対応の RenderLayer 生成
