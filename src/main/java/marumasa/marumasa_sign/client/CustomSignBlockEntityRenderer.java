@@ -1,19 +1,40 @@
 package marumasa.marumasa_sign.client;
 
 import net.minecraft.block.entity.SignBlockEntity;
+import net.minecraft.client.MinecraftClient;
 import net.minecraft.client.render.RenderLayer;
 import net.minecraft.client.render.VertexConsumer;
 import net.minecraft.client.render.VertexConsumerProvider;
 import net.minecraft.client.render.block.entity.BlockEntityRendererFactory;
 import net.minecraft.client.render.block.entity.SignBlockEntityRenderer;
+import net.minecraft.client.texture.NativeImage;
+import net.minecraft.client.texture.NativeImageBackedTexture;
+import net.minecraft.client.texture.TextureManager;
 import net.minecraft.client.util.math.MatrixStack;
 import net.minecraft.util.Identifier;
 import org.joml.Matrix3f;
 import org.joml.Matrix4f;
 
+import java.io.IOException;
+import java.net.URL;
+
 public class CustomSignBlockEntityRenderer extends SignBlockEntityRenderer {
+
+    private final TextureManager textureManager;
+
     public CustomSignBlockEntityRenderer(BlockEntityRendererFactory.Context ctx) {
         super(ctx);
+
+        textureManager = MinecraftClient.getInstance().getTextureManager();
+
+        try {
+            textureManager.registerTexture(
+                    new Identifier("test", "test"),
+                    new NativeImageBackedTexture(NativeImage.read(new URL("http://localhost/test.png").openStream()))
+            );
+        } catch (IOException e) {
+            throw new RuntimeException(e);
+        }
     }
 
     // renderメソッドをオーバーライドして レンダリング処理を変更する
@@ -33,6 +54,7 @@ public class CustomSignBlockEntityRenderer extends SignBlockEntityRenderer {
             super.render(sign, tickDelta, matrices, vertexConsumers, light, overlay);
         }
     }
+
     public static void render(RenderLayer renderLayer, MatrixStack matrices, VertexConsumerProvider vertexConsumers, int light, int overlay) {
 
 
