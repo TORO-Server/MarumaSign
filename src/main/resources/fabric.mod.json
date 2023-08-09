@@ -1,0 +1,30 @@
+{
+  "schemaVersion": 1,
+  "id": "marumasign",
+  "version": "${version}",
+  "name": "MarumaSign",
+  "description": "",
+  "authors": [],
+  "contact": {
+    "repo": "https://github.com/malken21/MarumaSign"
+  },
+  "license": "MIT",
+  "icon": "assets/marumasign/icon.png",
+  "environment": "client",
+  "entrypoints": {
+    "client": [
+      "marumasa.marumasign.client.MarumaSignClient"
+    ],
+    "main": [
+      "marumasa.marumasign.MarumaSign"
+    ]
+  },
+  "mixins": [
+    "marumasign.mixins.json"
+  ],
+  "depends": {
+    "fabricloader": ">=${loader_version}",
+    "fabric": "*",
+    "minecraft": "${minecraft_version}"
+  }
+}
