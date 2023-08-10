@@ -16,14 +16,17 @@ public class ReadSignText {
 
         scale = new Scale(0.5f, 0.5f, 0.5f);
 
+        // X 軸の 回転を設定するための クォータニオン 作成
         Quaternionf qx = new Quaternionf();
         // X 軸に どれくらい回転するか 設定
         qx.fromAxisAngleDeg(1, 0, 0, 0);
 
+        // Y 軸の 回転を設定するための クォータニオン 作成
         Quaternionf qy = new Quaternionf();
         // Y 軸に どれくらい回転するか 設定
         qy.fromAxisAngleDeg(0, 1, 0, 0);
 
+        // Z 軸の 回転を設定するための クォータニオン 作成
         Quaternionf qz = new Quaternionf();
         // Z 軸に どれくらい回転するか 設定
         qz.fromAxisAngleDeg(0, 0, 1, 0);
