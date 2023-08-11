@@ -8,6 +8,7 @@ import net.minecraft.client.texture.AbstractTexture;
 import net.minecraft.client.texture.NativeImage;
 import net.minecraft.client.texture.NativeImageBackedTexture;
 import net.minecraft.client.texture.TextureManager;
+import net.minecraft.text.Text;
 import net.minecraft.util.Identifier;
 import org.joml.Quaternionf;
 
@@ -102,19 +103,42 @@ public class CustomSignParameter {
     }
 
     public static CustomSignParameter load(SignBlockEntity sign) {
-        return new CustomSignParameter(
-                "http://localhost/test.png",
-                0,
-                0,
-                0,
-                16,
-                9,
-                1,
-                90f,
-                0,
-                0
-        );
-        // return null;
+
+
+        // 看板の表面に書かれている文字を取得
+        Text[] textFront = sign.getText(true).getMessages(true);
+        // 看板の裏面に書かれている文字を取得
+        Text[] textBack = sign.getText(false).getMessages(true);
+
+        StringBuilder textAll = new StringBuilder();
+
+        for (Text text : textFront) {
+            textAll.append(text.getString());
+        }
+
+        for (Text text : textBack) {
+            textAll.append(text.getString());
+        }
+
+        String[] parameters = textAll.toString().split("\\|");
+        if (parameters.length != 10) return null;
+
+        try {
+            return new CustomSignParameter(
+                    parameters[0],
+                    Float.parseFloat(parameters[1]),
+                    Float.parseFloat(parameters[2]),
+                    Float.parseFloat(parameters[3]),
+                    Float.parseFloat(parameters[4]),
+                    Float.parseFloat(parameters[5]),
+                    Float.parseFloat(parameters[6]),
+                    Float.parseFloat(parameters[7]),
+                    Float.parseFloat(parameters[8]),
+                    Float.parseFloat(parameters[9])
+            );
+        } catch (Exception e) {
+            return null;
+        }
     }
 
     // URLを Identifier で使える ID に変換
