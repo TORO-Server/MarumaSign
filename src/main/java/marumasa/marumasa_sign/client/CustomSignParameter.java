@@ -1,5 +1,6 @@
 package marumasa.marumasa_sign.client;
 
+import com.google.common.io.BaseEncoding;
 import marumasa.marumasa_sign.MarumaSign;
 import net.minecraft.block.entity.SignBlockEntity;
 import net.minecraft.client.MinecraftClient;
@@ -68,7 +69,7 @@ public class CustomSignParameter {
                 MarumaSign.LOGGER.info("Load: " + this.StringURL + " : " + identifier);
             } catch (IOException e) {
                 // URL から 画像を読み込めなかったら
-                MarumaSign.LOGGER.warn("Failure" + this.StringURL + " : " + identifier);
+                MarumaSign.LOGGER.warn("Failure: " + this.StringURL + " : " + identifier);
             }
         }
 
@@ -143,17 +144,13 @@ public class CustomSignParameter {
 
     // URLを Identifier で使える ID に変換
     private String URLtoID() {
-        // 文字列をバイト配列に変換
-        byte[] bytes = this.StringURL.getBytes();
-        // バイナリ文字列を格納する変数
-        StringBuilder binary = new StringBuilder();
-        // バイト配列の要素ごとにバイナリ文字列に変換
-        for (byte b : bytes) binary.append(Integer.toBinaryString(b));
-        // 0をaに置き換え
-        binary = new StringBuilder(binary.toString().replace('0', 'a'));
-        // 1をbに置き換え
-        binary = new StringBuilder(binary.toString().replace('1', 'b'));
-        return binary.toString();
+        // base32 に変換
+        String base32 = BaseEncoding.base32().encode(StringURL.getBytes());
+        // Identifier は 大文字使えないので すべて小文字にする
+        base32 = base32.toLowerCase();
+        // Identifier は イコール という文字が使えないので アンダーバー に置き換える
+        base32 = base32.replace('=', '_');
+        return base32;
     }
 
     public record Translation(float x, float y, float z) {
