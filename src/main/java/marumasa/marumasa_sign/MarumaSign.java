@@ -5,9 +5,10 @@ import net.fabricmc.api.ModInitializer;
 import org.slf4j.Logger;
 
 public class MarumaSign implements ModInitializer {
+    // ModのID
     public static final String MOD_ID = "marumasa_sign";
-
-    private static final Logger LOGGER = LogUtils.getLogger();
+    // ロガー
+    public static final Logger LOGGER = LogUtils.getLogger();
 
     @Override
     public void onInitialize() {
