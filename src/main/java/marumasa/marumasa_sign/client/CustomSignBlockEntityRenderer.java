@@ -44,7 +44,6 @@ public class CustomSignBlockEntityRenderer extends SignBlockEntityRenderer {
             super.render(sign, tickDelta, matrices, vertexConsumers, light, overlay);
         }
 
-
         // 看板URLから画像をレンダリングする
         render(signParameter, signParameter.renderLayer, matrices, vertexConsumers, light, overlay);
 
