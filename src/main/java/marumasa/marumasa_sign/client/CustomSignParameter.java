@@ -3,18 +3,11 @@ package marumasa.marumasa_sign.client;
 import com.google.common.io.BaseEncoding;
 import marumasa.marumasa_sign.MarumaSign;
 import net.minecraft.block.entity.SignBlockEntity;
-import net.minecraft.client.MinecraftClient;
 import net.minecraft.client.render.RenderLayer;
-import net.minecraft.client.texture.AbstractTexture;
-import net.minecraft.client.texture.NativeImage;
-import net.minecraft.client.texture.NativeImageBackedTexture;
-import net.minecraft.client.texture.TextureManager;
 import net.minecraft.text.Text;
 import net.minecraft.util.Identifier;
 import org.joml.Quaternionf;
 
-import java.io.IOException;
-import java.net.URL;
 import java.util.ArrayList;
 import java.util.List;
 
@@ -22,8 +15,6 @@ public class CustomSignParameter {
 
     // 画像 読み込み済みリスト
     private static final List<Identifier> LoadedList = new ArrayList<>();
-    // テクスチャマネージャー
-    private static final TextureManager textureManager = MinecraftClient.getInstance().getTextureManager();
 
     public final String StringURL;
     public final Translation translation;
@@ -55,22 +46,11 @@ public class CustomSignParameter {
 
         // もし URL の画像が まだ読み込んだことがなかったら (読み込み済みリストに なかったら)
         if (!LoadedList.contains(identifier)) {
-            try {
-                AbstractTexture texture = new NativeImageBackedTexture(
-                        NativeImage.read(new URL(this.StringURL).openStream())
-                );
 
-                // テクスチャ 登録
-                textureManager.registerTexture(identifier, texture);
+            new GetImage(identifier, StringURL).start();
+            // 読み込み済みリストに 追加
+            LoadedList.add(identifier);
 
-                // 読み込み済みリストに 追加
-                LoadedList.add(identifier);
-                // ログ出力
-                MarumaSign.LOGGER.info("Load: " + this.StringURL + " : " + identifier);
-            } catch (IOException e) {
-                // URL から 画像を読み込めなかったら
-                MarumaSign.LOGGER.warn("Failure: " + this.StringURL + " : " + identifier);
-            }
         }
 
         // getText で 透過と半透明 対応の RenderLayer 生成
