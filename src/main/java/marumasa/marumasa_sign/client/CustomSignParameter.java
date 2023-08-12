@@ -8,13 +8,7 @@ import net.minecraft.text.Text;
 import net.minecraft.util.Identifier;
 import org.joml.Quaternionf;
 
-import java.util.ArrayList;
-import java.util.List;
-
 public class CustomSignParameter {
-
-    // 画像 読み込み済みリスト
-    private static final List<Identifier> LoadedList = new ArrayList<>();
 
     public final String StringURL;
     public final Translation translation;
@@ -42,27 +36,42 @@ public class CustomSignParameter {
 
         this.StringURL = StringURL;
 
-        Identifier identifier = new Identifier(MarumaSign.MOD_ID, URLtoID());
+        TextureURL textureURL = GetImage.loadedURL.get(this.StringURL);
 
         // もし URL の画像が まだ読み込んだことがなかったら (読み込み済みリストに なかったら)
-        if (!LoadedList.contains(identifier)) {
+        if (textureURL == null) {
 
-            new GetImage(identifier, StringURL).start();
+            final Identifier identifier = new Identifier(MarumaSign.MOD_ID, URLtoID());
+
+            new GetImage(this.StringURL, identifier).start();
+            textureURL = new TextureURL(
+                    identifier,
+                    10,
+                    10
+            );
             // 読み込み済みリストに 追加
-            LoadedList.add(identifier);
-
+            GetImage.loadedURL.put(this.StringURL, textureURL);
         }
 
         // getText で 透過と半透明 対応の RenderLayer 生成
         // RenderLayer.getEntityTranslucent() では プレイヤーの向いている角度によって明度が変わってしまう
         // 確認したバージョン 1.20.1
-        this.renderLayer = RenderLayer.getText(identifier);
+        this.renderLayer = RenderLayer.getText(textureURL.identifier());
 
         // 位置を設定
         this.translation = new Translation(TranslationX, TranslationY, TranslationZ);
 
-        // 大きさを設定
-        this.scale = new Scale(ScaleX, ScaleY, ScaleZ);
+        int w = textureURL.width();
+        int h = textureURL.height();
+
+        if (w > h) {
+            // 大きさを設定
+            this.scale = new Scale(ScaleX, ScaleY, ScaleZ * h / w);
+        } else {
+            // 大きさを設定
+            this.scale = new Scale(ScaleX, ScaleY, ScaleZ * w / h);
+        }
+
 
         // X 軸の 回転を設定するための クォータニオン 作成
         Quaternionf qx = new Quaternionf();
@@ -85,18 +94,16 @@ public class CustomSignParameter {
 
     public static CustomSignParameter load(SignBlockEntity sign) {
 
-
         // 看板の表面に書かれている文字を取得
-        Text[] textFront = sign.getText(true).getMessages(true);
+        Text[] textFront = sign.getFrontText().getMessages(true);
         // 看板の裏面に書かれている文字を取得
-        Text[] textBack = sign.getText(false).getMessages(true);
+        Text[] textBack = sign.getBackText().getMessages(true);
 
         StringBuilder textAll = new StringBuilder();
 
         for (Text text : textFront) {
             textAll.append(text.getString());
         }
-
         for (Text text : textBack) {
             textAll.append(text.getString());
         }
@@ -122,17 +129,6 @@ public class CustomSignParameter {
         }
     }
 
-    // URLを Identifier で使える ID に変換
-    private String URLtoID() {
-        // base32 に変換
-        String base32 = BaseEncoding.base32().encode(StringURL.getBytes());
-        // Identifier は 大文字使えないので すべて小文字にする
-        base32 = base32.toLowerCase();
-        // Identifier は イコール という文字が使えないので アンダーバー に置き換える
-        base32 = base32.replace('=', '_');
-        return base32;
-    }
-
     public record Translation(float x, float y, float z) {
 
         public Translation(float x, float y, float z) {
@@ -151,5 +147,16 @@ public class CustomSignParameter {
             this.y = y * 0.5f;
             this.z = z * 0.5f;
         }
+    }
+
+    // URLを Identifier で使える ID に変換
+    private String URLtoID() {
+        // base32 に変換
+        String base32 = BaseEncoding.base32().encode(StringURL.getBytes());
+        // Identifier は 大文字使えないので すべて小文字にする
+        base32 = base32.toLowerCase();
+        // Identifier は イコール という文字が使えないので アンダーバー に置き換える
+        base32 = base32.replace('=', '_');
+        return base32;
     }
 }
