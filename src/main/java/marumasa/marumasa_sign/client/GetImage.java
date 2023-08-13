@@ -30,13 +30,11 @@ public class GetImage extends Thread {
     }
 
     public void run() {
-
         try {
             NativeImage image = NativeImage.read(new URL(this.StringURL).openStream());
 
             int width = image.getWidth();
             int height = image.getHeight();
-
 
             AbstractTexture texture = new NativeImageBackedTexture(image);
 
