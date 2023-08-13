@@ -26,7 +26,6 @@ public class CustomSignParameter {
             float TranslationZ,
             // 大きさ
             float ScaleX,
-            float ScaleY,
             float ScaleZ,
             // 回転
             float RotationX,
@@ -34,23 +33,25 @@ public class CustomSignParameter {
             float RotationZ
     ) {
 
+        // URL (文字列型)
         this.StringURL = StringURL;
 
+        final TextureURL textureURL;
 
-        // もし URL の画像が まだ読み込んだことがなかったら (読み込み済みリストに なかったら)
-        if (!GetImage.loadedURL.containsKey(this.StringURL)) {
+        // URL の画像を 読み込もうとしたことがあるか
+        if (GetImage.loadedURL.containsKey(this.StringURL)) {
+            textureURL = GetImage.loadedURL.get(this.StringURL);
+        } else {
+            // URL の画像を まだ読み込んだことがなかったら (読み込み済みリストに なかったら)
 
             final Identifier identifier = new Identifier(MarumaSign.MOD_ID, URLtoID());
 
             new GetImage(this.StringURL, identifier).start();
             // 読み込み済みリストに 追加
             GetImage.loadedURL.put(this.StringURL, null);
+
+            textureURL = new TextureURL(new Identifier("none"), 16, 16);
         }
-
-        TextureURL textureURL = GetImage.loadedURL.get(this.StringURL);
-
-        if (textureURL == null)
-            textureURL = new TextureURL(new Identifier("textures/gui/container/beacon.png"), 16, 16);
 
         // getText で 透過と半透明 対応の RenderLayer 生成
         // RenderLayer.getEntityTranslucent() では プレイヤーの向いている角度によって明度が変わってしまう
@@ -69,10 +70,10 @@ public class CustomSignParameter {
 
         if (w > h) {
             // 大きさを設定
-            this.scale = new Scale(ScaleX, ScaleY, ScaleZ * h / w);
+            this.scale = new Scale(ScaleX, ScaleZ * h / w);
         } else {
             // 大きさを設定
-            this.scale = new Scale(ScaleX, ScaleY, ScaleZ * w / h);
+            this.scale = new Scale(ScaleX * w / h, ScaleZ);
         }
 
 
@@ -112,7 +113,7 @@ public class CustomSignParameter {
         }
 
         String[] parameters = textAll.toString().split("\\|");
-        if (parameters.length != 10) return null;
+        if (parameters.length != 9) return null;
 
         try {
             return new CustomSignParameter(
@@ -124,8 +125,7 @@ public class CustomSignParameter {
                     Float.parseFloat(parameters[5]),
                     Float.parseFloat(parameters[6]),
                     Float.parseFloat(parameters[7]),
-                    Float.parseFloat(parameters[8]),
-                    Float.parseFloat(parameters[9])
+                    Float.parseFloat(parameters[8])
             );
         } catch (Exception e) {
             return null;
@@ -133,22 +133,10 @@ public class CustomSignParameter {
     }
 
     public record Translation(float x, float y, float z) {
-        public Translation(float x, float y, float z) {
-            // ブロックの中心に移動する
-            this.x = x + 0.5f;
-            this.y = y + 0.5f;
-            this.z = z + 0.5f;
-        }
     }
 
     // 画像の大きさを
-    public record Scale(float x, float y, float z) {
-        public Scale(float x, float y, float z) {
-            // ブロックの半分の大きさにする
-            this.x = x * 0.5f;
-            this.y = y * 0.5f;
-            this.z = z * 0.5f;
-        }
+    public record Scale(float x, float z) {
     }
 
     // URLを Identifier で使える ID に変換

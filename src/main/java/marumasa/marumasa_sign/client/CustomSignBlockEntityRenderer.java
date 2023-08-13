@@ -56,8 +56,8 @@ public class CustomSignBlockEntityRenderer extends SignBlockEntityRenderer {
         final CustomSignParameter.Translation translation = signText.translation;
         final CustomSignParameter.Scale scale = signText.scale;
 
-        matrices.translate(translation.x(), translation.y(), translation.z()); // 位置を設定
-        matrices.scale(scale.x(), scale.y(), scale.z()); // 大きさを設定
+        matrices.translate(0.5f, 0.5f, 0.5f); // 位置を設定
+        matrices.scale(0.5f, 0.5f, 0.5f); // 大きさを設定
         matrices.multiply(signText.rotation); // 回転を設定
 
         final MatrixStack.Entry peek = matrices.peek();
@@ -66,19 +66,51 @@ public class CustomSignBlockEntityRenderer extends SignBlockEntityRenderer {
 
         // 表面の描画処理 開始
         matrices.push();
-        vertexConsumer.vertex(matrix4f, -1.0F, -1.0F, -1.0F).color(255, 255, 255, 255).texture(0.0F, 0.0F).overlay(overlay).light(light).normal(matrix3f, 0.0F, 1.0F, 0.0F).next();
-        vertexConsumer.vertex(matrix4f, -1.0F, -1.0F, 1.0F).color(255, 255, 255, 255).texture(0.0F, 1.0F).overlay(overlay).light(light).normal(matrix3f, 0.0F, 1.0F, 0.0F).next();
-        vertexConsumer.vertex(matrix4f, 1.0F, -1.0F, 1.0F).color(255, 255, 255, 255).texture(1.0F, 1.0F).overlay(overlay).light(light).normal(matrix3f, 0.0F, 1.0F, 0.0F).next();
-        vertexConsumer.vertex(matrix4f, 1.0F, -1.0F, -1.0F).color(255, 255, 255, 255).texture(1.0F, 0.0F).overlay(overlay).light(light).normal(matrix3f, 0.0F, 1.0F, 0.0F).next();
+        vertexConsumer.vertex(matrix4f,
+                -scale.x() + translation.x() * 2,
+                translation.y() * 2,
+                -scale.z() + translation.z() * 2
+        ).color(255, 255, 255, 255).texture(0.0F, 0.0F).overlay(overlay).light(light).normal(matrix3f, 0.0F, 1.0F, 0.0F).next();
+        vertexConsumer.vertex(matrix4f,
+                -scale.x() + translation.x() * 2,
+                translation.y() * 2,
+                scale.z() + translation.z() * 2
+        ).color(255, 255, 255, 255).texture(0.0F, 1.0F).overlay(overlay).light(light).normal(matrix3f, 0.0F, 1.0F, 0.0F).next();
+        vertexConsumer.vertex(matrix4f,
+                scale.x() + translation.x() * 2,
+                translation.y() * 2,
+                scale.z() + translation.z() * 2
+        ).color(255, 255, 255, 255).texture(1.0F, 1.0F).overlay(overlay).light(light).normal(matrix3f, 0.0F, 1.0F, 0.0F).next();
+        vertexConsumer.vertex(matrix4f,
+                scale.x() + translation.x() * 2,
+                translation.y() * 2,
+                -scale.z() + translation.z() * 2
+        ).color(255, 255, 255, 255).texture(1.0F, 0.0F).overlay(overlay).light(light).normal(matrix3f, 0.0F, 1.0F, 0.0F).next();
         matrices.pop();
         // 表面の描画処理 終了
 
         // 裏面の描画処理 開始
         matrices.push();
-        vertexConsumer.vertex(matrix4f, 1.0F, -1.0F, -1.0F).color(255, 255, 255, 255).texture(1.0F, 0.0F).overlay(overlay).light(light).normal(matrix3f, 0.0F, 1.0F, 0.0F).next();
-        vertexConsumer.vertex(matrix4f, 1.0F, -1.0F, 1.0F).color(255, 255, 255, 255).texture(1.0F, 1.0F).overlay(overlay).light(light).normal(matrix3f, 0.0F, 1.0F, 0.0F).next();
-        vertexConsumer.vertex(matrix4f, -1.0F, -1.0F, 1.0F).color(255, 255, 255, 255).texture(0.0F, 1.0F).overlay(overlay).light(light).normal(matrix3f, 0.0F, 1.0F, 0.0F).next();
-        vertexConsumer.vertex(matrix4f, -1.0F, -1.0F, -1.0F).color(255, 255, 255, 255).texture(0.0F, 0.0F).overlay(overlay).light(light).normal(matrix3f, 0.0F, 1.0F, 0.0F).next();
+        vertexConsumer.vertex(matrix4f,
+                scale.x() + translation.x() * 2,
+                translation.y() * 2,
+                -scale.z() + translation.z() * 2
+        ).color(255, 255, 255, 255).texture(1.0F, 0.0F).overlay(overlay).light(light).normal(matrix3f, 0.0F, 1.0F, 0.0F).next();
+        vertexConsumer.vertex(matrix4f,
+                scale.x() + translation.x() * 2,
+                translation.y() * 2,
+                scale.z() + translation.z() * 2
+        ).color(255, 255, 255, 255).texture(1.0F, 1.0F).overlay(overlay).light(light).normal(matrix3f, 0.0F, 1.0F, 0.0F).next();
+        vertexConsumer.vertex(matrix4f,
+                -scale.x() + translation.x() * 2,
+                translation.y() * 2,
+                scale.z() + translation.z() * 2
+        ).color(255, 255, 255, 255).texture(0.0F, 1.0F).overlay(overlay).light(light).normal(matrix3f, 0.0F, 1.0F, 0.0F).next();
+        vertexConsumer.vertex(matrix4f,
+                -scale.x() + translation.x() * 2,
+                translation.y() * 2,
+                -scale.z() + translation.z() * 2
+        ).color(255, 255, 255, 255).texture(0.0F, 0.0F).overlay(overlay).light(light).normal(matrix3f, 0.0F, 1.0F, 0.0F).next();
         matrices.pop();
         // 裏面の描画処理 終了
     }
@@ -87,6 +119,6 @@ public class CustomSignBlockEntityRenderer extends SignBlockEntityRenderer {
     @Override
     // ここで ブロックエンティティの表示範囲を設定できる
     public int getRenderDistance() {
-        return 256;
+        return 512;
     }
 }
