@@ -36,22 +36,21 @@ public class CustomSignParameter {
 
         this.StringURL = StringURL;
 
-        TextureURL textureURL = GetImage.loadedURL.get(this.StringURL);
 
         // もし URL の画像が まだ読み込んだことがなかったら (読み込み済みリストに なかったら)
-        if (textureURL == null) {
+        if (!GetImage.loadedURL.containsKey(this.StringURL)) {
 
             final Identifier identifier = new Identifier(MarumaSign.MOD_ID, URLtoID());
 
             new GetImage(this.StringURL, identifier).start();
-            textureURL = new TextureURL(
-                    identifier,
-                    10,
-                    10
-            );
             // 読み込み済みリストに 追加
-            GetImage.loadedURL.put(this.StringURL, textureURL);
+            GetImage.loadedURL.put(this.StringURL, null);
         }
+
+        TextureURL textureURL = GetImage.loadedURL.get(this.StringURL);
+
+        if (textureURL == null)
+            textureURL = new TextureURL(new Identifier("textures/gui/container/beacon.png"), 16, 16);
 
         // getText で 透過と半透明 対応の RenderLayer 生成
         // RenderLayer.getEntityTranslucent() では プレイヤーの向いている角度によって明度が変わってしまう
@@ -59,7 +58,11 @@ public class CustomSignParameter {
         this.renderLayer = RenderLayer.getText(textureURL.identifier());
 
         // 位置を設定
-        this.translation = new Translation(TranslationX, TranslationY, TranslationZ);
+        this.translation = new Translation(
+                TranslationX,
+                TranslationY,
+                TranslationZ
+        );
 
         int w = textureURL.width();
         int h = textureURL.height();
@@ -130,7 +133,6 @@ public class CustomSignParameter {
     }
 
     public record Translation(float x, float y, float z) {
-
         public Translation(float x, float y, float z) {
             // ブロックの中心に移動する
             this.x = x + 0.5f;
