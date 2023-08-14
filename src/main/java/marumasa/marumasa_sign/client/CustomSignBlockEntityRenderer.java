@@ -64,53 +64,48 @@ public class CustomSignBlockEntityRenderer extends SignBlockEntityRenderer {
         final Matrix4f matrix4f = peek.getPositionMatrix();
         final Matrix3f matrix3f = peek.getNormalMatrix();
 
+        final Vertex vertex = new Vertex(
+                scale.x() + translation.x() * 2,
+                scale.z() + translation.z() * 2,
+
+                translation.y() * 2,
+
+                -scale.x() + translation.x() * 2,
+                -scale.z() + translation.z() * 2
+        );
+
+
         // 表面の描画処理 開始
         matrices.push();
         vertexConsumer.vertex(matrix4f,
-                -scale.x() + translation.x() * 2,
-                translation.y() * 2,
-                -scale.z() + translation.z() * 2
-        ).color(255, 255, 255, 255).texture(0.0F, 0.0F).overlay(overlay).light(light).normal(matrix3f, 0.0F, 1.0F, 0.0F).next();
+                vertex.minusX, vertex.Y, vertex.minusZ
+        ).color(255, 255, 255, 255).texture(1, 1).overlay(overlay).light(light).normal(matrix3f, 0.0F, 1.0F, 0.0F).next();
         vertexConsumer.vertex(matrix4f,
-                -scale.x() + translation.x() * 2,
-                translation.y() * 2,
-                scale.z() + translation.z() * 2
-        ).color(255, 255, 255, 255).texture(0.0F, 1.0F).overlay(overlay).light(light).normal(matrix3f, 0.0F, 1.0F, 0.0F).next();
+                vertex.minusX, vertex.Y, vertex.plusZ
+        ).color(255, 255, 255, 255).texture(1, 0).overlay(overlay).light(light).normal(matrix3f, 0.0F, 1.0F, 0.0F).next();
         vertexConsumer.vertex(matrix4f,
-                scale.x() + translation.x() * 2,
-                translation.y() * 2,
-                scale.z() + translation.z() * 2
-        ).color(255, 255, 255, 255).texture(1.0F, 1.0F).overlay(overlay).light(light).normal(matrix3f, 0.0F, 1.0F, 0.0F).next();
+                vertex.plusX, vertex.Y, vertex.plusZ
+        ).color(255, 255, 255, 255).texture(0, 0).overlay(overlay).light(light).normal(matrix3f, 0.0F, 1.0F, 0.0F).next();
         vertexConsumer.vertex(matrix4f,
-                scale.x() + translation.x() * 2,
-                translation.y() * 2,
-                -scale.z() + translation.z() * 2
-        ).color(255, 255, 255, 255).texture(1.0F, 0.0F).overlay(overlay).light(light).normal(matrix3f, 0.0F, 1.0F, 0.0F).next();
+                vertex.plusX, vertex.Y, vertex.minusZ
+        ).color(255, 255, 255, 255).texture(0, 1).overlay(overlay).light(light).normal(matrix3f, 0.0F, 1.0F, 0.0F).next();
         matrices.pop();
         // 表面の描画処理 終了
 
         // 裏面の描画処理 開始
         matrices.push();
         vertexConsumer.vertex(matrix4f,
-                scale.x() + translation.x() * 2,
-                translation.y() * 2,
-                -scale.z() + translation.z() * 2
-        ).color(255, 255, 255, 255).texture(1.0F, 0.0F).overlay(overlay).light(light).normal(matrix3f, 0.0F, 1.0F, 0.0F).next();
+                vertex.plusX, vertex.Y, vertex.minusZ
+        ).color(255, 255, 255, 255).texture(0, 1).overlay(overlay).light(light).normal(matrix3f, 0.0F, 1.0F, 0.0F).next();
         vertexConsumer.vertex(matrix4f,
-                scale.x() + translation.x() * 2,
-                translation.y() * 2,
-                scale.z() + translation.z() * 2
-        ).color(255, 255, 255, 255).texture(1.0F, 1.0F).overlay(overlay).light(light).normal(matrix3f, 0.0F, 1.0F, 0.0F).next();
+                vertex.plusX, vertex.Y, vertex.plusZ
+        ).color(255, 255, 255, 255).texture(0, 0).overlay(overlay).light(light).normal(matrix3f, 0.0F, 1.0F, 0.0F).next();
         vertexConsumer.vertex(matrix4f,
-                -scale.x() + translation.x() * 2,
-                translation.y() * 2,
-                scale.z() + translation.z() * 2
-        ).color(255, 255, 255, 255).texture(0.0F, 1.0F).overlay(overlay).light(light).normal(matrix3f, 0.0F, 1.0F, 0.0F).next();
+                vertex.minusX, vertex.Y, vertex.plusZ
+        ).color(255, 255, 255, 255).texture(1, 0).overlay(overlay).light(light).normal(matrix3f, 0.0F, 1.0F, 0.0F).next();
         vertexConsumer.vertex(matrix4f,
-                -scale.x() + translation.x() * 2,
-                translation.y() * 2,
-                -scale.z() + translation.z() * 2
-        ).color(255, 255, 255, 255).texture(0.0F, 0.0F).overlay(overlay).light(light).normal(matrix3f, 0.0F, 1.0F, 0.0F).next();
+                vertex.minusX, vertex.Y, vertex.minusZ
+        ).color(255, 255, 255, 255).texture(1, 1).overlay(overlay).light(light).normal(matrix3f, 0.0F, 1.0F, 0.0F).next();
         matrices.pop();
         // 裏面の描画処理 終了
     }
@@ -120,5 +115,12 @@ public class CustomSignBlockEntityRenderer extends SignBlockEntityRenderer {
     // ここで ブロックエンティティの表示範囲を設定できる
     public int getRenderDistance() {
         return 512;
+    }
+
+    private record Vertex(
+            float plusX, float plusZ,
+            float Y,
+            float minusX, float minusZ
+    ) {
     }
 }
