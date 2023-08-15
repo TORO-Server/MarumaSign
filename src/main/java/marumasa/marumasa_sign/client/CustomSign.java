@@ -56,22 +56,15 @@ public class CustomSign {
         this.renderLayer = RenderLayer.getText(textureURL.identifier());
 
         // 位置を設定
-        final Translation translation = new Translation(
-                TranslationX,
-                TranslationY,
-                TranslationZ
-        );
+        final int w = textureURL.width();
+        final int h = textureURL.height();
 
-        int w = textureURL.width();
-        int h = textureURL.height();
-
-        final Scale scale;
         if (w > h) {
             // 大きさを設定
-            scale = new Scale(ScaleX, ScaleZ * h / w);
+            ScaleZ *= (double) h / w;
         } else {
             // 大きさを設定
-            scale = new Scale(ScaleX * w / h, ScaleZ);
+            ScaleX *= (double) w / h;
         }
 
         // X 軸の 回転を設定するための クォータニオン 作成
@@ -93,11 +86,11 @@ public class CustomSign {
         this.rotation = new Quaternionf().mul(qx).mul(qy).mul(qz);
         // 頂点の位置 設定
         this.vertex = new Vertex(
-                scale.x() + translation.x() * 2,
-                scale.z() + translation.z() * 2,
-                translation.y() * 2,
-                -scale.x() + translation.x() * 2,
-                -scale.z() + translation.z() * 2
+                ScaleX + TranslationX * 2,
+                ScaleZ + TranslationZ * 2,
+                TranslationY * 2,
+                -ScaleX + TranslationX * 2,
+                -ScaleZ + TranslationZ * 2
         );
     }
 
@@ -141,13 +134,6 @@ public class CustomSign {
             MarumaSign.LOGGER.warn(String.valueOf(e));
             return null;
         }
-    }
-
-    public record Translation(float x, float y, float z) {
-    }
-
-    // 画像の大きさを
-    public record Scale(float x, float z) {
     }
 
     public record Vertex(
