@@ -1,5 +1,6 @@
 package marumasa.marumasa_sign.client;
 
+import com.google.common.io.BaseEncoding;
 import marumasa.marumasa_sign.MarumaSign;
 import net.minecraft.client.MinecraftClient;
 import net.minecraft.client.texture.AbstractTexture;
@@ -10,26 +11,31 @@ import net.minecraft.util.Identifier;
 
 import java.io.IOException;
 import java.net.URL;
-import java.util.HashMap;
-import java.util.Map;
 
 public class GetImage extends Thread {
-
-    // 画像 読み込み済みリスト
-    public static final Map<String, TextureURL> loadedURL = new HashMap<>();
 
     // テクスチャマネージャー
     private static final TextureManager textureManager = MinecraftClient.getInstance().getTextureManager();
     private final String StringURL;
-    private final Identifier identifier;
+    private final String[] parameters;
+    private final String signText;
 
 
-    public GetImage(String StringURL, Identifier identifier) {
+    public GetImage(
+            // 画像のURL
+            String StringURL,
+            String[] parameters,
+            String signText
+    ) {
         this.StringURL = StringURL;
-        this.identifier = identifier;
+        this.parameters = parameters;
+        this.signText = signText;
     }
 
     public void run() {
+
+        final Identifier identifier = new Identifier(MarumaSign.MOD_ID, URLtoID(StringURL));
+
         try {
             NativeImage image = NativeImage.read(new URL(this.StringURL).openStream());
 
@@ -41,8 +47,13 @@ public class GetImage extends Thread {
             // テクスチャ 登録
             textureManager.registerTexture(identifier, texture);
 
-            // 読み込み済みリストに 追加
-            loadedURL.put(this.StringURL, new TextureURL(identifier, width, height));
+            final CustomSign.TextureURL textureURL = new CustomSign.TextureURL(identifier, width, height);
+
+            // 画像 読み込み済みリスト 更新
+            CustomSign.loadedTextureURL.put(signText, textureURL);
+
+            // 看板 読み込み済みリスト 更新
+            CustomSign.loadedCustomSign.put(signText, CustomSign.load(textureURL, parameters));
 
             // ログ出力
             MarumaSign.LOGGER.info("Load: " + this.StringURL + " : " + identifier);
@@ -50,5 +61,16 @@ public class GetImage extends Thread {
             // URL から 画像を読み込めなかったら
             MarumaSign.LOGGER.warn("Failure: " + this.StringURL + " : " + identifier);
         }
+    }
+
+    // URLを Identifier で使える ID に変換
+    private static String URLtoID(String StringURL) {
+        // base32 に変換
+        String base32 = BaseEncoding.base32().encode(StringURL.getBytes());
+        // Identifier は 大文字使えないので すべて小文字にする
+        base32 = base32.toLowerCase();
+        // Identifier は イコール という文字が使えないので アンダーバー に置き換える
+        base32 = base32.replace('=', '_');
+        return base32;
     }
 }
