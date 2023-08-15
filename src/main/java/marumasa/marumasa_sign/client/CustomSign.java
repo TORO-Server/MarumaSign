@@ -6,18 +6,16 @@ import net.minecraft.block.entity.SignBlockEntity;
 import net.minecraft.client.render.RenderLayer;
 import net.minecraft.text.Text;
 import net.minecraft.util.Identifier;
+import org.apache.commons.lang3.ArrayUtils;
 import org.joml.Quaternionf;
 
-public class CustomSignParameter {
-
+public class CustomSign {
     public final String StringURL;
-    public final Translation translation;
-    public final Scale scale;
     public final Quaternionf rotation;
-
+    public final Vertex vertex;
     public final RenderLayer renderLayer;
 
-    public CustomSignParameter(
+    public CustomSign(
             // 画像のURL
             String StringURL,
             // 位置
@@ -43,14 +41,13 @@ public class CustomSignParameter {
             textureURL = GetImage.loadedURL.get(this.StringURL);
         } else {
             // URL の画像を まだ読み込んだことがなかったら (読み込み済みリストに なかったら)
+            textureURL = new TextureURL(new Identifier("none"), 16, 16);
 
             final Identifier identifier = new Identifier(MarumaSign.MOD_ID, URLtoID());
 
             new GetImage(this.StringURL, identifier).start();
             // 読み込み済みリストに 追加
-            GetImage.loadedURL.put(this.StringURL, null);
-
-            textureURL = new TextureURL(new Identifier("none"), 16, 16);
+            GetImage.loadedURL.put(this.StringURL, textureURL);
         }
 
         // getText で 透過と半透明 対応の RenderLayer 生成
@@ -59,7 +56,7 @@ public class CustomSignParameter {
         this.renderLayer = RenderLayer.getText(textureURL.identifier());
 
         // 位置を設定
-        this.translation = new Translation(
+        final Translation translation = new Translation(
                 TranslationX,
                 TranslationY,
                 TranslationZ
@@ -68,14 +65,14 @@ public class CustomSignParameter {
         int w = textureURL.width();
         int h = textureURL.height();
 
+        final Scale scale;
         if (w > h) {
             // 大きさを設定
-            this.scale = new Scale(ScaleX, ScaleZ * h / w);
+            scale = new Scale(ScaleX, ScaleZ * h / w);
         } else {
             // 大きさを設定
-            this.scale = new Scale(ScaleX * w / h, ScaleZ);
+            scale = new Scale(ScaleX * w / h, ScaleZ);
         }
-
 
         // X 軸の 回転を設定するための クォータニオン 作成
         Quaternionf qx = new Quaternionf();
@@ -94,29 +91,42 @@ public class CustomSignParameter {
 
         // クォータニオンの積 計算 を 計算して 回転を設定
         this.rotation = new Quaternionf().mul(qx).mul(qy).mul(qz);
+        // 頂点の位置 設定
+        this.vertex = new Vertex(
+                scale.x() + translation.x() * 2,
+                scale.z() + translation.z() * 2,
+                translation.y() * 2,
+                -scale.x() + translation.x() * 2,
+                -scale.z() + translation.z() * 2
+        );
     }
 
-    public static CustomSignParameter load(SignBlockEntity sign) {
-
+    public static String read(SignBlockEntity sign) {
         // 看板の表面に書かれている文字を取得
-        Text[] textFront = sign.getFrontText().getMessages(true);
+        final Text[] textFront = sign.getFrontText().getMessages(true);
         // 看板の裏面に書かれている文字を取得
-        Text[] textBack = sign.getBackText().getMessages(true);
+        final Text[] textBack = sign.getBackText().getMessages(true);
 
-        StringBuilder textAll = new StringBuilder();
+        // 表面と裏面に書いてある文字を合わせる
+        final Text[] textAll = ArrayUtils.addAll(textFront, textBack);
 
-        for (Text text : textFront) {
-            textAll.append(text.getString());
-        }
-        for (Text text : textBack) {
-            textAll.append(text.getString());
-        }
+        // return で 返す String型の 文字 を作成するためのもの
+        final StringBuilder StringAll = new StringBuilder();
 
-        String[] parameters = textAll.toString().split("\\|");
+        // textAll を読み取り StringAll に追加
+        for (Text text : textAll) StringAll.append(text.getString());
+
+        // 看板に書いてある文字を返す
+        return StringAll.toString();
+    }
+
+    public static CustomSign load(String signText) {
+
+        String[] parameters = signText.split("\\|");
         if (parameters.length != 9) return null;
 
         try {
-            return new CustomSignParameter(
+            return new CustomSign(
                     parameters[0],
                     Float.parseFloat(parameters[1]),
                     Float.parseFloat(parameters[2]),
@@ -128,6 +138,7 @@ public class CustomSignParameter {
                     Float.parseFloat(parameters[8])
             );
         } catch (Exception e) {
+            MarumaSign.LOGGER.warn(String.valueOf(e));
             return null;
         }
     }
@@ -137,6 +148,13 @@ public class CustomSignParameter {
 
     // 画像の大きさを
     public record Scale(float x, float z) {
+    }
+
+    public record Vertex(
+            float plusX, float plusZ,
+            float Y,
+            float minusX, float minusZ
+    ) {
     }
 
     // URLを Identifier で使える ID に変換
