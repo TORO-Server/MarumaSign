@@ -1,6 +1,5 @@
 package marumasa.marumasa_sign.client;
 
-import com.google.common.io.BaseEncoding;
 import marumasa.marumasa_sign.MarumaSign;
 import net.minecraft.block.entity.SignBlockEntity;
 import net.minecraft.client.render.RenderLayer;
@@ -9,15 +8,24 @@ import net.minecraft.util.Identifier;
 import org.apache.commons.lang3.ArrayUtils;
 import org.joml.Quaternionf;
 
+import java.util.HashMap;
+import java.util.Map;
+
 public class CustomSign {
-    public final String StringURL;
+
+    // 看板 読み込み済みリスト
+    public static final Map<String, CustomSign> loadedCustomSign = new HashMap<>();
+
+    // 画像 読み込み済みリスト
+    public static final Map<String, TextureURL> loadedTextureURL = new HashMap<>();
+
     public final Quaternionf rotation;
     public final Vertex vertex;
     public final RenderLayer renderLayer;
 
     public CustomSign(
             // 画像のURL
-            String StringURL,
+            TextureURL textureURL,
             // 位置
             float TranslationX,
             float TranslationY,
@@ -31,34 +39,13 @@ public class CustomSign {
             float RotationZ
     ) {
 
-        // URL (文字列型)
-        this.StringURL = StringURL;
-
-        final TextureURL textureURL;
-
-        // URL の画像を 読み込もうとしたことがあるか
-        if (GetImage.loadedURL.containsKey(this.StringURL)) {
-            textureURL = GetImage.loadedURL.get(this.StringURL);
-        } else {
-            // URL の画像を まだ読み込んだことがなかったら (読み込み済みリストに なかったら)
-            textureURL = new TextureURL(new Identifier("none"), 16, 16);
-
-            final Identifier identifier = new Identifier(MarumaSign.MOD_ID, URLtoID());
-
-            new GetImage(this.StringURL, identifier).start();
-            // 読み込み済みリストに 追加
-            GetImage.loadedURL.put(this.StringURL, textureURL);
-        }
-
         // getText で 透過と半透明 対応の RenderLayer 生成
         // RenderLayer.getEntityTranslucent() では プレイヤーの向いている角度によって明度が変わってしまう
         // 確認したバージョン 1.20.1
         this.renderLayer = RenderLayer.getText(textureURL.identifier());
 
-        // 位置を設定
         final int w = textureURL.width();
         final int h = textureURL.height();
-
         if (w > h) {
             // 大きさを設定
             ScaleZ *= (double) h / w;
@@ -66,24 +53,6 @@ public class CustomSign {
             // 大きさを設定
             ScaleX *= (double) w / h;
         }
-
-        // X 軸の 回転を設定するための クォータニオン 作成
-        Quaternionf qx = new Quaternionf();
-        // X 軸に どれくらい回転するか 設定
-        qx.fromAxisAngleDeg(1, 0, 0, RotationX);
-
-        // Y 軸の 回転を設定するための クォータニオン 作成
-        Quaternionf qy = new Quaternionf();
-        // Y 軸に どれくらい回転するか 設定
-        qy.fromAxisAngleDeg(0, 1, 0, RotationY);
-
-        // Z 軸の 回転を設定するための クォータニオン 作成
-        Quaternionf qz = new Quaternionf();
-        // Z 軸に どれくらい回転するか 設定
-        qz.fromAxisAngleDeg(0, 0, 1, RotationZ);
-
-        // クォータニオンの積 計算 を 計算して 回転を設定
-        this.rotation = new Quaternionf().mul(qx).mul(qy).mul(qz);
         // 頂点の位置 設定
         this.vertex = new Vertex(
                 ScaleX + TranslationX * 2,
@@ -92,6 +61,21 @@ public class CustomSign {
                 -ScaleX + TranslationX * 2,
                 -ScaleZ + TranslationZ * 2
         );
+
+        // X 軸の 回転を設定するための クォータニオン 作成
+        Quaternionf qx = new Quaternionf();
+        // X 軸に どれくらい回転するか 設定
+        qx.fromAxisAngleDeg(1, 0, 0, RotationX);
+        // Y 軸の 回転を設定するための クォータニオン 作成
+        Quaternionf qy = new Quaternionf();
+        // Y 軸に どれくらい回転するか 設定
+        qy.fromAxisAngleDeg(0, 1, 0, RotationY);
+        // Z 軸の 回転を設定するための クォータニオン 作成
+        Quaternionf qz = new Quaternionf();
+        // Z 軸に どれくらい回転するか 設定
+        qz.fromAxisAngleDeg(0, 0, 1, RotationZ);
+        // クォータニオンの積 計算 を 計算して 回転を設定
+        this.rotation = new Quaternionf().mul(qx).mul(qy).mul(qz);
     }
 
     public static String read(SignBlockEntity sign) {
@@ -113,25 +97,50 @@ public class CustomSign {
         return StringAll.toString();
     }
 
+    public static CustomSign load(TextureURL textureURL, String[] parameters) {
+        return new CustomSign(
+                textureURL,
+                Float.parseFloat(parameters[1]),
+                Float.parseFloat(parameters[2]),
+                Float.parseFloat(parameters[3]),
+                Float.parseFloat(parameters[4]),
+                Float.parseFloat(parameters[5]),
+                Float.parseFloat(parameters[6]),
+                Float.parseFloat(parameters[7]),
+                Float.parseFloat(parameters[8])
+        );
+    }
+
     public static CustomSign load(String signText) {
+
+        // 読み込んだことがあるか
+        if (loadedCustomSign.containsKey(signText)) return loadedCustomSign.get(signText);
 
         String[] parameters = signText.split("\\|");
         if (parameters.length != 9) return null;
-
         try {
-            return new CustomSign(
-                    parameters[0],
-                    Float.parseFloat(parameters[1]),
-                    Float.parseFloat(parameters[2]),
-                    Float.parseFloat(parameters[3]),
-                    Float.parseFloat(parameters[4]),
-                    Float.parseFloat(parameters[5]),
-                    Float.parseFloat(parameters[6]),
-                    Float.parseFloat(parameters[7]),
-                    Float.parseFloat(parameters[8])
+            final String StringURL = parameters[0];
+
+            CustomSign customSign = load(
+                    new TextureURL(new Identifier("textures/gui/container/anvil.png"), 16, 16),
+                    parameters
             );
+
+            new GetImage(
+                    // 画像のURL
+                    StringURL,
+                    parameters,
+                    // 看板に書かれた文字
+                    signText
+            ).start();
+
+            // 読み込み済みリストに 追加
+            loadedCustomSign.put(signText, customSign);
+            return customSign;
+
         } catch (Exception e) {
             MarumaSign.LOGGER.warn(String.valueOf(e));
+            loadedCustomSign.put(signText, null);
             return null;
         }
     }
@@ -143,14 +152,6 @@ public class CustomSign {
     ) {
     }
 
-    // URLを Identifier で使える ID に変換
-    private String URLtoID() {
-        // base32 に変換
-        String base32 = BaseEncoding.base32().encode(StringURL.getBytes());
-        // Identifier は 大文字使えないので すべて小文字にする
-        base32 = base32.toLowerCase();
-        // Identifier は イコール という文字が使えないので アンダーバー に置き換える
-        base32 = base32.replace('=', '_');
-        return base32;
+    public record TextureURL(Identifier identifier, int width, int height) {
     }
 }

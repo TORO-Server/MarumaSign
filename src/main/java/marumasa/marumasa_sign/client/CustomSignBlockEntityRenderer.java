@@ -3,7 +3,6 @@ package marumasa.marumasa_sign.client;
 import net.minecraft.block.entity.SignBlockEntity;
 import net.minecraft.client.MinecraftClient;
 import net.minecraft.client.network.ClientPlayerEntity;
-import net.minecraft.client.render.RenderLayer;
 import net.minecraft.client.render.VertexConsumer;
 import net.minecraft.client.render.VertexConsumerProvider;
 import net.minecraft.client.render.block.entity.BlockEntityRendererFactory;
@@ -11,7 +10,6 @@ import net.minecraft.client.render.block.entity.SignBlockEntityRenderer;
 import net.minecraft.client.util.math.MatrixStack;
 import org.joml.Matrix3f;
 import org.joml.Matrix4f;
-import org.joml.Quaternionf;
 
 public class CustomSignBlockEntityRenderer extends SignBlockEntityRenderer {
 
@@ -47,25 +45,21 @@ public class CustomSignBlockEntityRenderer extends SignBlockEntityRenderer {
         }
 
         // 看板URLから画像をレンダリングする
-        render(
-                customSign.vertex,
-                customSign.rotation,
-                customSign.renderLayer,
-                matrices, vertexConsumers, light, overlay
-        );
+        render(customSign, matrices, vertexConsumers, light, overlay);
     }
 
-    public void render(CustomSign.Vertex vertex, Quaternionf rotation, RenderLayer renderLayer, MatrixStack matrices, VertexConsumerProvider vertexConsumers, int light, int overlay) {
+    public void render(CustomSign customSign, MatrixStack matrices, VertexConsumerProvider vertexConsumers, int light, int overlay) {
 
-        VertexConsumer vertexConsumer = vertexConsumers.getBuffer(renderLayer);
+        VertexConsumer vertexConsumer = vertexConsumers.getBuffer(customSign.renderLayer);
 
         matrices.translate(0.5f, 0.5f, 0.5f); // 位置を設定
         matrices.scale(0.5f, 0.5f, 0.5f); // 大きさを設定
-        matrices.multiply(rotation); // 回転を設定
+        matrices.multiply(customSign.rotation); // 回転を設定
 
         final MatrixStack.Entry peek = matrices.peek();
         final Matrix4f matrix4f = peek.getPositionMatrix();
         final Matrix3f matrix3f = peek.getNormalMatrix();
+        final CustomSign.Vertex vertex = customSign.vertex;
 
         // 表面の描画処理 開始
         matrices.push();
