@@ -13,14 +13,9 @@ import org.joml.Matrix3f;
 import org.joml.Matrix4f;
 import org.joml.Quaternionf;
 
-import java.util.HashMap;
-import java.util.Map;
-
 public class CustomSignBlockEntityRenderer extends SignBlockEntityRenderer {
 
     private final MinecraftClient client;
-
-    private final Map<String, CustomSign> customSignMap = new HashMap<>();
 
     public CustomSignBlockEntityRenderer(BlockEntityRendererFactory.Context ctx) {
         super(ctx);
