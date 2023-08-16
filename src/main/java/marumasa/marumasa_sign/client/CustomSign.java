@@ -98,17 +98,23 @@ public class CustomSign {
     }
 
     public static CustomSign load(TextureURL textureURL, String[] parameters) {
-        return new CustomSign(
-                textureURL,
-                Float.parseFloat(parameters[1]),
-                Float.parseFloat(parameters[2]),
-                Float.parseFloat(parameters[3]),
-                Float.parseFloat(parameters[4]),
-                Float.parseFloat(parameters[5]),
-                Float.parseFloat(parameters[6]),
-                Float.parseFloat(parameters[7]),
-                Float.parseFloat(parameters[8])
-        );
+        try {
+            return new CustomSign(
+                    textureURL,
+                    Float.parseFloat(parameters[1]),
+                    Float.parseFloat(parameters[2]),
+                    Float.parseFloat(parameters[3]),
+                    Float.parseFloat(parameters[4]),
+                    Float.parseFloat(parameters[5]),
+                    Float.parseFloat(parameters[6]),
+                    Float.parseFloat(parameters[7]),
+                    Float.parseFloat(parameters[8])
+            );
+        } catch (Exception e) {
+            // ログ出力
+            MarumaSign.LOGGER.warn(String.valueOf(e));
+            return null;
+        }
     }
 
     public static CustomSign load(String signText) {
@@ -118,14 +124,12 @@ public class CustomSign {
 
         String[] parameters = signText.split("\\|");
         if (parameters.length != 9) return null;
-        try {
-            final String StringURL = parameters[0];
 
-            CustomSign customSign = load(
-                    new TextureURL(new Identifier("textures/gui/container/anvil.png"), 16, 16),
-                    parameters
-            );
+        final String StringURL = parameters[0];
 
+        TextureURL textureURL = loadedTextureURL.get(StringURL);
+
+        if (textureURL == null) {
             new GetImage(
                     // 画像のURL
                     StringURL,
@@ -133,16 +137,15 @@ public class CustomSign {
                     // 看板に書かれた文字
                     signText
             ).start();
-
-            // 読み込み済みリストに 追加
-            loadedCustomSign.put(signText, customSign);
-            return customSign;
-
-        } catch (Exception e) {
-            MarumaSign.LOGGER.warn(String.valueOf(e));
-            loadedCustomSign.put(signText, null);
-            return null;
+            textureURL = new TextureURL(MarumaSignClient.Loading, 1, 1);
         }
+
+        CustomSign customSign = load(textureURL, parameters);
+
+        // 読み込み済みリストに 追加
+        loadedCustomSign.put(signText, customSign);
+        return customSign;
+
     }
 
     public record Vertex(

@@ -39,6 +39,8 @@ public class GetImage extends Thread {
         try {
             NativeImage image = NativeImage.read(new URL(this.StringURL).openStream());
 
+            MarumaSign.LOGGER.error(String.valueOf(image));
+
             int width = image.getWidth();
             int height = image.getHeight();
 
@@ -50,7 +52,7 @@ public class GetImage extends Thread {
             final CustomSign.TextureURL textureURL = new CustomSign.TextureURL(identifier, width, height);
 
             // 画像 読み込み済みリスト 更新
-            CustomSign.loadedTextureURL.put(signText, textureURL);
+            CustomSign.loadedTextureURL.put(StringURL, textureURL);
 
             // 看板 読み込み済みリスト 更新
             CustomSign.loadedCustomSign.put(signText, CustomSign.load(textureURL, parameters));
@@ -59,6 +61,10 @@ public class GetImage extends Thread {
             MarumaSign.LOGGER.info("Load: " + this.StringURL + " : " + identifier);
         } catch (IOException e) {
             // URL から 画像を読み込めなかったら
+
+            // 画像 読み込み済みリスト 更新
+            CustomSign.loadedTextureURL.put(StringURL, new CustomSign.TextureURL(MarumaSignClient.Loading, 1, 1));
+
             MarumaSign.LOGGER.warn("Failure: " + this.StringURL + " : " + identifier);
         }
     }
