@@ -102,4 +102,10 @@ public class CustomSignBlockEntityRenderer extends SignBlockEntityRenderer {
     public int getRenderDistance() {
         return 512;
     }
+
+    @Override
+    // 看板が通常では見えなくなる範囲になってもレンダリングをする
+    public boolean rendersOutsideBoundingBox(SignBlockEntity blockEntity) {
+        return true;
+    }
 }
