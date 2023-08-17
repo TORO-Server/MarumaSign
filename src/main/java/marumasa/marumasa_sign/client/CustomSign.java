@@ -1,6 +1,8 @@
 package marumasa.marumasa_sign.client;
 
 import marumasa.marumasa_sign.MarumaSign;
+import net.minecraft.block.BlockState;
+import net.minecraft.block.SignBlock;
 import net.minecraft.block.entity.SignBlockEntity;
 import net.minecraft.client.render.RenderLayer;
 import net.minecraft.text.Text;
@@ -32,7 +34,7 @@ public class CustomSign {
             float TranslationZ,
             // 大きさ
             float ScaleX,
-            float ScaleZ,
+            float ScaleY,
             // 回転
             float RotationX,
             float RotationY,
@@ -48,7 +50,7 @@ public class CustomSign {
         final int h = textureURL.height();
         if (w > h) {
             // 大きさを設定
-            ScaleZ *= (double) h / w;
+            ScaleY *= (double) h / w;
         } else {
             // 大きさを設定
             ScaleX *= (double) w / h;
@@ -56,10 +58,10 @@ public class CustomSign {
         // 頂点の位置 設定
         this.vertex = new Vertex(
                 ScaleX + TranslationX * 2,
-                ScaleZ + TranslationZ * 2,
-                TranslationY * 2,
+                ScaleY + TranslationY * 2,
+                TranslationZ * 2,
                 -ScaleX + TranslationX * 2,
-                -ScaleZ + TranslationZ * 2
+                -ScaleY + TranslationY * 2
         );
 
         // X 軸の 回転を設定するための クォータニオン 作成
@@ -117,7 +119,9 @@ public class CustomSign {
         }
     }
 
-    public static CustomSign load(String signText) {
+    public static CustomSign load(SignBlockEntity signBlockEntity) {
+
+        String signText = CustomSign.read(signBlockEntity);
 
         // 読み込んだことがあるか
         if (loadedCustomSign.containsKey(signText)) return loadedCustomSign.get(signText);
@@ -149,9 +153,9 @@ public class CustomSign {
     }
 
     public record Vertex(
-            float plusX, float plusZ,
-            float Y,
-            float minusX, float minusZ
+            float plusX, float plusY,
+            float Z,
+            float minusX, float minusY
     ) {
     }
 
