@@ -39,8 +39,6 @@ public class GetImage extends Thread {
         try {
             NativeImage image = NativeImage.read(new URL(this.StringURL).openStream());
 
-            MarumaSign.LOGGER.error(String.valueOf(image));
-
             int width = image.getWidth();
             int height = image.getHeight();
 

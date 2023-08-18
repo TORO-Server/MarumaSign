@@ -1,8 +1,6 @@
 package marumasa.marumasa_sign.client;
 
 import marumasa.marumasa_sign.MarumaSign;
-import net.minecraft.block.BlockState;
-import net.minecraft.block.SignBlock;
 import net.minecraft.block.entity.SignBlockEntity;
 import net.minecraft.client.render.RenderLayer;
 import net.minecraft.text.Text;
