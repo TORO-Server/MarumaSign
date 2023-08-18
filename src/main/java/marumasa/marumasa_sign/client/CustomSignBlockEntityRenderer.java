@@ -1,7 +1,9 @@
 package marumasa.marumasa_sign.client;
 
-import marumasa.marumasa_sign.MarumaSign;
-import net.minecraft.block.*;
+import net.minecraft.block.AbstractSignBlock;
+import net.minecraft.block.Block;
+import net.minecraft.block.BlockState;
+import net.minecraft.block.WallSignBlock;
 import net.minecraft.block.entity.SignBlockEntity;
 import net.minecraft.client.MinecraftClient;
 import net.minecraft.client.network.ClientPlayerEntity;
@@ -49,7 +51,9 @@ public class CustomSignBlockEntityRenderer extends SignBlockEntityRenderer {
         // BlockState 取得
         final BlockState blockState = sign.getCachedState();
 
-        if (blockState.getBlock() instanceof AbstractSignBlock signBlock) {
+        final Block block = blockState.getBlock();
+
+        if (block instanceof AbstractSignBlock signBlock) {
 
             // 看板の Y 軸の 回転を設定するための クォータニオン 作成
             Quaternionf signRotationY = new Quaternionf();
@@ -58,12 +62,16 @@ public class CustomSignBlockEntityRenderer extends SignBlockEntityRenderer {
                     -signBlock.getRotationDegrees(blockState) - 180
             );
 
+            boolean isWallSignBlock = block instanceof WallSignBlock;
+
             // 看板URLから画像をレンダリングする
-            render(customSign, signRotationY, matrices, vertexConsumers, light, overlay);
+            render(customSign, signRotationY, isWallSignBlock, matrices, vertexConsumers, light, overlay);
         }
     }
 
-    public void render(CustomSign customSign, Quaternionf signRotationY, MatrixStack matrices, VertexConsumerProvider vertexConsumers, int light, int overlay) {
+    public void render(CustomSign customSign, Quaternionf signRotationY, boolean isWallSignBlock, MatrixStack matrices, VertexConsumerProvider vertexConsumers, int light, int overlay) {
+
+        float moveZ = isWallSignBlock ? 0.4375f * 2 : 0f;
 
         VertexConsumer vertexConsumer = vertexConsumers.getBuffer(customSign.renderLayer);
 
@@ -82,16 +90,16 @@ public class CustomSignBlockEntityRenderer extends SignBlockEntityRenderer {
         // 表面の描画処理 開始
         matrices.push();
         vertexConsumer.vertex(matrix4f,
-                vertex.minusX(), vertex.minusY(), vertex.Z()
+                vertex.minusX(), vertex.minusY(), vertex.Z() + moveZ
         ).color(255, 255, 255, 255).texture(1, 1).overlay(overlay).light(light).normal(matrix3f, 0.0F, 1.0F, 0.0F).next();
         vertexConsumer.vertex(matrix4f,
-                vertex.minusX(), vertex.plusY(), vertex.Z()
+                vertex.minusX(), vertex.plusY(), vertex.Z() + moveZ
         ).color(255, 255, 255, 255).texture(1, 0).overlay(overlay).light(light).normal(matrix3f, 0.0F, 1.0F, 0.0F).next();
         vertexConsumer.vertex(matrix4f,
-                vertex.plusX(), vertex.plusY(), vertex.Z()
+                vertex.plusX(), vertex.plusY(), vertex.Z() + moveZ
         ).color(255, 255, 255, 255).texture(0, 0).overlay(overlay).light(light).normal(matrix3f, 0.0F, 1.0F, 0.0F).next();
         vertexConsumer.vertex(matrix4f,
-                vertex.plusX(), vertex.minusY(), vertex.Z()
+                vertex.plusX(), vertex.minusY(), vertex.Z() + moveZ
         ).color(255, 255, 255, 255).texture(0, 1).overlay(overlay).light(light).normal(matrix3f, 0.0F, 1.0F, 0.0F).next();
         matrices.pop();
         // 表面の描画処理 終了
@@ -99,16 +107,16 @@ public class CustomSignBlockEntityRenderer extends SignBlockEntityRenderer {
         // 裏面の描画処理 開始
         matrices.push();
         vertexConsumer.vertex(matrix4f,
-                vertex.plusX(), vertex.minusY(), vertex.Z()
+                vertex.plusX(), vertex.minusY(), vertex.Z() + moveZ
         ).color(255, 255, 255, 255).texture(0, 1).overlay(overlay).light(light).normal(matrix3f, 0.0F, 1.0F, 0.0F).next();
         vertexConsumer.vertex(matrix4f,
-                vertex.plusX(), vertex.plusY(), vertex.Z()
+                vertex.plusX(), vertex.plusY(), vertex.Z() + moveZ
         ).color(255, 255, 255, 255).texture(0, 0).overlay(overlay).light(light).normal(matrix3f, 0.0F, 1.0F, 0.0F).next();
         vertexConsumer.vertex(matrix4f,
-                vertex.minusX(), vertex.plusY(), vertex.Z()
+                vertex.minusX(), vertex.plusY(), vertex.Z() + moveZ
         ).color(255, 255, 255, 255).texture(1, 0).overlay(overlay).light(light).normal(matrix3f, 0.0F, 1.0F, 0.0F).next();
         vertexConsumer.vertex(matrix4f,
-                vertex.minusX(), vertex.minusY(), vertex.Z()
+                vertex.minusX(), vertex.minusY(), vertex.Z() + moveZ
         ).color(255, 255, 255, 255).texture(1, 1).overlay(overlay).light(light).normal(matrix3f, 0.0F, 1.0F, 0.0F).next();
         matrices.pop();
         // 裏面の描画処理 終了
