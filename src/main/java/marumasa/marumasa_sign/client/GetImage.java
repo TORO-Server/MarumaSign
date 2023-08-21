@@ -60,8 +60,8 @@ public class GetImage extends Thread {
         } catch (IOException e) {
             // URL から 画像を読み込めなかったら
 
-            // 画像 読み込み済みリスト 更新
-            CustomSign.loadedTextureURL.put(StringURL, new CustomSign.TextureURL(MarumaSignClient.Loading, 1, 1));
+            // 看板 読み込み済みリスト 更新
+            CustomSign.loadedCustomSign.put(signText, CustomSign.load(MarumaSignClient.Error, parameters));
 
             MarumaSign.LOGGER.warn("Failure: " + this.StringURL + " : " + identifier);
         }
