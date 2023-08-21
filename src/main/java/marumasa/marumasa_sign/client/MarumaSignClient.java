@@ -1,5 +1,6 @@
 package marumasa.marumasa_sign.client;
 
+import marumasa.marumasa_sign.MarumaSign;
 import net.fabricmc.api.ClientModInitializer;
 import net.minecraft.block.entity.BlockEntityType;
 import net.minecraft.block.entity.SignBlockEntity;
@@ -12,6 +13,9 @@ public class MarumaSignClient implements ClientModInitializer {
     private static final BlockEntityType<SignBlockEntity> signType = BlockEntityType.SIGN;
 
     public static final Identifier Loading = new Identifier("textures/gui/container/anvil.png");
+    public static final CustomSign.TextureURL Error = new CustomSign.TextureURL(
+            new Identifier(MarumaSign.MOD_ID, "textures/misc/error.png"), 960, 576
+    );
 
     @Override
     public void onInitializeClient() {
