@@ -68,7 +68,7 @@ public class GetImage extends Thread {
     }
 
     // URLを Identifier で使える ID に変換
-    private static String URLtoID(String StringURL) {
+    public static String URLtoID(String StringURL) {
         // base32 に変換
         String base32 = BaseEncoding.base32().encode(StringURL.getBytes());
         // Identifier は 大文字使えないので すべて小文字にする
