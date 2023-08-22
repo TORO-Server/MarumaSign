@@ -132,6 +132,11 @@ public class CustomSign {
         TextureURL textureURL = loadedTextureURL.get(StringURL);
 
         if (textureURL == null) {
+
+            // 読み込み中の画像を表示する
+            textureURL = new TextureURL(MarumaSignClient.Loading, 1, 1);
+            loadedTextureURL.put(StringURL, textureURL);
+
             new GetImage(
                     // 画像のURL
                     StringURL,
@@ -139,7 +144,6 @@ public class CustomSign {
                     // 看板に書かれた文字
                     signText
             ).start();
-            textureURL = new TextureURL(MarumaSignClient.Loading, 1, 1);
         }
 
         CustomSign customSign = load(textureURL, parameters);
