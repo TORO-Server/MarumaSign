@@ -10,6 +10,7 @@ import net.minecraft.client.texture.TextureManager;
 import net.minecraft.util.Identifier;
 
 import java.io.IOException;
+import java.io.InputStream;
 import java.net.URL;
 
 public class GetImage extends Thread {
@@ -37,7 +38,8 @@ public class GetImage extends Thread {
         final Identifier identifier = new Identifier(MarumaSign.MOD_ID, URLtoID(StringURL));
 
         try {
-            NativeImage image = NativeImage.read(new URL(this.StringURL).openStream());
+            InputStream stream = new URL(this.StringURL).openStream();
+            NativeImage image = NativeImage.read(stream);
 
             int width = image.getWidth();
             int height = image.getHeight();
