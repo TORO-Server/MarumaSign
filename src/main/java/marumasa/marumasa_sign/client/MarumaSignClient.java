@@ -12,7 +12,9 @@ public class MarumaSignClient implements ClientModInitializer {
     // 看板のブロックエンティティタイプ 取得
     private static final BlockEntityType<SignBlockEntity> signType = BlockEntityType.SIGN;
 
-    public static final Identifier Loading = new Identifier("textures/gui/container/anvil.png");
+    public static final CustomSign.TextureURL Loading = new CustomSign.TextureURL(
+            new Identifier("textures/gui/container/anvil.png"), 1, 1
+    );
     public static final CustomSign.TextureURL Error = new CustomSign.TextureURL(
             new Identifier(MarumaSign.MOD_ID, "textures/misc/error.png"), 960, 576
     );
