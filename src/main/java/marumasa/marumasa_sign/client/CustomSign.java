@@ -1,29 +1,24 @@
 package marumasa.marumasa_sign.client;
 
-import marumasa.marumasa_sign.MarumaSign;
 import net.minecraft.block.entity.SignBlockEntity;
 import net.minecraft.client.render.RenderLayer;
-import net.minecraft.client.render.VertexFormat;
-import net.minecraft.client.render.VertexFormats;
 import net.minecraft.text.Text;
-import net.minecraft.util.Identifier;
 import org.apache.commons.lang3.ArrayUtils;
 import org.joml.Quaternionf;
 
-import java.util.HashMap;
-import java.util.Map;
-
 public class CustomSign {
 
-    // 看板 読み込み済みリスト
-    public static final Map<String, CustomSign> loadedCustomSign = new HashMap<>();
-
-    // 画像 読み込み済みリスト
-    public static final Map<String, TextureURL> loadedTextureURL = new HashMap<>();
-
-    public final Quaternionf rotation;
-    public final Vertex vertex;
     public final RenderLayer renderLayer;
+    public final Vertex vertex;
+    public final Quaternionf rotation;
+
+    public CustomSign(TextureURL textureURL, CustomSign customSign) {
+        // getEntityTranslucent で 透過と半透明と裏面表示 対応の RenderLayer 生成
+        this.renderLayer = RenderLayer.getEntityTranslucent(textureURL.identifier());
+
+        this.vertex = customSign.vertex;
+        this.rotation = customSign.rotation;
+    }
 
     public CustomSign(
             // 画像のURL
@@ -41,9 +36,7 @@ public class CustomSign {
             float RotationZ
     ) {
 
-        // getText で 透過と半透明 対応の RenderLayer 生成
-        // RenderLayer.getEntityTranslucent() では プレイヤーの向いている角度によって明度が変わってしまう
-        // 確認したバージョン 1.20.1
+        // getEntityTranslucent で 透過と半透明と裏面表示 対応の RenderLayer 生成
         this.renderLayer = RenderLayer.getEntityTranslucent(textureURL.identifier());
 
         final int w = textureURL.width();
@@ -81,13 +74,14 @@ public class CustomSign {
     }
 
     public static String read(SignBlockEntity sign) {
-        // 看板の表面に書かれている文字を取得
-        final Text[] textFront = sign.getFrontText().getMessages(true);
-        // 看板の裏面に書かれている文字を取得
-        final Text[] textBack = sign.getBackText().getMessages(true);
 
         // 表面と裏面に書いてある文字を合わせる
-        final Text[] textAll = ArrayUtils.addAll(textFront, textBack);
+        final Text[] textAll = ArrayUtils.addAll(
+                // 看板の表面に書かれている文字を取得
+                sign.getFrontText().getMessages(true),
+                // 看板の裏面に書かれている文字を取得
+                sign.getBackText().getMessages(true)
+        );
 
         // return で 返す String型の 文字 を作成するためのもの
         final StringBuilder StringAll = new StringBuilder();
@@ -95,11 +89,10 @@ public class CustomSign {
         // textAll を読み取り StringAll に追加
         for (Text text : textAll) StringAll.append(text.getString());
 
-        // 看板に書いてある文字を返す
         return StringAll.toString();
     }
 
-    public static CustomSign load(TextureURL textureURL, String[] parameters) {
+    public static CustomSign create(TextureURL textureURL, String[] parameters) {
         try {
             return new CustomSign(
                     textureURL,
@@ -113,49 +106,8 @@ public class CustomSign {
                     Float.parseFloat(parameters[8])
             );
         } catch (Exception e) {
-            // ログ出力
-            MarumaSign.LOGGER.warn(String.valueOf(e));
             return null;
         }
-    }
-
-    public static CustomSign load(SignBlockEntity signBlockEntity) {
-
-        String signText = CustomSign.read(signBlockEntity);
-
-        // 読み込んだことがあるか
-        if (loadedCustomSign.containsKey(signText)) return loadedCustomSign.get(signText);
-
-        String[] parameters = signText.split("\\|");
-        if (parameters.length != 9) return null;
-
-        final String StringURL = parameters[0];
-
-        TextureURL textureURL = loadedTextureURL.get(StringURL);
-
-        if (textureURL == null) {
-
-            // 読み込み中の画像を表示する
-            textureURL = MarumaSignClient.Loading;
-            loadedTextureURL.put(StringURL, textureURL);
-
-            new GetImage(
-                    // 画像のURL
-                    StringURL,
-                    parameters,
-                    // 看板に書かれた文字
-                    signText
-            ).start();
-        } else if (textureURL.equals(MarumaSignClient.Loading)) {
-            return load(textureURL, parameters);
-        }
-
-        CustomSign customSign = load(textureURL, parameters);
-
-        // 読み込み済みリストに 追加
-        loadedCustomSign.put(signText, customSign);
-        return customSign;
-
     }
 
     public record Vertex(
@@ -163,8 +115,5 @@ public class CustomSign {
             float Z,
             float minusX, float minusY
     ) {
-    }
-
-    public record TextureURL(Identifier identifier, int width, int height) {
     }
 }

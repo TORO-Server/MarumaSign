@@ -29,7 +29,7 @@ public class CustomSignBlockEntityRenderer extends SignBlockEntityRenderer {
     @Override
     public void render(SignBlockEntity sign, float tickDelta, MatrixStack matrices, VertexConsumerProvider vertexConsumers, int light, int overlay) {
 
-        CustomSign customSign = CustomSign.load(sign);
+        CustomSign customSign = CustomSignProvider.get(sign);
 
         if (customSign == null) {
             // 通常のMinecraft看板をレンダリングするために
