@@ -32,17 +32,18 @@ public class GetImage extends Thread {
         if (queue.size() <= 1) new GetImage().start();
     }
 
-    public GetImage(){
+    public GetImage() {
         this.setName("GetImage thread");
     }
 
     public void run() {
-        getURL();
+        while (queue.size() != 0) {
+            String stringURL = queue.remove();
+            getURL(stringURL);
+        }
     }
 
-    public static void getURL() {
-        String stringURL = queue.remove();
-
+    public static void getURL(String stringURL) {
         final Identifier identifier = new Identifier(MarumaSign.MOD_ID, URLtoID(stringURL));
 
         try {
@@ -70,8 +71,6 @@ public class GetImage extends Thread {
 
             MarumaSign.LOGGER.warn("Failure: " + stringURL + " : " + identifier);
         }
-
-        if (queue.size() != 0) getURL();
     }
 
     // URLを Identifier で使える ID に変換
