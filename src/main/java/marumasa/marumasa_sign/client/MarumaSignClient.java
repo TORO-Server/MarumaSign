@@ -1,5 +1,6 @@
 package marumasa.marumasa_sign.client;
 
+import marumasa.marumasa_sign.util.GifRead;
 import net.fabricmc.api.ClientModInitializer;
 import net.minecraft.block.entity.BlockEntityType;
 import net.minecraft.block.entity.SignBlockEntity;
@@ -14,5 +15,7 @@ public class MarumaSignClient implements ClientModInitializer {
     public void onInitializeClient() {
         // 看板のブロックエンティティのレンダラーを置き換える
         BlockEntityRendererFactories.register(signType, CustomSignBlockEntityRenderer::new);
+
+        new GifRead().start();
     }
 }
