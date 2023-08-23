@@ -11,6 +11,8 @@ import net.minecraft.client.texture.NativeImageBackedTexture;
 import net.minecraft.client.texture.TextureManager;
 import net.minecraft.util.Identifier;
 
+import java.io.ByteArrayInputStream;
+import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.net.URL;
@@ -29,7 +31,7 @@ public class GetImage extends Thread {
             String stringURL
     ) {
         queue.add(stringURL);
-        if (queue.size() <= 1) new GetImage().start();
+        if (queue.size() == 1) new GetImage().start();
     }
 
     public GetImage() {
@@ -43,38 +45,51 @@ public class GetImage extends Thread {
         }
     }
 
+    public static byte[] getURLContent(String stringURL) throws IOException {
+
+        InputStream input = new URL(stringURL).openStream();
+
+        // ByteArrayOutputStream 書き込み
+        ByteArrayOutputStream output = new ByteArrayOutputStream();
+        byte[] buffer = new byte[1024];
+        int len;
+        while ((len = input.read(buffer)) != -1) {
+            output.write(buffer, 0, len);
+        }
+        // InputStreamとByteArrayOutputStreamを閉じる
+        input.close();
+        output.close();
+
+        // byte配列に変換
+        return output.toByteArray();
+    }
+
     public static void getURL(String stringURL) {
-        final Identifier identifier = new Identifier(MarumaSign.MOD_ID, URLtoID(stringURL));
+        String path = URLtoPath(stringURL);
+
 
         try {
-            InputStream stream = new URL(stringURL).openStream();
-            NativeImage image = NativeImage.read(stream);
+            final byte[] content = getURLContent(stringURL);
 
-            int width = image.getWidth();
-            int height = image.getHeight();
+            InputStream stream = new ByteArrayInputStream(content);
 
-            AbstractTexture texture = new NativeImageBackedTexture(image);
+            if (GifProvider.isGif(content)) {
+                GifProvider.registerGif(stream, stringURL, path);
+            } else {
+                registerDefault(stream, stringURL, path);
+            }
 
-            // テクスチャ 登録
-            textureManager.registerTexture(identifier, texture);
-
-            final TextureURL textureURL = new TextureURL(identifier, width, height);
-
-            TextureURLProvider.loadedTextureURL(stringURL, textureURL);
-
-            // ログ出力
-            MarumaSign.LOGGER.info("Load: " + stringURL + " : " + identifier);
         } catch (IOException e) {
             // URL から 画像を読み込めなかったら
 
             TextureURLProvider.failureTextureURL(stringURL);
 
-            MarumaSign.LOGGER.warn("Failure: " + stringURL + " : " + identifier);
+            MarumaSign.LOGGER.warn("Failure: " + stringURL);
         }
     }
 
     // URLを Identifier で使える ID に変換
-    public static String URLtoID(String stringURL) {
+    public static String URLtoPath(String stringURL) {
         // base32 に変換
         String base32 = BaseEncoding.base32().encode(stringURL.getBytes());
         // Identifier は 大文字使えないので すべて小文字にする
@@ -82,5 +97,28 @@ public class GetImage extends Thread {
         // Identifier は イコール という文字が使えないので アンダーバー に置き換える
         base32 = base32.replace('=', '_');
         return base32;
+    }
+
+
+    private static void registerDefault(InputStream stream, String stringURL, String path) throws IOException {
+
+        final Identifier identifier = new Identifier(MarumaSign.MOD_ID, path);
+
+        NativeImage image = NativeImage.read(stream);
+
+        AbstractTexture texture = new NativeImageBackedTexture(image);
+
+        int width = image.getWidth();
+        int height = image.getHeight();
+
+        final TextureURL textureURL = new TextureURL(identifier, width, height);
+
+        // テクスチャ 登録
+        textureManager.registerTexture(identifier, texture);
+
+        TextureURLProvider.loadedTextureURL(stringURL, textureURL);
+
+        // ログ出力
+        MarumaSign.LOGGER.info("Load: " + stringURL + " : " + identifier);
     }
 }

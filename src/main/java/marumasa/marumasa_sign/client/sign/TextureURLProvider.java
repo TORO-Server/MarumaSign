@@ -38,7 +38,7 @@ public class TextureURLProvider {
         return TextureURL.loading;
     }
 
-    public static void loadedTextureURL(String stringURL, TextureURL textureURL) {
+    public static List<String> loadedTextureURL(String stringURL, TextureURL textureURL) {
 
         List<String> signTextList = loading.remove(stringURL);
 
@@ -46,6 +46,7 @@ public class TextureURLProvider {
         for (String signText : signTextList) {
             CustomSignProvider.changeSignTexture(textureURL, signText);
         }
+        return signTextList;
     }
 
     public static void failureTextureURL(String stringURL) {
