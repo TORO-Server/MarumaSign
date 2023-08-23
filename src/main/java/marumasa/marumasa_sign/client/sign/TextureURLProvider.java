@@ -31,10 +31,8 @@ public class TextureURLProvider {
         }
 
         loading.put(stringURL, new ArrayList<>(Collections.singleton(signText)));
-        new GetImage(
-                // 画像のURL
-                stringURL
-        ).start();
+
+        GetImage.open(stringURL);
 
         // 読み込み中の画像を表示する
         return TextureURL.loading;
