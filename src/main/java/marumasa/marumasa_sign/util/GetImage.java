@@ -14,22 +14,34 @@ import net.minecraft.util.Identifier;
 import java.io.IOException;
 import java.io.InputStream;
 import java.net.URL;
+import java.util.ArrayDeque;
+import java.util.Queue;
 
 public class GetImage extends Thread {
 
     // テクスチャマネージャー
     private static final TextureManager textureManager = MinecraftClient.getInstance().getTextureManager();
-    private final String stringURL;
 
+    private static final Queue<String> queue = new ArrayDeque<>();
 
-    public GetImage(
+    public static void open(
             // 画像のURL
             String stringURL
     ) {
-        this.stringURL = stringURL;
+        queue.add(stringURL);
+        if (queue.size() <= 1) new GetImage().start();
+    }
+
+    public GetImage(){
+        this.setName("GetImage thread");
     }
 
     public void run() {
+        getURL();
+    }
+
+    public static void getURL() {
+        String stringURL = queue.remove();
 
         final Identifier identifier = new Identifier(MarumaSign.MOD_ID, URLtoID(stringURL));
 
@@ -58,6 +70,8 @@ public class GetImage extends Thread {
 
             MarumaSign.LOGGER.warn("Failure: " + stringURL + " : " + identifier);
         }
+
+        if (queue.size() != 0) getURL();
     }
 
     // URLを Identifier で使える ID に変換
