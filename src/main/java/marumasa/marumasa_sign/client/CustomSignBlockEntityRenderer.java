@@ -87,7 +87,7 @@ public class CustomSignBlockEntityRenderer extends SignBlockEntityRenderer {
         final Matrix3f matrix3f = peek.getNormalMatrix();
         final CustomSign.Vertex vertex = customSign.vertex;
 
-        // 表面の描画処理 開始
+        // 描画処理 開始
         matrices.push();
         vertexConsumer.vertex(matrix4f,
                 vertex.minusX(), vertex.minusY(), vertex.Z() + moveZ
@@ -102,24 +102,7 @@ public class CustomSignBlockEntityRenderer extends SignBlockEntityRenderer {
                 vertex.plusX(), vertex.minusY(), vertex.Z() + moveZ
         ).color(255, 255, 255, 255).texture(0, 1).overlay(overlay).light(light).normal(matrix3f, 0.0F, 1.0F, 0.0F).next();
         matrices.pop();
-        // 表面の描画処理 終了
-
-        // 裏面の描画処理 開始
-        matrices.push();
-        vertexConsumer.vertex(matrix4f,
-                vertex.plusX(), vertex.minusY(), vertex.Z() + moveZ
-        ).color(255, 255, 255, 255).texture(0, 1).overlay(overlay).light(light).normal(matrix3f, 0.0F, 1.0F, 0.0F).next();
-        vertexConsumer.vertex(matrix4f,
-                vertex.plusX(), vertex.plusY(), vertex.Z() + moveZ
-        ).color(255, 255, 255, 255).texture(0, 0).overlay(overlay).light(light).normal(matrix3f, 0.0F, 1.0F, 0.0F).next();
-        vertexConsumer.vertex(matrix4f,
-                vertex.minusX(), vertex.plusY(), vertex.Z() + moveZ
-        ).color(255, 255, 255, 255).texture(1, 0).overlay(overlay).light(light).normal(matrix3f, 0.0F, 1.0F, 0.0F).next();
-        vertexConsumer.vertex(matrix4f,
-                vertex.minusX(), vertex.minusY(), vertex.Z() + moveZ
-        ).color(255, 255, 255, 255).texture(1, 1).overlay(overlay).light(light).normal(matrix3f, 0.0F, 1.0F, 0.0F).next();
-        matrices.pop();
-        // 裏面の描画処理 終了
+        // 描画処理 終了
     }
 
 

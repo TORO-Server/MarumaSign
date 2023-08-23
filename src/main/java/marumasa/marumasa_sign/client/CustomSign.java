@@ -3,6 +3,8 @@ package marumasa.marumasa_sign.client;
 import marumasa.marumasa_sign.MarumaSign;
 import net.minecraft.block.entity.SignBlockEntity;
 import net.minecraft.client.render.RenderLayer;
+import net.minecraft.client.render.VertexFormat;
+import net.minecraft.client.render.VertexFormats;
 import net.minecraft.text.Text;
 import net.minecraft.util.Identifier;
 import org.apache.commons.lang3.ArrayUtils;
@@ -42,7 +44,7 @@ public class CustomSign {
         // getText で 透過と半透明 対応の RenderLayer 生成
         // RenderLayer.getEntityTranslucent() では プレイヤーの向いている角度によって明度が変わってしまう
         // 確認したバージョン 1.20.1
-        this.renderLayer = RenderLayer.getText(textureURL.identifier());
+        this.renderLayer = RenderLayer.getEntityTranslucent(textureURL.identifier());
 
         final int w = textureURL.width();
         final int h = textureURL.height();
