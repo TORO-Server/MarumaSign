@@ -1,4 +1,4 @@
-package marumasa.marumasa_sign.client.gif;
+package marumasa.marumasa_sign.util;
 
 import marumasa.marumasa_sign.MarumaSign;
 import net.minecraft.client.MinecraftClient;
@@ -20,14 +20,14 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.util.*;
 
-import static marumasa.marumasa_sign.client.GetImage.URLtoID;
+import static marumasa.marumasa_sign.util.GetImage.URLtoID;
 
 public class gif {
     private static final TextureManager textureManager = MinecraftClient.getInstance().getTextureManager();
 
     public static final List<gifFrame> gifList = new ArrayList<>();
 
-    public static void GifToPng(InputStream stream, String StringURL) {
+    public static void GifToPng(InputStream stream, String stringURL) {
 
         final Map<Integer, Identifier> FrameMap = new HashMap<>();
         try {
@@ -70,7 +70,7 @@ public class gif {
 
                 AbstractTexture texture = new NativeImageBackedTexture(image);
 
-                Identifier identifier = new Identifier(MarumaSign.MOD_ID, URLtoID(StringURL) + i);
+                Identifier identifier = new Identifier(MarumaSign.MOD_ID, URLtoID(stringURL) + i);
 
 
                 // テクスチャ 登録

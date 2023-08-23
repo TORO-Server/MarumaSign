@@ -1,7 +1,9 @@
-package marumasa.marumasa_sign.client;
+package marumasa.marumasa_sign.util;
 
 import com.google.common.io.BaseEncoding;
 import marumasa.marumasa_sign.MarumaSign;
+import marumasa.marumasa_sign.client.sign.TextureURL;
+import marumasa.marumasa_sign.client.sign.TextureURLProvider;
 import net.minecraft.client.MinecraftClient;
 import net.minecraft.client.texture.AbstractTexture;
 import net.minecraft.client.texture.NativeImage;
