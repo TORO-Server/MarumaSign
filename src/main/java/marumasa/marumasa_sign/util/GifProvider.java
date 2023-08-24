@@ -1,9 +1,11 @@
 package marumasa.marumasa_sign.util;
 
 import marumasa.marumasa_sign.MarumaSign;
+import marumasa.marumasa_sign.client.sign.CustomSign;
 import marumasa.marumasa_sign.client.sign.TextureURL;
 import marumasa.marumasa_sign.client.sign.TextureURLProvider;
 import net.minecraft.client.MinecraftClient;
+import net.minecraft.client.render.RenderLayer;
 import net.minecraft.client.texture.AbstractTexture;
 import net.minecraft.client.texture.NativeImage;
 import net.minecraft.client.texture.NativeImageBackedTexture;
@@ -32,7 +34,7 @@ public class GifProvider {
     public static boolean isGif(byte[] bytes) throws IOException {
         byte[] header = Arrays.copyOf(bytes, 6);
         String s = new String(header);
-        return s.equals("GIF87a") || s.equals("GIF89a");
+        return s.equals("GIF89a");
     }
 
 
@@ -52,7 +54,7 @@ public class GifProvider {
 
         int delayTime = 0;
 
-        final NavigableMap<Integer, Identifier> frameMap = new TreeMap<>();
+        final NavigableMap<Integer, RenderLayer> frameMap = new TreeMap<>();
 
 
         TextureURL firstTextureURL = TextureURL.error;
@@ -101,7 +103,7 @@ public class GifProvider {
 
             //TextureURLProvider.loadedTextureURL(stringURL, textureURL);
 
-            frameMap.put(delayTime, identifier);
+            frameMap.put(delayTime, CustomSign.getRenderLayer(identifier));
 
 
         }

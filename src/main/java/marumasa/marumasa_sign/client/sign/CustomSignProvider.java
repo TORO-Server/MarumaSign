@@ -2,11 +2,12 @@ package marumasa.marumasa_sign.client.sign;
 
 import marumasa.marumasa_sign.util.GifProvider;
 import net.minecraft.block.entity.SignBlockEntity;
-import net.minecraft.util.Identifier;
+import net.minecraft.client.render.RenderLayer;
 
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 
 public class CustomSignProvider {
 
@@ -23,10 +24,10 @@ public class CustomSignProvider {
         if (customSign != null) return customSign;
 
 
-        String[] parameters = toParameters(signText);
-        if (parameters.length != 9) return null;
+        Object[] parameters = toParameters(signText);
+        if (parameters == null || parameters.length != 9) return null;
 
-        final String stringURL = parameters[0];
+        final String stringURL = (String) parameters[0];
 
         if (GifProvider.signTextMap.containsKey(stringURL)) {
             List<String> signTextList = GifProvider.signTextMap.get(stringURL);
@@ -45,16 +46,33 @@ public class CustomSignProvider {
     }
 
     public static void changeSignTexture(TextureURL textureURL, String signText) {
-        CustomSign customSign = CustomSign.create(textureURL, toParameters(signText));
+        CustomSign customSign = CustomSign.create(textureURL,
+                Objects.requireNonNull(toParameters(signText))
+        );
         loaded.put(signText, customSign);
     }
 
-    public static void updateSignTexture(String signText, Identifier identifier) {
-        CustomSign customSign = new CustomSign(identifier, loaded.get(signText));
+    public static void updateSignTexture(String signText, RenderLayer renderLayer) {
+        CustomSign customSign = new CustomSign(renderLayer, loaded.get(signText));
         loaded.put(signText, customSign);
     }
 
-    private static String[] toParameters(String signText) {
-        return signText.split("\\|");
+    private static Object[] toParameters(String signText) {
+        try {
+            final String[] parameters = signText.split("\\|");
+            return new Object[]{
+                    parameters[0],
+                    Float.parseFloat(parameters[1]),
+                    Float.parseFloat(parameters[2]),
+                    Float.parseFloat(parameters[3]),
+                    Float.parseFloat(parameters[4]),
+                    Float.parseFloat(parameters[5]),
+                    Float.parseFloat(parameters[6]),
+                    Float.parseFloat(parameters[7]),
+                    Float.parseFloat(parameters[8])
+            };
+        } catch (Exception e) {
+            return null;
+        }
     }
 }

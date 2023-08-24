@@ -13,12 +13,17 @@ public class CustomSign {
     public final Vertex vertex;
     public final Quaternionf rotation;
 
-    public CustomSign(Identifier identifier, CustomSign customSign) {
+    public CustomSign(RenderLayer renderLayer, CustomSign customSign) {
         // getEntityTranslucent で 透過と半透明と裏面表示 対応の RenderLayer 生成
-        this.renderLayer = RenderLayer.getEntityTranslucent(identifier);
+        this.renderLayer = renderLayer;
 
         this.vertex = customSign.vertex;
         this.rotation = customSign.rotation;
+    }
+
+    public static RenderLayer getRenderLayer(Identifier identifier) {
+        // getEntityTranslucent で 透過と半透明と裏面表示 対応の RenderLayer 生成
+        return RenderLayer.getEntityTranslucent(identifier);
     }
 
     public CustomSign(
@@ -38,7 +43,7 @@ public class CustomSign {
     ) {
 
         // getEntityTranslucent で 透過と半透明と裏面表示 対応の RenderLayer 生成
-        this.renderLayer = RenderLayer.getEntityTranslucent(textureURL.identifier());
+        this.renderLayer = getRenderLayer(textureURL.identifier());
 
         final int w = textureURL.width();
         final int h = textureURL.height();
@@ -93,22 +98,18 @@ public class CustomSign {
         return StringAll.toString();
     }
 
-    public static CustomSign create(TextureURL textureURL, String[] parameters) {
-        try {
-            return new CustomSign(
-                    textureURL,
-                    Float.parseFloat(parameters[1]),
-                    Float.parseFloat(parameters[2]),
-                    Float.parseFloat(parameters[3]),
-                    Float.parseFloat(parameters[4]),
-                    Float.parseFloat(parameters[5]),
-                    Float.parseFloat(parameters[6]),
-                    Float.parseFloat(parameters[7]),
-                    Float.parseFloat(parameters[8])
-            );
-        } catch (Exception e) {
-            return null;
-        }
+    public static CustomSign create(TextureURL textureURL, Object[] parameters) {
+        return new CustomSign(
+                textureURL,
+                (float) parameters[1],
+                (float) parameters[2],
+                (float) parameters[3],
+                (float) parameters[4],
+                (float) parameters[5],
+                (float) parameters[6],
+                (float) parameters[7],
+                (float) parameters[8]
+        );
     }
 
     public record Vertex(
