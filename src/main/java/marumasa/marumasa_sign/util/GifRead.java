@@ -2,6 +2,7 @@ package marumasa.marumasa_sign.util;
 
 import marumasa.marumasa_sign.client.sign.CustomSignProvider;
 import net.minecraft.client.MinecraftClient;
+import net.minecraft.client.render.RenderLayer;
 import net.minecraft.util.Identifier;
 
 import java.util.NavigableMap;
@@ -26,21 +27,21 @@ public class GifRead extends Thread {
 
             gifFrame.frame++;
 
-            final NavigableMap<Integer, Identifier> frameMap = gifFrame.frameMap;
+            final NavigableMap<Integer, RenderLayer> frameMap = gifFrame.frameMap;
             if (!frameMap.containsKey(gifFrame.frame)) continue;
 
             Integer key = frameMap.higherKey(gifFrame.frame);
 
-            Identifier identifier;
+            RenderLayer renderLayer;
             if (key == null) {
                 gifFrame.frame = 0;
-                identifier = frameMap.firstEntry().getValue();
+                renderLayer = frameMap.firstEntry().getValue();
             } else {
-                identifier = frameMap.get(key);
+                renderLayer = frameMap.get(key);
             }
 
             for (String signText : GifProvider.signTextMap.get(gifFrame.stringURL)) {
-                CustomSignProvider.updateSignTexture(signText, identifier);
+                CustomSignProvider.updateSignTexture(signText, renderLayer);
             }
         }
     }

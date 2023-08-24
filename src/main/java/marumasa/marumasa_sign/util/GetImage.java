@@ -26,12 +26,17 @@ public class GetImage extends Thread {
 
     private static final Queue<String> queue = new ArrayDeque<>();
 
+    private static boolean isRunning = false;
+
+    public static short waitTime = 2000;
+
+
     public static void open(
             // 画像のURL
             String stringURL
     ) {
         queue.add(stringURL);
-        if (queue.size() == 1) new GetImage().start();
+        if (!isRunning) new GetImage().start();
     }
 
     public GetImage() {
@@ -39,9 +44,20 @@ public class GetImage extends Thread {
     }
 
     public void run() {
+        isRunning = true;
         while (queue.size() != 0) {
             String stringURL = queue.remove();
             getURL(stringURL);
+            sleep(waitTime);
+        }
+        isRunning = false;
+    }
+
+    public static void sleep(int ms) {
+        try {
+            Thread.sleep(ms);
+        } catch (InterruptedException e) {
+            throw new RuntimeException(e);
         }
     }
 
