@@ -1,4 +1,4 @@
-package marumasa.marumasa_sign.client.sign;
+package marumasa.marumasa_sign.type;
 
 import net.minecraft.block.entity.SignBlockEntity;
 import net.minecraft.client.render.RenderLayer;
