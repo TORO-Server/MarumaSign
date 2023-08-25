@@ -1,6 +1,6 @@
 package marumasa.marumasa_sign.client;
 
-import marumasa.marumasa_sign.client.sign.CustomSign;
+import marumasa.marumasa_sign.type.CustomSign;
 import marumasa.marumasa_sign.client.sign.CustomSignProvider;
 import net.minecraft.block.AbstractSignBlock;
 import net.minecraft.block.Block;

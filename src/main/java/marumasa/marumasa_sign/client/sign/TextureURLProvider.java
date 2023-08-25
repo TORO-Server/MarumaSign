@@ -1,6 +1,7 @@
 package marumasa.marumasa_sign.client.sign;
 
-import marumasa.marumasa_sign.util.GetImage;
+import marumasa.marumasa_sign.type.TextureURL;
+import marumasa.marumasa_sign.util.ImageRequest;
 
 import java.util.*;
 
@@ -32,7 +33,7 @@ public class TextureURLProvider {
 
         loading.put(stringURL, new ArrayList<>(Collections.singleton(signText)));
 
-        GetImage.open(stringURL);
+        ImageRequest.open(stringURL);
 
         // 読み込み中の画像を表示する
         return TextureURL.loading;
