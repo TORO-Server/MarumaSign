@@ -1,9 +1,9 @@
 package marumasa.marumasa_sign.type;
 
+import marumasa.marumasa_sign.util.Utils;
 import net.minecraft.block.entity.SignBlockEntity;
 import net.minecraft.client.render.RenderLayer;
 import net.minecraft.text.Text;
-import net.minecraft.util.Identifier;
 import org.apache.commons.lang3.ArrayUtils;
 import org.joml.Quaternionf;
 
@@ -19,11 +19,6 @@ public class CustomSign {
 
         this.vertex = customSign.vertex;
         this.rotation = customSign.rotation;
-    }
-
-    public static RenderLayer getRenderLayer(Identifier identifier) {
-        // getEntityTranslucent で 透過と半透明と裏面表示 対応の RenderLayer 生成
-        return RenderLayer.getEntityTranslucent(identifier);
     }
 
     public CustomSign(
@@ -43,7 +38,7 @@ public class CustomSign {
     ) {
 
         // getEntityTranslucent で 透過と半透明と裏面表示 対応の RenderLayer 生成
-        this.renderLayer = getRenderLayer(textureURL.identifier());
+        this.renderLayer = Utils.getRenderLayer(textureURL.identifier());
 
         final int w = textureURL.width();
         final int h = textureURL.height();
