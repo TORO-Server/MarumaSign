@@ -9,6 +9,8 @@ import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.net.URL;
+import java.net.URLEncoder;
+import java.nio.charset.StandardCharsets;
 import java.util.ArrayDeque;
 import java.util.Queue;
 
@@ -44,7 +46,9 @@ public class ImageRequest extends Thread {
 
     public static byte[] getURLContent(String stringURL) throws IOException {
 
-        InputStream input = new URL(stringURL).openStream();
+        InputStream input = new URL(
+                URLEncoder.encode(stringURL, StandardCharsets.UTF_8)
+        ).openStream();
 
         // ByteArrayOutputStream 書き込み
         ByteArrayOutputStream output = new ByteArrayOutputStream();
