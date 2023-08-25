@@ -1,9 +1,10 @@
 package marumasa.marumasa_sign.util;
 
 import marumasa.marumasa_sign.MarumaSign;
-import marumasa.marumasa_sign.client.sign.CustomSign;
-import marumasa.marumasa_sign.client.sign.TextureURL;
+import marumasa.marumasa_sign.type.CustomSign;
+import marumasa.marumasa_sign.type.TextureURL;
 import marumasa.marumasa_sign.client.sign.TextureURLProvider;
+import marumasa.marumasa_sign.type.GifFrame;
 import net.minecraft.client.MinecraftClient;
 import net.minecraft.client.render.RenderLayer;
 import net.minecraft.client.texture.AbstractTexture;
@@ -25,23 +26,11 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.util.*;
 
-public class GifProvider {
+public class ImageRegister {
     private static final TextureManager textureManager = MinecraftClient.getInstance().getTextureManager();
 
-    public static final List<GifFrame> gifList = new ArrayList<>();
-    public static final Map<String, List<String>> signTextMap = new HashMap<>();
-
-    public static boolean isGif(byte[] bytes) throws IOException {
-        byte[] header = Arrays.copyOf(bytes, 6);
-        String s = new String(header);
-        return s.equals("GIF89a");
-    }
-
-
     public static void registerGif(InputStream stream, String stringURL, String path) throws IOException {
-
         // gifファイルを読み込むImageReaderを取得
-
         ImageReader reader = getGifReader();
         // gifファイルをオープン
         ImageInputStream imageInputStream = ImageIO.createImageInputStream(stream);
@@ -50,18 +39,10 @@ public class GifProvider {
         // フレーム数を取得
         int frameCount = reader.getNumImages(true);
         // フレームごとに処理
-
-
         int delayTime = 0;
-
         final NavigableMap<Integer, RenderLayer> frameMap = new TreeMap<>();
-
-
         TextureURL firstTextureURL = TextureURL.error;
-
         for (int i = 0; i < frameCount; i++) {
-
-
             // フレームを取得
             BufferedImage frame = reader.read(i);
             // フレームのメタデータを取得
@@ -71,7 +52,6 @@ public class GifProvider {
             // pngファイルの名前を生成（遅延時間も含める）
             // pngファイルに書き込むImageWriterを取得
             // pngファイルをオープン
-
             final ByteArrayOutputStream output = new ByteArrayOutputStream() {
                 @Override
                 public synchronized byte[] toByteArray() {
@@ -79,46 +59,27 @@ public class GifProvider {
                 }
             };
             ImageIO.write(frame, "png", output);
-
             NativeImage image = NativeImage.read(new ByteArrayInputStream(output.toByteArray(), 0, output.size()));
-
-
             AbstractTexture texture = new NativeImageBackedTexture(image);
-
             Identifier identifier = new Identifier(MarumaSign.MOD_ID, path + "/" + i);
             if (i == 0) {
-
                 int width = image.getWidth();
                 int height = image.getHeight();
-
                 firstTextureURL = new TextureURL(identifier, width, height);
             }
-
-
             // テクスチャ 登録
             textureManager.registerTexture(identifier, texture);
-
             // ログ出力
             MarumaSign.LOGGER.info("Load: " + stringURL + " : " + identifier);
-
             //TextureURLProvider.loadedTextureURL(stringURL, textureURL);
-
             frameMap.put(delayTime, CustomSign.getRenderLayer(identifier));
-
-
         }
-
         // gifファイルをクローズ
         reader.dispose();
-
-        gifList.add(new GifFrame(stringURL, frameMap));
-
-
+        GifPlayer.gifList.add(new GifFrame(stringURL, frameMap));
         List<String> signTextList = TextureURLProvider.loadedTextureURL(stringURL, firstTextureURL);
-        signTextMap.put(stringURL, signTextList);
-
+        GifPlayer.signTextMap.put(stringURL, signTextList);
     }
-
 
     // gifファイルからフレームの遅延時間を取得するメソッド（単位は10分の1秒）
     private static int getDelayTime(IIOMetadata metadata) {
@@ -140,5 +101,28 @@ public class GifProvider {
             // イテレーターが空ならnullを返す
             return null;
         }
+    }
+
+
+    static void registerDefault(InputStream stream, String stringURL, String path) throws IOException {
+
+        final Identifier identifier = new Identifier(MarumaSign.MOD_ID, path);
+
+        NativeImage image = NativeImage.read(stream);
+
+        AbstractTexture texture = new NativeImageBackedTexture(image);
+
+        int width = image.getWidth();
+        int height = image.getHeight();
+
+        final TextureURL textureURL = new TextureURL(identifier, width, height);
+
+        // テクスチャ 登録
+        textureManager.registerTexture(identifier, texture);
+
+        TextureURLProvider.loadedTextureURL(stringURL, textureURL);
+
+        // ログ出力
+        MarumaSign.LOGGER.info("Load: " + stringURL + " : " + identifier);
     }
 }

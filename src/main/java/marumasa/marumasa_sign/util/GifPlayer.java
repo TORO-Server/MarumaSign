@@ -1,24 +1,26 @@
 package marumasa.marumasa_sign.util;
 
 import marumasa.marumasa_sign.client.sign.CustomSignProvider;
+import marumasa.marumasa_sign.type.GifFrame;
 import net.minecraft.client.MinecraftClient;
 import net.minecraft.client.render.RenderLayer;
 
-import java.util.NavigableMap;
+import java.util.*;
 
-public class GifRead extends Thread {
+
+public class GifPlayer extends TimerTask {
+    public static final List<GifFrame> gifList = new ArrayList<>();
+    public static final Map<String, List<String>> signTextMap = new HashMap<>();
     private static final MinecraftClient client = MinecraftClient.getInstance();
 
+    @Override
     public void run() {
-        while (true) {
-            Utils.sleep(10);
-            if (client.world == null) continue;
-            load();
-        }
+        if (client.world == null) return;
+        load();
     }
 
     private static void load() {
-        for (GifFrame gifFrame : GifProvider.gifList) {
+        for (GifFrame gifFrame : gifList) {
 
             gifFrame.frame++;
 
@@ -35,7 +37,7 @@ public class GifRead extends Thread {
                 renderLayer = frameMap.get(key);
             }
 
-            for (String signText : GifProvider.signTextMap.get(gifFrame.stringURL)) {
+            for (String signText : signTextMap.get(gifFrame.stringURL)) {
                 CustomSignProvider.updateSignTexture(signText, renderLayer);
             }
         }

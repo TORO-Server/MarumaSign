@@ -1,4 +1,4 @@
-package marumasa.marumasa_sign.util;
+package marumasa.marumasa_sign.type;
 
 import net.minecraft.client.render.RenderLayer;
 

@@ -2,14 +2,7 @@ package marumasa.marumasa_sign.util;
 
 import com.google.common.io.BaseEncoding;
 import marumasa.marumasa_sign.MarumaSign;
-import marumasa.marumasa_sign.client.sign.TextureURL;
 import marumasa.marumasa_sign.client.sign.TextureURLProvider;
-import net.minecraft.client.MinecraftClient;
-import net.minecraft.client.texture.AbstractTexture;
-import net.minecraft.client.texture.NativeImage;
-import net.minecraft.client.texture.NativeImageBackedTexture;
-import net.minecraft.client.texture.TextureManager;
-import net.minecraft.util.Identifier;
 
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
@@ -19,16 +12,12 @@ import java.net.URL;
 import java.util.ArrayDeque;
 import java.util.Queue;
 
-public class GetImage extends Thread {
-
-    // テクスチャマネージャー
-    private static final TextureManager textureManager = MinecraftClient.getInstance().getTextureManager();
-
+public class ImageRequest extends Thread {
     private static final Queue<String> queue = new ArrayDeque<>();
 
     private static boolean isRunning = false;
 
-    public static short waitTime = 2000;
+    public static short waitTime = 0;
 
 
     public static void open(
@@ -36,10 +25,10 @@ public class GetImage extends Thread {
             String stringURL
     ) {
         queue.add(stringURL);
-        if (!isRunning) new GetImage().start();
+        if (!isRunning) new ImageRequest().start();
     }
 
-    public GetImage() {
+    public ImageRequest() {
         this.setName("GetImage thread");
     }
 
@@ -81,10 +70,10 @@ public class GetImage extends Thread {
 
             InputStream stream = new ByteArrayInputStream(content);
 
-            if (GifProvider.isGif(content)) {
-                GifProvider.registerGif(stream, stringURL, path);
+            if (Utils.isGif(content)) {
+                ImageRegister.registerGif(stream, stringURL, path);
             } else {
-                registerDefault(stream, stringURL, path);
+                ImageRegister.registerDefault(stream, stringURL, path);
             }
 
         } catch (IOException e) {
@@ -105,28 +94,5 @@ public class GetImage extends Thread {
         // Identifier は イコール という文字が使えないので アンダーバー に置き換える
         base32 = base32.replace('=', '_');
         return base32;
-    }
-
-
-    private static void registerDefault(InputStream stream, String stringURL, String path) throws IOException {
-
-        final Identifier identifier = new Identifier(MarumaSign.MOD_ID, path);
-
-        NativeImage image = NativeImage.read(stream);
-
-        AbstractTexture texture = new NativeImageBackedTexture(image);
-
-        int width = image.getWidth();
-        int height = image.getHeight();
-
-        final TextureURL textureURL = new TextureURL(identifier, width, height);
-
-        // テクスチャ 登録
-        textureManager.registerTexture(identifier, texture);
-
-        TextureURLProvider.loadedTextureURL(stringURL, textureURL);
-
-        // ログ出力
-        MarumaSign.LOGGER.info("Load: " + stringURL + " : " + identifier);
     }
 }
