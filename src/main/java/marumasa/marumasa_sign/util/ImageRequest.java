@@ -17,7 +17,7 @@ public class ImageRequest extends Thread {
 
     private static boolean isRunning = false;
 
-    public static short waitTime = 0;
+    public static short waitTime = 100;
 
 
     public static void open(
