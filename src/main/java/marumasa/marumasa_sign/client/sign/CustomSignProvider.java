@@ -1,6 +1,8 @@
 package marumasa.marumasa_sign.client.sign;
 
-import marumasa.marumasa_sign.util.GifProvider;
+import marumasa.marumasa_sign.type.CustomSign;
+import marumasa.marumasa_sign.type.TextureURL;
+import marumasa.marumasa_sign.util.GifPlayer;
 import net.minecraft.block.entity.SignBlockEntity;
 import net.minecraft.client.render.RenderLayer;
 
@@ -29,10 +31,10 @@ public class CustomSignProvider {
 
         final String stringURL = (String) parameters[0];
 
-        if (GifProvider.signTextMap.containsKey(stringURL)) {
-            List<String> signTextList = GifProvider.signTextMap.get(stringURL);
+        if (GifPlayer.signTextMap.containsKey(stringURL)) {
+            List<String> signTextList = GifPlayer.signTextMap.get(stringURL);
             signTextList.add(signText);
-            GifProvider.signTextMap.put(stringURL, signTextList);
+            GifPlayer.signTextMap.put(stringURL, signTextList);
         }
 
         TextureURL textureURL = TextureURLProvider.get(stringURL, signText);
