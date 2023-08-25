@@ -3,7 +3,6 @@ package marumasa.marumasa_sign.util;
 import marumasa.marumasa_sign.client.sign.CustomSignProvider;
 import net.minecraft.client.MinecraftClient;
 import net.minecraft.client.render.RenderLayer;
-import net.minecraft.util.Identifier;
 
 import java.util.NavigableMap;
 
@@ -12,13 +11,9 @@ public class GifRead extends Thread {
 
     public void run() {
         while (true) {
-            try {
-                Thread.sleep(10);
-                if (client.world == null) continue;
-                load();
-            } catch (InterruptedException e) {
-                throw new RuntimeException(e);
-            }
+            Utils.sleep(10);
+            if (client.world == null) continue;
+            load();
         }
     }
 

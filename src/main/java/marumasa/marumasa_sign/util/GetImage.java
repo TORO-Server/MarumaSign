@@ -48,17 +48,9 @@ public class GetImage extends Thread {
         while (queue.size() != 0) {
             String stringURL = queue.remove();
             getURL(stringURL);
-            sleep(waitTime);
+            Utils.sleep(waitTime);
         }
         isRunning = false;
-    }
-
-    public static void sleep(int ms) {
-        try {
-            Thread.sleep(ms);
-        } catch (InterruptedException e) {
-            throw new RuntimeException(e);
-        }
     }
 
     public static byte[] getURLContent(String stringURL) throws IOException {
