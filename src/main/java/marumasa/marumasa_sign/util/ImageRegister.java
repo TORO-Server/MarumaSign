@@ -1,7 +1,6 @@
 package marumasa.marumasa_sign.util;
 
 import marumasa.marumasa_sign.MarumaSign;
-import marumasa.marumasa_sign.type.CustomSign;
 import marumasa.marumasa_sign.type.TextureURL;
 import marumasa.marumasa_sign.client.sign.TextureURLProvider;
 import marumasa.marumasa_sign.type.GifFrame;
@@ -72,7 +71,7 @@ public class ImageRegister {
             // ログ出力
             MarumaSign.LOGGER.info("Load: " + stringURL + " : " + identifier);
             //TextureURLProvider.loadedTextureURL(stringURL, textureURL);
-            frameMap.put(delayTime, CustomSign.getRenderLayer(identifier));
+            frameMap.put(delayTime, Utils.getRenderLayer(identifier));
         }
         // gifファイルをクローズ
         reader.dispose();
