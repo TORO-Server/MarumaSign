@@ -124,4 +124,12 @@ public class ImageRegister {
         // ログ出力
         MarumaSign.LOGGER.info("Load: " + stringURL + " : " + identifier);
     }
+
+    public static void registerError(String url) {
+        // URL から 画像を読み込めなかったら
+
+        TextureURLProvider.failureTextureURL(url);
+
+        MarumaSign.LOGGER.warn("Failure: " + url);
+    }
 }

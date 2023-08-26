@@ -33,7 +33,7 @@ public class Utils {
             URI uri = new URI(url);
             return uri.toASCIIString();
         } catch (URISyntaxException e) {
-            throw new RuntimeException(e);
+            return null;
         }
     }
 }
