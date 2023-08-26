@@ -1,8 +1,6 @@
 package marumasa.marumasa_sign.util;
 
 import com.google.common.io.BaseEncoding;
-import marumasa.marumasa_sign.MarumaSign;
-import marumasa.marumasa_sign.client.sign.TextureURLProvider;
 
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
@@ -44,7 +42,11 @@ public class ImageRequest extends Thread {
 
     public static byte[] getURLContent(String stringURL) throws IOException {
 
-        InputStream input = new URL(Utils.encodeURL(stringURL)).openStream();
+        String encodeURL = Utils.encodeURL(stringURL);
+
+        if (encodeURL == null) return null;
+
+        InputStream input = new URL(encodeURL).openStream();
 
         // ByteArrayOutputStream 書き込み
         ByteArrayOutputStream output = new ByteArrayOutputStream();
@@ -68,6 +70,11 @@ public class ImageRequest extends Thread {
         try {
             final byte[] content = getURLContent(stringURL);
 
+            if (content == null) {
+                ImageRegister.registerError(stringURL);
+                return;
+            }
+
             InputStream stream = new ByteArrayInputStream(content);
 
             if (Utils.isGif(content)) {
@@ -77,11 +84,7 @@ public class ImageRequest extends Thread {
             }
 
         } catch (IOException e) {
-            // URL から 画像を読み込めなかったら
-
-            TextureURLProvider.failureTextureURL(stringURL);
-
-            MarumaSign.LOGGER.warn("Failure: " + stringURL);
+            ImageRegister.registerError(stringURL);
         }
     }
 
