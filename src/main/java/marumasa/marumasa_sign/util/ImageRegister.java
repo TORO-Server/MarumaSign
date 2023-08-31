@@ -1,15 +1,11 @@
 package marumasa.marumasa_sign.util;
 
 import marumasa.marumasa_sign.MarumaSign;
-import marumasa.marumasa_sign.type.TextureURL;
 import marumasa.marumasa_sign.client.sign.TextureURLProvider;
 import marumasa.marumasa_sign.type.GifFrame;
-import net.minecraft.client.MinecraftClient;
+import marumasa.marumasa_sign.type.TextureURL;
 import net.minecraft.client.render.RenderLayer;
-import net.minecraft.client.texture.AbstractTexture;
 import net.minecraft.client.texture.NativeImage;
-import net.minecraft.client.texture.NativeImageBackedTexture;
-import net.minecraft.client.texture.TextureManager;
 import net.minecraft.util.Identifier;
 import org.w3c.dom.Element;
 import org.w3c.dom.Node;
@@ -19,14 +15,15 @@ import javax.imageio.ImageReader;
 import javax.imageio.metadata.IIOMetadata;
 import javax.imageio.stream.ImageInputStream;
 import java.awt.image.BufferedImage;
-import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
-import java.util.*;
+import java.util.Iterator;
+import java.util.List;
+import java.util.NavigableMap;
+import java.util.TreeMap;
 
 public class ImageRegister {
-    private static final TextureManager textureManager = MinecraftClient.getInstance().getTextureManager();
 
     public static void registerGif(InputStream stream, String stringURL, String path) throws IOException {
         // gifファイルを読み込むImageReaderを取得
@@ -51,26 +48,22 @@ public class ImageRegister {
             // pngファイルの名前を生成（遅延時間も含める）
             // pngファイルに書き込むImageWriterを取得
             // pngファイルをオープン
-            final ByteArrayOutputStream output = new ByteArrayOutputStream() {
-                @Override
-                public synchronized byte[] toByteArray() {
-                    return this.buf;
-                }
-            };
+
+            final ByteArrayOutputStream output = Utils.createByteArrayOutputStream();
+
             ImageIO.write(frame, "png", output);
-            NativeImage image = NativeImage.read(new ByteArrayInputStream(output.toByteArray(), 0, output.size()));
-            AbstractTexture texture = new NativeImageBackedTexture(image);
             Identifier identifier = new Identifier(MarumaSign.MOD_ID, path + "/" + i);
             if (i == 0) {
-                int width = image.getWidth();
-                int height = image.getHeight();
+                int width = frame.getWidth();
+                int height = frame.getHeight();
                 firstTextureURL = new TextureURL(identifier, width, height);
             }
+
             // テクスチャ 登録
-            textureManager.registerTexture(identifier, texture);
+            Utils.registerTexture(identifier, output);
+
             // ログ出力
             MarumaSign.LOGGER.info("Load: " + stringURL + " : " + identifier);
-            //TextureURLProvider.loadedTextureURL(stringURL, textureURL);
             frameMap.put(delayTime, Utils.getRenderLayer(identifier));
         }
         // gifファイルをクローズ
@@ -109,15 +102,13 @@ public class ImageRegister {
 
         NativeImage image = NativeImage.read(stream);
 
-        AbstractTexture texture = new NativeImageBackedTexture(image);
-
         int width = image.getWidth();
         int height = image.getHeight();
 
         final TextureURL textureURL = new TextureURL(identifier, width, height);
 
         // テクスチャ 登録
-        textureManager.registerTexture(identifier, texture);
+        Utils.registerTexture(identifier, image);
 
         TextureURLProvider.loadedTextureURL(stringURL, textureURL);
 
