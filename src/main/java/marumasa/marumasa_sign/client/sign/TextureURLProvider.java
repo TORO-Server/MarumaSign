@@ -33,7 +33,7 @@ public class TextureURLProvider {
 
         loading.put(stringURL, new ArrayList<>(Collections.singleton(signText)));
 
-        ImageRequest.open(stringURL);
+        ImageRequest.add(stringURL);
 
         // 読み込み中の画像を表示する
         return TextureURL.loading;

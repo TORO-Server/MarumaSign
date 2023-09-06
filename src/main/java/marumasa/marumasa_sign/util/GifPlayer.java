@@ -2,24 +2,16 @@ package marumasa.marumasa_sign.util;
 
 import marumasa.marumasa_sign.client.sign.CustomSignProvider;
 import marumasa.marumasa_sign.type.GifFrame;
-import net.minecraft.client.MinecraftClient;
 import net.minecraft.client.render.RenderLayer;
 
 import java.util.*;
 
 
-public class GifPlayer extends TimerTask {
+public class GifPlayer {
     public static final List<GifFrame> gifList = new ArrayList<>();
     public static final Map<String, List<String>> signTextMap = new HashMap<>();
-    private static final MinecraftClient client = MinecraftClient.getInstance();
 
-    @Override
-    public void run() {
-        if (client.world == null) return;
-        load();
-    }
-
-    private static void load() {
+    public static void load() {
         for (GifFrame gifFrame : gifList) {
 
             gifFrame.frame++;
