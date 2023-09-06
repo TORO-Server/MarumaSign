@@ -7,6 +7,8 @@ import net.minecraft.client.texture.NativeImageBackedTexture;
 import net.minecraft.client.texture.TextureManager;
 import net.minecraft.util.Identifier;
 
+import javax.imageio.ImageIO;
+import java.awt.image.BufferedImage;
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
@@ -17,14 +19,6 @@ import java.util.Arrays;
 public class Utils {
 
     private static final TextureManager textureManager = MinecraftClient.getInstance().getTextureManager();
-
-    public static void sleep(int ms) {
-        try {
-            Thread.sleep(ms);
-        } catch (InterruptedException e) {
-            throw new RuntimeException(e);
-        }
-    }
 
     public static boolean isGif(byte[] bytes) throws IOException {
         byte[] header = Arrays.copyOf(bytes, 6);
@@ -46,18 +40,15 @@ public class Utils {
         }
     }
 
-    public static ByteArrayOutputStream createByteArrayOutputStream() {
-        return new ByteArrayOutputStream() {
-            @Override
-            public synchronized byte[] toByteArray() {
-                return this.buf;
-            }
-        };
-    }
+    public static void registerTexture(Identifier id, BufferedImage image) throws IOException {
 
-    public static void registerTexture(Identifier id, ByteArrayOutputStream stream) throws IOException {
+        // BufferedImageをbyte配列に変換する
+        ByteArrayOutputStream stream = new ByteArrayOutputStream();
+        ImageIO.write(image, "png", stream);
+        byte[] bytes = stream.toByteArray();
+
         // テクスチャ 登録
-        registerTexture(id, NativeImage.read(new ByteArrayInputStream(stream.toByteArray(), 0, stream.size())));
+        registerTexture(id, NativeImage.read(new ByteArrayInputStream(bytes)));
     }
 
     public static void registerTexture(Identifier id, NativeImage image) {

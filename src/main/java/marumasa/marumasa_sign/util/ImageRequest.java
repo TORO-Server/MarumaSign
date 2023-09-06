@@ -10,34 +10,21 @@ import java.net.URL;
 import java.util.ArrayDeque;
 import java.util.Queue;
 
-public class ImageRequest extends Thread {
+public class ImageRequest {
     private static final Queue<String> queue = new ArrayDeque<>();
 
-    private static boolean isRunning = false;
 
-    public static short waitTime = 100;
-
-
-    public static void open(
+    public static void add(
             // 画像のURL
             String stringURL
     ) {
         queue.add(stringURL);
-        if (!isRunning) new ImageRequest().start();
     }
 
-    public ImageRequest() {
-        this.setName("GetImage thread");
-    }
-
-    public void run() {
-        isRunning = true;
-        while (queue.size() != 0) {
-            String stringURL = queue.remove();
-            getURL(stringURL);
-            Utils.sleep(waitTime);
-        }
-        isRunning = false;
+    public static void load() {
+        if (queue.size() == 0) return;
+        String stringURL = queue.remove();
+        getURL(stringURL);
     }
 
     public static byte[] getURLContent(String stringURL) throws IOException {
