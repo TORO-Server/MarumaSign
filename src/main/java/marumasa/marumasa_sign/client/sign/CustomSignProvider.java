@@ -77,4 +77,12 @@ public class CustomSignProvider {
             return null;
         }
     }
+
+
+    public static void removeCache() {
+        loaded.clear();
+        GifPlayer.gifList.clear();
+        GifPlayer.signTextMap.clear();
+        TextureURLProvider.removeCache();
+    }
 }

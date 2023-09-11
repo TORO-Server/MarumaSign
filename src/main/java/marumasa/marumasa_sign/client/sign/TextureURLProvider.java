@@ -2,6 +2,7 @@ package marumasa.marumasa_sign.client.sign;
 
 import marumasa.marumasa_sign.type.TextureURL;
 import marumasa.marumasa_sign.util.ImageRequest;
+import marumasa.marumasa_sign.util.Utils;
 
 import java.util.*;
 
@@ -58,5 +59,17 @@ public class TextureURLProvider {
         for (String signText : signTextList) {
             CustomSignProvider.changeSignTexture(TextureURL.error, signText);
         }
+    }
+
+
+    protected static void removeCache() {
+
+        // 登録されているテクスチャ削除
+        for (TextureURL textureURL : loaded.values())
+            Utils.destroyTexture(textureURL.identifier());
+
+        loaded.clear();
+        loading.clear();
+        failure.clear();
     }
 }

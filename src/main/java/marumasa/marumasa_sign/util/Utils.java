@@ -1,10 +1,13 @@
 package marumasa.marumasa_sign.util;
 
+import marumasa.marumasa_sign.MarumaSign;
 import net.minecraft.client.MinecraftClient;
+import net.minecraft.client.option.KeyBinding;
 import net.minecraft.client.render.RenderLayer;
 import net.minecraft.client.texture.NativeImage;
 import net.minecraft.client.texture.NativeImageBackedTexture;
 import net.minecraft.client.texture.TextureManager;
+import net.minecraft.client.util.InputUtil;
 import net.minecraft.util.Identifier;
 
 import javax.imageio.ImageIO;
@@ -18,7 +21,7 @@ import java.util.Arrays;
 
 public class Utils {
 
-    private static final TextureManager textureManager = MinecraftClient.getInstance().getTextureManager();
+    private static final MinecraftClient client = MinecraftClient.getInstance();
 
     public static boolean isGif(byte[] bytes) throws IOException {
         byte[] header = Arrays.copyOf(bytes, 6);
@@ -53,6 +56,25 @@ public class Utils {
 
     public static void registerTexture(Identifier id, NativeImage image) {
         // テクスチャ 登録
-        textureManager.registerTexture(id, new NativeImageBackedTexture(image));
+        client.getTextureManager().registerTexture(id, new NativeImageBackedTexture(image));
+    }
+
+    public static void destroyTexture(Identifier id) {
+        // テクスチャ 削除
+        client.getTextureManager().destroyTexture(id);
+    }
+
+    // キーバインド 作成
+    public static KeyBinding createKeyBinding(String name, int code) {
+        return new KeyBinding(
+                // ID作成
+                "key." + MarumaSign.MOD_ID + "." + name,
+
+                // どのキーか設定
+                InputUtil.Type.KEYSYM, code,
+
+                // カテゴリ設定
+                "key.categories." + MarumaSign.MOD_ID
+        );
     }
 }
