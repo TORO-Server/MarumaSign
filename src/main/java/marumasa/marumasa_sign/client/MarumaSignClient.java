@@ -40,6 +40,7 @@ public class MarumaSignClient implements ClientModInitializer {
             if (client.player == null) return;
             // もしキーが押されたら
             while (binding2.wasPressed()) {
+                if (ImageRequest.queueSize() != 0) return;
                 CustomSignProvider.removeCache();
                 client.player.sendMessage(Text.translatable("text.maruma_sign.remove_cache"), false);
             }

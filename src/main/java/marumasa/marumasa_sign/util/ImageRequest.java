@@ -13,6 +13,10 @@ import java.util.Queue;
 public class ImageRequest {
     private static final Queue<String> queue = new ArrayDeque<>();
 
+    public static int queueSize() {
+        return queue.size();
+    }
+
 
     public static void add(
             // 画像のURL
@@ -23,8 +27,9 @@ public class ImageRequest {
 
     public static void load() {
         if (queue.size() == 0) return;
-        String stringURL = queue.remove();
+        String stringURL = queue.peek();
         getURL(stringURL);
+        queue.remove();
     }
 
     public static byte[] getURLContent(String stringURL) throws IOException {
