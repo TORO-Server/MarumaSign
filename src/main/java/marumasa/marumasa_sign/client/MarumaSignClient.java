@@ -50,8 +50,7 @@ public class MarumaSignClient implements ClientModInitializer {
     private static class loop extends TimerTask {
         @Override
         public void run() {
-            if (client.world == null) return;
-            if (client.getTextureManager() == null) return;
+            if (client.world == null || client.getBlockRenderManager() == null) return;
             GifPlayer.load();
             ImageRequest.load();
         }
