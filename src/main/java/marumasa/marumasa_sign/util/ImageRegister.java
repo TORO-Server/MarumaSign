@@ -52,7 +52,7 @@ public class ImageRegister {
 
         }
 
-        GifPlayer.gifList.add(new GifFrame(stringURL, frameMap));
+        GifPlayer.gifList.add(new GifFrame(stringURL, frameMap, gifImage.repetitions));
         List<String> signTextList = TextureURLProvider.loadedTextureURL(stringURL, firstTextureURL);
         GifPlayer.signTextMap.put(stringURL, signTextList);
     }
