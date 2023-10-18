@@ -5,106 +5,43 @@ import net.minecraft.block.entity.SignBlockEntity;
 import net.minecraft.client.render.RenderLayer;
 import net.minecraft.text.Text;
 import org.apache.commons.lang3.ArrayUtils;
-import org.joml.Quaternionf;
 import org.joml.Vector2f;
 import org.joml.Vector3f;
 
 public class CustomSign {
 
     public final RenderLayer renderLayer;
-    public final Quaternionf rotation;
-
     public final Vertex vertex;
 
     public CustomSign(RenderLayer renderLayer, CustomSign customSign) {
         // getEntityTranslucent で 透過と半透明と裏面表示 対応の RenderLayer 生成
         this.renderLayer = renderLayer;
-
-        this.vector = customSign.vector;
-        this.rotation = customSign.rotation;
+        this.vertex = customSign.vertex;
     }
 
-    public static Vector3f createVertex(
-
-            float x,
-            float y,
-
-            float TranslationX,
-            float TranslationY,
-            float TranslationZ,
-
-            float RotationX,
-            float RotationY,
-            float RotationZ
-
-    ) {
-        Vector3f vec = new Vector3f(x, y, 0);
-
-        vec.rotateX((float) Math.toRadians(RotationX));
-        vec.rotateY((float) Math.toRadians(RotationY));
-        vec.rotateZ((float) Math.toRadians(RotationZ));
-
-        vec.add(TranslationX, TranslationY, TranslationZ);
-
-        return vec;
-    }
 
     public CustomSign(
-            // 画像のURL
-            TextureURL textureURL,
-            // 位置
-            float TranslationX,
-            float TranslationY,
-            float TranslationZ,
-            // 大きさ
-            float ScaleX,
-            float ScaleY,
-            // 回転
-            float RotationX,
-            float RotationY,
-            float RotationZ
+            CustomSignParameters csp
     ) {
 
         // getEntityTranslucent で 透過と半透明と裏面表示 対応の RenderLayer 生成
-        this.renderLayer = Utils.getRenderLayer(textureURL.identifier());
+        this.renderLayer = Utils.getRenderLayer(csp.textureURL.identifier());
 
-        final int width = textureURL.width();
-        final int height = textureURL.height();
+        final int width = csp.textureURL.width();
+        final int height = csp.textureURL.height();
         // 頂点の位置 設定
 
 
-        Vector2f vector = new Vector2f(width, height);
-        vector.normalize();
-        vector.mul(ScaleX, ScaleY);
-
-        Vector3f vector_plus = createVertex(vector);
-        Vector3f vector_minus = new Vector3f(vector.x, vector.y, vector.z);
+        Vector2f vec = new Vector2f(width, height);
+        vec.normalize();
+        vec.mul(csp.ScaleX, csp.ScaleY);
 
         this.vertex = new Vertex(
-
+                csp.createVertex(-vec.x, -vec.y),
+                csp.createVertex(-vec.x, +vec.y),
+                csp.createVertex(+vec.x, +vec.y),
+                csp.createVertex(+vec.x, -vec.y)
         );
-
-        vector.add(TranslationX, TranslationY, TranslationZ);
-
-        vector.rotateX((float) Math.toRadians(RotationX));
-        vector.rotateY((float) Math.toRadians(RotationY));
-        vector.rotateZ((float) Math.toRadians(RotationZ));
-
-
-        // X 軸の 回転を設定するための クォータニオン 作成
-        Quaternionf qx = new Quaternionf();
-        // X 軸に どれくらい回転するか 設定
-        qx.fromAxisAngleDeg(1, 0, 0, RotationX);
-        // Y 軸の 回転を設定するための クォータニオン 作成
-        Quaternionf qy = new Quaternionf();
-        // Y 軸に どれくらい回転するか 設定
-        qy.fromAxisAngleDeg(0, 1, 0, RotationY);
-        // Z 軸の 回転を設定するための クォータニオン 作成
-        Quaternionf qz = new Quaternionf();
-        // Z 軸に どれくらい回転するか 設定
-        qz.fromAxisAngleDeg(0, 0, 1, RotationZ);
-        // クォータニオンの積 計算 を 計算して 回転を設定
-        this.rotation = new Quaternionf().mul(qx).mul(qy).mul(qz);
     }
 
     public static String read(SignBlockEntity sign) {
@@ -127,23 +64,56 @@ public class CustomSign {
     }
 
     public static CustomSign create(TextureURL textureURL, Object[] parameters) {
+
         return new CustomSign(
-                textureURL,
-                (float) parameters[1],
-                (float) parameters[2],
-                (float) parameters[3],
-                (float) parameters[4],
-                (float) parameters[5],
-                (float) parameters[6],
-                (float) parameters[7],
-                (float) parameters[8]
+                new CustomSignParameters(
+                        textureURL,
+                        (float) parameters[1],
+                        (float) parameters[2],
+                        (float) parameters[3],
+                        (float) parameters[4],
+                        (float) parameters[5],
+                        (float) parameters[6],
+                        (float) parameters[7],
+                        (float) parameters[8]
+                )
         );
     }
 
+    private record CustomSignParameters(
+            // 画像のURL
+            TextureURL textureURL,
+            // 位置
+            float TranslationX,
+            float TranslationY,
+            float TranslationZ,
+            // 大きさ
+            float ScaleX,
+            float ScaleY,
+            // 回転
+            float RotationX,
+            float RotationY,
+            float RotationZ
+    ) {
+        public Vector3f createVertex(float x, float y) {
+            Vector3f vec = new Vector3f(x, y, 0);
+
+            vec.rotateX((float) Math.toRadians(RotationX));
+            vec.rotateY((float) Math.toRadians(RotationY));
+            vec.rotateZ((float) Math.toRadians(RotationZ));
+
+            vec.add(TranslationX, TranslationY, TranslationZ);
+
+            return vec;
+        }
+    }
+
+
     public record Vertex(
-            float plusX, float plusY,
-            float Z,
-            float minusX, float minusY
+            Vector3f mi_mi,
+            Vector3f mi_pl,
+            Vector3f pl_pl,
+            Vector3f pl_mi
     ) {
     }
 }
