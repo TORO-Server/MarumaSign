@@ -2,6 +2,7 @@ package marumasa.marumasa_sign.client;
 
 import marumasa.marumasa_sign.type.CustomSign;
 import marumasa.marumasa_sign.client.sign.CustomSignProvider;
+import net.fabricmc.loader.impl.lib.sat4j.core.Vec;
 import net.minecraft.block.AbstractSignBlock;
 import net.minecraft.block.Block;
 import net.minecraft.block.BlockState;
@@ -17,6 +18,7 @@ import net.minecraft.client.util.math.MatrixStack;
 import org.joml.Matrix3f;
 import org.joml.Matrix4f;
 import org.joml.Quaternionf;
+import org.joml.Vector3f;
 
 public class CustomSignBlockEntityRenderer extends SignBlockEntityRenderer {
 
@@ -79,7 +81,6 @@ public class CustomSignBlockEntityRenderer extends SignBlockEntityRenderer {
 
         matrices.translate(0.5f, 0.5f, 0.5f); // 位置を設定
         matrices.scale(0.5f, 0.5f, 0.5f); // 大きさを設定
-        matrices.multiply(customSign.rotation); // 回転を設定
 
         // 看板の回転 設定
         matrices.multiply(signRotationY);
@@ -87,21 +88,27 @@ public class CustomSignBlockEntityRenderer extends SignBlockEntityRenderer {
         final MatrixStack.Entry peek = matrices.peek();
         final Matrix4f matrix4f = peek.getPositionMatrix();
         final Matrix3f matrix3f = peek.getNormalMatrix();
-        final CustomSign.Vertex vertex = customSign.vertex;
+
+        final CustomSign.Vertex ver = customSign.vertex;
+
+        final Vector3f mi_mi = ver.mi_mi();
+        final Vector3f mi_pl = ver.mi_pl();
+        final Vector3f pl_pl = ver.pl_pl();
+        final Vector3f pl_mi = ver.pl_mi();
 
         // 描画処理 開始
         matrices.push();
         vertexConsumer.vertex(matrix4f,
-                vertex.minusX(), vertex.minusY(), vertex.Z() + moveZ
+                mi_mi.x, mi_mi.y, mi_mi.z + moveZ
         ).color(255, 255, 255, 255).texture(1, 1).overlay(overlay).light(light).normal(matrix3f, 0.0F, 1.0F, 0.0F).next();
         vertexConsumer.vertex(matrix4f,
-                vertex.minusX(), vertex.plusY(), vertex.Z() + moveZ
+                mi_pl.x, mi_pl.y, mi_pl.z + moveZ
         ).color(255, 255, 255, 255).texture(1, 0).overlay(overlay).light(light).normal(matrix3f, 0.0F, 1.0F, 0.0F).next();
         vertexConsumer.vertex(matrix4f,
-                vertex.plusX(), vertex.plusY(), vertex.Z() + moveZ
+                pl_pl.x, pl_pl.y, pl_pl.z + moveZ
         ).color(255, 255, 255, 255).texture(0, 0).overlay(overlay).light(light).normal(matrix3f, 0.0F, 1.0F, 0.0F).next();
         vertexConsumer.vertex(matrix4f,
-                vertex.plusX(), vertex.minusY(), vertex.Z() + moveZ
+                pl_mi.x, pl_mi.y, pl_mi.z + moveZ
         ).color(255, 255, 255, 255).texture(0, 1).overlay(overlay).light(light).normal(matrix3f, 0.0F, 1.0F, 0.0F).next();
         matrices.pop();
         // 描画処理 終了
