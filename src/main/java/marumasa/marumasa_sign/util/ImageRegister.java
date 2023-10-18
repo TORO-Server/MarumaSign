@@ -1,5 +1,6 @@
 package marumasa.marumasa_sign.util;
 
+import at.dhyan.open_imaging.GifDecoder;
 import marumasa.marumasa_sign.MarumaSign;
 import marumasa.marumasa_sign.client.sign.TextureURLProvider;
 import marumasa.marumasa_sign.type.GifFrame;
