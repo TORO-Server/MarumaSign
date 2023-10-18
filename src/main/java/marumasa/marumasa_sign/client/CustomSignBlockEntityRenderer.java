@@ -1,8 +1,7 @@
 package marumasa.marumasa_sign.client;
 
-import marumasa.marumasa_sign.type.CustomSign;
 import marumasa.marumasa_sign.client.sign.CustomSignProvider;
-import net.fabricmc.loader.impl.lib.sat4j.core.Vec;
+import marumasa.marumasa_sign.type.CustomSign;
 import net.minecraft.block.AbstractSignBlock;
 import net.minecraft.block.Block;
 import net.minecraft.block.BlockState;
