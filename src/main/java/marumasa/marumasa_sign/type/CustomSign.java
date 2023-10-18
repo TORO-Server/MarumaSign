@@ -6,19 +6,47 @@ import net.minecraft.client.render.RenderLayer;
 import net.minecraft.text.Text;
 import org.apache.commons.lang3.ArrayUtils;
 import org.joml.Quaternionf;
+import org.joml.Vector2f;
+import org.joml.Vector3f;
 
 public class CustomSign {
 
     public final RenderLayer renderLayer;
-    public final Vertex vertex;
     public final Quaternionf rotation;
+
+    public final Vertex vertex;
 
     public CustomSign(RenderLayer renderLayer, CustomSign customSign) {
         // getEntityTranslucent で 透過と半透明と裏面表示 対応の RenderLayer 生成
         this.renderLayer = renderLayer;
 
-        this.vertex = customSign.vertex;
+        this.vector = customSign.vector;
         this.rotation = customSign.rotation;
+    }
+
+    public static Vector3f createVertex(
+
+            float x,
+            float y,
+
+            float TranslationX,
+            float TranslationY,
+            float TranslationZ,
+
+            float RotationX,
+            float RotationY,
+            float RotationZ
+
+    ) {
+        Vector3f vec = new Vector3f(x, y, 0);
+
+        vec.rotateX((float) Math.toRadians(RotationX));
+        vec.rotateY((float) Math.toRadians(RotationY));
+        vec.rotateZ((float) Math.toRadians(RotationZ));
+
+        vec.add(TranslationX, TranslationY, TranslationZ);
+
+        return vec;
     }
 
     public CustomSign(
@@ -40,23 +68,28 @@ public class CustomSign {
         // getEntityTranslucent で 透過と半透明と裏面表示 対応の RenderLayer 生成
         this.renderLayer = Utils.getRenderLayer(textureURL.identifier());
 
-        final int w = textureURL.width();
-        final int h = textureURL.height();
-        if (w > h) {
-            // 大きさを設定
-            ScaleY *= (double) h / w;
-        } else {
-            // 大きさを設定
-            ScaleX *= (double) w / h;
-        }
+        final int width = textureURL.width();
+        final int height = textureURL.height();
         // 頂点の位置 設定
+
+
+        Vector2f vector = new Vector2f(width, height);
+        vector.normalize();
+        vector.mul(ScaleX, ScaleY);
+
+        Vector3f vector_plus = createVertex(vector);
+        Vector3f vector_minus = new Vector3f(vector.x, vector.y, vector.z);
+
         this.vertex = new Vertex(
-                ScaleX + TranslationX * 2,
-                ScaleY + TranslationY * 2,
-                TranslationZ * 2,
-                -ScaleX + TranslationX * 2,
-                -ScaleY + TranslationY * 2
+
         );
+
+        vector.add(TranslationX, TranslationY, TranslationZ);
+
+        vector.rotateX((float) Math.toRadians(RotationX));
+        vector.rotateY((float) Math.toRadians(RotationY));
+        vector.rotateZ((float) Math.toRadians(RotationZ));
+
 
         // X 軸の 回転を設定するための クォータニオン 作成
         Quaternionf qx = new Quaternionf();
