@@ -32,8 +32,13 @@ public class CustomSign {
         // 頂点の位置 設定
 
 
-        Vector2f vec = new Vector2f(width, height);
-        vec.normalize();
+        double maxVal = Math.max(width, height);
+        Vector2f vec = new Vector2f(
+                (float) (width / maxVal),
+                (float) (height / maxVal)
+        );
+
+
         vec.mul(csp.ScaleX, csp.ScaleY);
 
         this.vertex = new Vertex(
