@@ -1,5 +1,6 @@
 package marumasa.marumasa_sign.util;
 
+import marumasa.marumasa_sign.MarumaSign;
 import marumasa.marumasa_sign.client.sign.CustomSignProvider;
 import marumasa.marumasa_sign.type.GifFrame;
 import net.minecraft.client.render.RenderLayer;
@@ -24,6 +25,14 @@ public class GifPlayer {
             RenderLayer renderLayer;
             if (key == null) {
                 gifFrame.frame = 0;
+                if (gifFrame.repetitions != 0) {
+                    gifFrame.repeat_count++;
+                    if (gifFrame.repeat_count >= gifFrame.repetitions) {
+                        MarumaSign.LOGGER.info("test");
+                        gifList.remove(gifFrame);
+                        continue;
+                    }
+                }
                 renderLayer = frameMap.firstEntry().getValue();
             } else {
                 renderLayer = frameMap.get(key);
