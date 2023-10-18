@@ -30,8 +30,7 @@ public class MarumaSignClient implements ClientModInitializer {
         // 看板のブロックエンティティのレンダラーを置き換える
         BlockEntityRendererFactories.register(signType, CustomSignBlockEntityRenderer::new);
 
-        Timer timer = new Timer();
-        timer.schedule(new loop(), 0, 10);
+        loop.start();
 
         // キーバインド登録
         KeyBinding binding2 = KeyBindingHelper.registerKeyBinding(Utils.createKeyBinding("remove_cache", GLFW.GLFW_KEY_M));
@@ -47,12 +46,29 @@ public class MarumaSignClient implements ClientModInitializer {
         });
     }
 
-    private static class loop extends TimerTask {
-        @Override
-        public void run() {
-            if (client.world == null || client.getBlockRenderManager() == null) return;
-            GifPlayer.load();
-            ImageRequest.load();
+    private static class loop {
+        public static void start() {
+            Timer timer = new Timer();
+            // 10ms timer
+            timer.schedule(new loopGifPlayer(), 0, 10);
+            // 100ms timer
+            timer.schedule(new loopImageRequest(), 0, 100);
+        }
+
+        private static class loopGifPlayer extends TimerTask {
+            @Override
+            public void run() {
+                if (client.world == null || client.getBlockRenderManager() == null) return;
+                GifPlayer.load();
+            }
+        }
+
+        public static class loopImageRequest extends TimerTask {
+            @Override
+            public void run() {
+                if (client.world == null || client.getBlockRenderManager() == null) return;
+                ImageRequest.load();
+            }
         }
     }
 }
