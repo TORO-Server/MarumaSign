@@ -19,10 +19,21 @@ public class CustomSign {
         this.vertex = customSign.vertex;
     }
 
+    public CustomSign(TextureURL textureURL, Object[] parameters) {
+        this(new CustomSignParameters(
+                textureURL,
+                (float) parameters[1],
+                (float) parameters[2],
+                (float) parameters[3],
+                (float) parameters[4],
+                (float) parameters[5],
+                (float) parameters[6],
+                (float) parameters[7],
+                (float) parameters[8]
+        ));
+    }
 
-    public CustomSign(
-            CustomSignParameters csp
-    ) {
+    public CustomSign(CustomSignParameters csp) {
 
         // getEntityTranslucent で 透過と半透明と裏面表示 対応の RenderLayer 生成
         this.renderLayer = Utils.getRenderLayer(csp.textureURL.identifier());
@@ -69,20 +80,7 @@ public class CustomSign {
     }
 
     public static CustomSign create(TextureURL textureURL, Object[] parameters) {
-
-        return new CustomSign(
-                new CustomSignParameters(
-                        textureURL,
-                        (float) parameters[1],
-                        (float) parameters[2],
-                        (float) parameters[3],
-                        (float) parameters[4],
-                        (float) parameters[5],
-                        (float) parameters[6],
-                        (float) parameters[7],
-                        (float) parameters[8]
-                )
-        );
+        return new CustomSign(textureURL, parameters);
     }
 
     private record CustomSignParameters(
