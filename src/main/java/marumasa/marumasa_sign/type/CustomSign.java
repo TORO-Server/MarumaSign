@@ -101,11 +101,11 @@ public class CustomSign {
         public Vector3f createVertex(float x, float y) {
             Vector3f vec = new Vector3f(x, y, 0);
 
-            vec.rotateX((float) Math.toRadians(RotationZ));
+            vec.rotateX((float) Math.toRadians(RotationX));
             vec.rotateY((float) Math.toRadians(RotationY));
-            vec.rotateZ((float) Math.toRadians(-RotationX));
+            vec.rotateZ((float) Math.toRadians(RotationZ));
 
-            vec.add(TranslationX, TranslationY, TranslationZ);
+            vec.add(TranslationX * 2, TranslationY * 2, TranslationZ * 2);
 
             return vec;
         }
