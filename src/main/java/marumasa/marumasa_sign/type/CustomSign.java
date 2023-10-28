@@ -101,9 +101,9 @@ public class CustomSign {
         public Vector3f createVertex(float x, float y) {
             Vector3f vec = new Vector3f(x, y, 0);
 
-            vec.rotateX((float) Math.toRadians(RotationX));
-            vec.rotateY((float) Math.toRadians(RotationY));
-            vec.rotateZ((float) Math.toRadians(RotationZ));
+            vec.rotateX((float) Math.toRadians(RotationZ));// roll
+            vec.rotateY((float) Math.toRadians(-RotationY));// yaw
+            vec.rotateZ((float) Math.toRadians(-RotationX));// pitch
 
             vec.add(TranslationX * 2, TranslationY * 2, TranslationZ * 2);
 
