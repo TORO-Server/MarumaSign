@@ -8,9 +8,9 @@
 
 ## 前提環境
 
-- Minecraft **1.20.1**
-- [Fabric API](https://www.curseforge.com/minecraft/mc-mods/fabric-api) 0.86.1 以降
-- [Fabric Loader](https://fabricmc.net/use/installer/) 0.14.22 以降
+- Minecraft **1.20.2**
+- [Fabric Loader](https://fabricmc.net/use/installer/) 0.14.24 以降
+- [Fabric API](https://www.curseforge.com/minecraft/mc-mods/fabric-api) 0.90.4 以降
 
 ## テクスチャ作成者
 
