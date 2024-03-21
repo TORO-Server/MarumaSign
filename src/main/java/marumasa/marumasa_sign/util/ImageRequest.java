@@ -2,6 +2,7 @@ package marumasa.marumasa_sign.util;
 
 import com.google.common.io.BaseEncoding;
 import marumasa.marumasa_sign.MarumaSign;
+import net.minecraft.util.Identifier;
 
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
@@ -90,7 +91,16 @@ public class ImageRequest {
             if (Utils.isGif(content)) {
                 ImageRegister.registerGif(stream, stringURL, path);
             } else {
-                ImageRegister.registerDefault(stream, stringURL, path);
+
+                final Identifier identifier = new Identifier(MarumaSign.MOD_ID, path);
+
+                if (ImageRegister.registerDefault(stream, stringURL, identifier)) {
+                    // ログ出力
+                    MarumaSign.LOGGER.info("Load: " + stringURL + " : " + identifier);
+                } else {
+                    // エラーログ出力
+                    ImageRegister.registerError(stringURL);
+                }
             }
 
         } catch (IOException e) {

@@ -58,11 +58,17 @@ public class ImageRegister {
     }
 
 
-    static void registerDefault(InputStream stream, String stringURL, String path) throws IOException {
+    static boolean registerDefault(InputStream stream, String stringURL, Identifier identifier) throws IOException {
 
-        final Identifier identifier = new Identifier(MarumaSign.MOD_ID, path);
 
-        NativeImage image = NativeImage.read(stream);
+        // どんな画像形式でも png に変換する
+        final InputStream pngStream = Utils.toPNG(stream);
+
+        // もし null (pngに変換できないファイルの場合) return
+        if (pngStream == null) return false;
+
+        // 変換した png を読み込む
+        NativeImage image = NativeImage.read(pngStream);
 
         int width = image.getWidth();
         int height = image.getHeight();
@@ -74,8 +80,7 @@ public class ImageRegister {
 
         TextureURLProvider.loadedTextureURL(stringURL, textureURL);
 
-        // ログ出力
-        MarumaSign.LOGGER.info("Load: " + stringURL + " : " + identifier);
+        return  true;
     }
 
     public static void registerError(String url) {

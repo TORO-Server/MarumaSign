@@ -14,6 +14,7 @@ import java.awt.image.BufferedImage;
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
+import java.io.InputStream;
 import java.net.URI;
 import java.net.URISyntaxException;
 import java.util.Arrays;
@@ -75,5 +76,20 @@ public class Utils {
                 // カテゴリ設定
                 "key.categories." + MarumaSign.MOD_ID
         );
+    }
+
+    public static InputStream toPNG(InputStream inputStream) {
+        try {
+            // InputStream を BufferedImage に読み込む
+            final BufferedImage bufferedImage = ImageIO.read(inputStream);
+
+            // BufferedImage を PNG 形式の OutputStream に書き込む
+            final ByteArrayOutputStream pngOutputStream = new ByteArrayOutputStream();
+            ImageIO.write(bufferedImage, "png", pngOutputStream);
+            // PNG 形式の OutputStream から ByteArrayInputStream を作成して return
+            return new ByteArrayInputStream(pngOutputStream.toByteArray());
+        } catch (IOException | IllegalArgumentException e) {
+            return null;
+        }
     }
 }
