@@ -1,11 +1,13 @@
 package marumasa.marumasa_sign.util;
 
 import com.google.common.io.BaseEncoding;
+import marumasa.marumasa_sign.MarumaSign;
 
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
+import java.net.HttpURLConnection;
 import java.net.URL;
 import java.util.ArrayDeque;
 import java.util.Queue;
@@ -34,14 +36,26 @@ public class ImageRequest {
 
     public static byte[] getURLContent(String stringURL) throws IOException {
 
-        String encodeURL = Utils.encodeURL(stringURL);
+        final String encodeURL = Utils.encodeURL(stringURL);
 
         if (encodeURL == null) return null;
 
-        InputStream input = new URL(encodeURL).openStream();
+        // 接続オブジェクトを生成
+        final HttpURLConnection connection = (HttpURLConnection) new URL(encodeURL).openConnection();
 
+        // ヘッダーを設定
+        connection.setRequestMethod("GET");
+        connection.setRequestProperty("User-Agent", "Mozilla/5.0 (MarumaSign)");// ヘッダを設定
+
+
+        // 接続を確立
+        connection.connect();
+
+
+        // InputStreamを取得
+        final InputStream input = connection.getInputStream();
         // ByteArrayOutputStream 書き込み
-        ByteArrayOutputStream output = new ByteArrayOutputStream();
+        final ByteArrayOutputStream output = new ByteArrayOutputStream();
         byte[] buffer = new byte[1024];
         int len;
         while ((len = input.read(buffer)) != -1) {
@@ -50,6 +64,10 @@ public class ImageRequest {
         // InputStreamとByteArrayOutputStreamを閉じる
         input.close();
         output.close();
+
+        // 接続を閉じる
+        connection.disconnect();
+
 
         // byte配列に変換
         return output.toByteArray();
@@ -77,6 +95,8 @@ public class ImageRequest {
 
         } catch (IOException e) {
             ImageRegister.registerError(stringURL);
+            // 原因を表示
+            MarumaSign.LOGGER.error(e.getMessage(), e);
         }
     }
 
