@@ -2,6 +2,7 @@ package marumasa.marumasa_sign.util;
 
 import com.google.common.io.BaseEncoding;
 import marumasa.marumasa_sign.MarumaSign;
+import marumasa.marumasa_sign.client.MarumaSignClient;
 import net.minecraft.util.Identifier;
 
 import java.io.ByteArrayInputStream;
@@ -27,10 +28,36 @@ public class ImageRequest {
         queue.add(stringURL);
     }
 
-    public static void load() {
+    record ImageLoader(String stringURL) implements Runnable {
+        public void run() {
+            getURL(stringURL);
+        }
+    }
+
+    public static void load(int maxThreads) {
         if (queue.size() == 0) return;
-        String stringURL = queue.remove();
-        getURL(stringURL);
+
+        // 読み込みスレッド作成
+        final Thread[] threadList = new Thread[maxThreads];
+        for (int i = 0; i < threadList.length; i++) {
+            String stringURL = queue.remove();
+            threadList[i] = new Thread(new ImageLoader(stringURL));
+        }
+        try {
+
+            // 読み込み開始
+            for (Thread thread : threadList)
+                if (thread != null) thread.start();
+                else break;
+
+            // 読み込み終わるまで待機
+            for (Thread thread : threadList)
+                if (thread != null) thread.join();
+                else break;
+
+        } catch (InterruptedException e) {
+            throw new RuntimeException(e);
+        }
     }
 
     public static byte[] getURLContent(String stringURL) throws IOException {

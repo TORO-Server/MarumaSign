@@ -1,5 +1,6 @@
 package marumasa.marumasa_sign.client;
 
+import marumasa.marumasa_sign.Config;
 import marumasa.marumasa_sign.MarumaSign;
 import marumasa.marumasa_sign.client.sign.CustomSignProvider;
 import marumasa.marumasa_sign.util.GifPlayer;
@@ -52,7 +53,7 @@ public class MarumaSignClient implements ClientModInitializer {
             // 10ms timer
             new Timer().schedule(new loopGifPlayer(), 0, 10);
             // 100ms timer
-            new Timer().schedule(new loopImageRequest(MarumaSign.CONFIG.MaxThreads), 0, 100);
+            new Timer().schedule(new loopImageRequest(MarumaSign.CONFIG), 0, 100);
         }
 
         private static class loopGifPlayer extends TimerTask {
@@ -65,35 +66,16 @@ public class MarumaSignClient implements ClientModInitializer {
 
         private static class loopImageRequest extends TimerTask {
 
-            private final int maxThreads;
+            private final Config config;
 
-            public loopImageRequest(int maxThreads) {
-                this.maxThreads = maxThreads;
-            }
-
-            static class ImageLoader implements Runnable {
-                public void run() {
-                    ImageRequest.load();
-                }
+            public loopImageRequest(Config config) {
+                this.config = config;
             }
 
             @Override
             public void run() {
                 if (client.world == null || client.getBlockRenderManager() == null) return;
-                final Thread[] threadList = new Thread[maxThreads];
-                for (int i = 0; i < threadList.length; i++) {
-                    threadList[i] = new Thread(new ImageLoader());
-                }
-                try {
-
-                    // 読み込み開始
-                    for (Thread thread : threadList) thread.start();
-                    // 読み込み終わるまで待機
-                    for (Thread thread : threadList) thread.join();
-
-                } catch (InterruptedException e) {
-                    throw new RuntimeException(e);
-                }
+                ImageRequest.load(config.MaxThreads);
             }
         }
     }
