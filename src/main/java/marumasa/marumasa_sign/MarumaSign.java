@@ -10,6 +10,8 @@ public class MarumaSign implements ModInitializer {
     // ロガー
     public static final Logger LOGGER = LogUtils.getLogger();
 
+    public static final Config CONFIG = new Config();
+
     @Override
     public void onInitialize() {
         LOGGER.info("Start: " + MOD_ID);
