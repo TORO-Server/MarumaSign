@@ -106,6 +106,8 @@ public class ImageRequest {
     public static void getURL(String stringURL) {
         String path = URLtoPath(stringURL);
 
+        // ログ出力
+        MarumaSign.LOGGER.info("Start: " + stringURL);
 
         try {
             final byte[] content = getURLContent(stringURL);

@@ -20,9 +20,6 @@ public class ImageRegister {
 
     public static void registerGif(InputStream stream, String stringURL, String path) throws IOException {
 
-        // ログ出力
-        MarumaSign.LOGGER.info("Start: " + stringURL);
-
         final NavigableMap<Integer, RenderLayer> frameMap = new TreeMap<>();
         TextureURL firstTextureURL = TextureURL.error;
 
