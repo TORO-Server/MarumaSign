@@ -29,9 +29,8 @@ public class ImageRequest {
 
     public static void load() {
         if (queue.size() == 0) return;
-        String stringURL = queue.peek();
+        String stringURL = queue.remove();
         getURL(stringURL);
-        queue.remove();
     }
 
     public static byte[] getURLContent(String stringURL) throws IOException {
@@ -52,10 +51,8 @@ public class ImageRequest {
             MarumaSign.LOGGER.info(k + ": " + headerNames.get(k));
         }
 
-
         // 接続を確立
         connection.connect();
-
 
         // InputStreamを取得
         final InputStream input = connection.getInputStream();
