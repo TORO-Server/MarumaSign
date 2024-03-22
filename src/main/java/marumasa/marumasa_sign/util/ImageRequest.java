@@ -10,8 +10,7 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.net.HttpURLConnection;
 import java.net.URL;
-import java.util.ArrayDeque;
-import java.util.Queue;
+import java.util.*;
 
 public class ImageRequest {
     private static final Queue<String> queue = new ArrayDeque<>();
@@ -48,6 +47,11 @@ public class ImageRequest {
         connection.setRequestMethod("GET");
         connection.setRequestProperty("User-Agent", "Mozilla/5.0 (MarumaSign)");// ヘッダを設定
 
+        Map<String, List<String>> headerNames = connection.getHeaderFields();
+        for (String k : headerNames.keySet()) {
+            MarumaSign.LOGGER.info(k + ": " + headerNames.get(k));
+        }
+
 
         // 接続を確立
         connection.connect();
@@ -83,6 +87,7 @@ public class ImageRequest {
 
             if (content == null) {
                 ImageRegister.registerError(stringURL);
+                MarumaSign.LOGGER.warn("Failure: " + stringURL);
                 return;
             }
 
@@ -100,11 +105,13 @@ public class ImageRequest {
                 } else {
                     // エラーログ出力
                     ImageRegister.registerError(stringURL);
+                    MarumaSign.LOGGER.warn("is not image: " + stringURL);
                 }
             }
 
         } catch (IOException e) {
             ImageRegister.registerError(stringURL);
+            MarumaSign.LOGGER.warn("Failure: " + stringURL);
             // 原因を表示
             MarumaSign.LOGGER.error(e.getMessage(), e);
         }
