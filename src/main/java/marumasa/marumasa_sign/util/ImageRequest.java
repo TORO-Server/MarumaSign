@@ -35,11 +35,11 @@ public class ImageRequest {
     }
 
     public static void load(int maxThreads) {
-        if (queue.size() == 0) return;
 
         // 読み込みスレッド作成
         final Thread[] threadList = new Thread[maxThreads];
         for (int i = 0; i < threadList.length; i++) {
+            if (queue.size() == 0) break;
             String stringURL = queue.remove();
             threadList[i] = new Thread(new ImageLoader(stringURL));
         }
