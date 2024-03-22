@@ -70,9 +70,10 @@ public class ImageRequest {
         // 接続オブジェクトを生成
         final HttpURLConnection connection = (HttpURLConnection) new URL(encodeURL).openConnection();
 
-        // ヘッダーを設定
         connection.setRequestMethod("GET");
-        connection.setRequestProperty("User-Agent", "Mozilla/5.0 (MarumaSign)");// ヘッダを設定
+        // ヘッダーを設定
+        connection.setRequestProperty("User-Agent", "Mozilla/5.0 (MarumaSign)");
+        connection.setRequestProperty("Accept", "image/png, image/gif, image/jpeg");
 
         Map<String, List<String>> headerNames = connection.getHeaderFields();
         for (String k : headerNames.keySet()) {
