@@ -88,6 +88,5 @@ public class ImageRegister {
 
         TextureURLProvider.failureTextureURL(url);
 
-        MarumaSign.LOGGER.warn("Failure: " + url);
     }
 }
