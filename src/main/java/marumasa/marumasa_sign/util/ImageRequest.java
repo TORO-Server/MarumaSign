@@ -42,6 +42,7 @@ public class ImageRequest {
             if (queue.size() == 0) break;
             String stringURL = queue.remove();
             threadList[i] = new Thread(new ImageLoader(stringURL));
+            threadList[i].setName(String.format("ImageLoader-%d", i));
         }
         try {
 
