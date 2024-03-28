@@ -1,5 +1,7 @@
 {
   "text.maruma_sign.remove_cache": "キャッシュを削除しました",
+  "text.maruma_sign.open_menu": "WebUIを開いています...",
+  "key.marumasa_sign.open_menu": "WebUIを開く",
   "key.marumasa_sign.remove_cache": "キャッシュを削除する",
   "key.categories.marumasa_sign": "MarumaSign"
 }

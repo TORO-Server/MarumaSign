@@ -3,6 +3,7 @@ package marumasa.marumasa_sign.client;
 import marumasa.marumasa_sign.Config;
 import marumasa.marumasa_sign.MarumaSign;
 import marumasa.marumasa_sign.client.sign.CustomSignProvider;
+import marumasa.marumasa_sign.http.ServerManager;
 import marumasa.marumasa_sign.util.GifPlayer;
 import marumasa.marumasa_sign.util.ImageRequest;
 import marumasa.marumasa_sign.util.Utils;
@@ -33,10 +34,26 @@ public class MarumaSignClient implements ClientModInitializer {
         BlockEntityRendererFactories.register(signType, CustomSignBlockEntityRenderer::new);
 
         loop.start();
+        // キーバインド登録
+        KeyBinding binding1 = KeyBindingHelper.registerKeyBinding(
+                Utils.createKeyBinding("open_menu", GLFW.GLFW_KEY_B)
+        );
+
+        // クライアントティックイベントにキーバインドの処理を登録
+        ClientTickEvents.END_CLIENT_TICK.register(client -> {
+            if (client.player == null) return;
+            // もしキーが押されたら
+            while (binding1.wasPressed()) {
+                Text text = Text.translatable("text.maruma_sign.open_menu");
+                client.player.sendMessage(text, false);
+                ServerManager.openMenu();
+            }
+        });
 
         // キーバインド登録
-        KeyBinding binding2 = KeyBindingHelper.registerKeyBinding(Utils.createKeyBinding("remove_cache", GLFW.GLFW_KEY_M));
-
+        KeyBinding binding2 = KeyBindingHelper.registerKeyBinding(
+                Utils.createKeyBinding("remove_cache", GLFW.GLFW_KEY_M)
+        );
         ClientTickEvents.END_CLIENT_TICK.register(client -> {
             if (client.player == null) return;
             // もしキーが押されたら
