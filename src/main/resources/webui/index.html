@@ -1,0 +1,66 @@
+<!DOCTYPE html>
+<html lang="ja">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>MarumaSign-WebUI</title>
+    <link rel="stylesheet" type="text/css" href="style.css">
+    <script src="script.js"></script>
+    <script src="utils.js"></script>
+</head>
+
+<body>
+    <div class="flex">
+        <div class="main">
+            <div class="input">
+                <div class="box">
+                    <label class="upload">
+                        <input type="file" id="upload" name="upload" accept=".png, .jpg, .jpeg, .gif"
+                            onchange="onFile(this)" aria-label="file" />
+                    </label>
+                    <label>
+                        <p class="form">画像アドレス</p><input type="text" id="address" autocomplete="url" aria-label="address">
+                    </label>
+                    <label>
+                        <p class="form">横幅</p><input type="number" id="width" value="1">
+                    </label>
+                    <label>
+                        <p class="form">高さ</p><input type="number" id="height" value="1">
+                    </label>
+                </div>
+                <div class="box">
+                    <label>
+                        <p class="form">X軸位置</p><input type="number" id="x" value="0">
+                    </label>
+                    <label>
+                        <p class="form">Y軸位置</p><input type="number" id="y" value="0">
+                    </label>
+                    <label>
+                        <p class="form">Z軸位置</p><input type="number" id="z" value="0">
+                    </label>
+                </div>
+                <div class="box">
+                    <label>
+                        <p class="form">X軸回転</p><input type="number" id="rx" value="0">
+                    </label>
+                    <label>
+                        <p class="form">Y軸回転</p><input type="number" id="ry" value="0">
+                    </label>
+                    <label>
+                        <p class="form">Z軸回転</p><input type="number" id="rz" value="0">
+                    </label>
+                </div>
+                <div class="run">
+                    <input type="submit" value="giveコマンド実行" onclick="toMC()">
+                </div>
+            </div>
+        </div>
+        <div class="sub">
+            <img id="previewimg" src="" />
+        </div>
+    </div>
+    <script src="preview.js" async defer></script>
+</body>
+
+</html>
