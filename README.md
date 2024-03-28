@@ -35,8 +35,10 @@
 - [Fabric Loader](https://fabricmc.net/use/installer/) 0.15.2 以降
 - [Fabric API](https://www.curseforge.com/minecraft/mc-mods/fabric-api) 0.91.2 以降
 
-## テクスチャ作成者
+## 貢献者
 
-### [Micni43](https://github.com/Micni43)
+- ### [PizzaHarumaki](https://github.com/fhrk-78)
 
-assets/marumasa_sign/textures/misc/error.png
+- ### [Sapporo_salmon](https://github.com/punipuni-3730)
+
+- ### [Micni43](https://github.com/Micni43)
