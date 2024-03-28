@@ -47,4 +47,7 @@ async function onFile(input) {
     const url = await uploadFile(file);
     // 画像アドレスのテキストボックスに画像のURLを入力
     document.getElementById("address").value = url;
+
+    // プレビュー画像を更新する
+    detectChangeURL();
 }
