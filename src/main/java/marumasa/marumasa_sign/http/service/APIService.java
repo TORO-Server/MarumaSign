@@ -25,24 +25,27 @@ public class APIService {
         RequestJson json = gson.fromJson(reqBody, RequestJson.class);
         // 看板に書かれる文字を生成
         String signText = json.signText();
-        // レスポンスボディを設定
-        String resBody = gson.toJson(new ResponseJson(signText));
 
         // レスポンスヘッダを設定
         Headers responseHeaders = exchange.getResponseHeaders();
         responseHeaders.set("Content-Type", "application/json");
 
+
+        // コマンドを実行
+        boolean status = runCommand(signText);
+
+        // レスポンスボディを設定
+        String resBody = gson.toJson(new ResponseJson(signText, true));
         // レスポンスを送信
         exchange.sendResponseHeaders(200, resBody.getBytes(StandardCharsets.UTF_8).length);
         try (OutputStream os = exchange.getResponseBody()) {
             os.write(resBody.getBytes(StandardCharsets.UTF_8));
         }
 
-        // コマンドを生成して実行
-        runCommand(signText);
-
-        // サーバーを閉じる
-        ServerManager.closeMenu();
+        // もし正常にコマンドが実行されたら
+        if (status)
+            // サーバーを閉じる
+            ServerManager.closeMenu();
     }
 
     private static final Gson gson = new Gson();
@@ -67,14 +70,15 @@ public class APIService {
     }
 
     // 看板に書かれる文字から give コマンドを生成して実行する
-    private static void runCommand(String signText) {
+    // 正常にコマンドが実行されたら true が return される
+    private static boolean runCommand(String signText) {
         ClientPlayNetworkHandler net = MinecraftClient.getInstance().getNetworkHandler();
         // null の場合は何もしない
-        if (net == null) return;
+        if (net == null) return false;
         // コマンドを生成
         String command = toCommand(signText);
         // コマンドを実行
-        net.sendCommand(command);
+        return net.sendCommand(command);
     }
 
     private record RequestJson(
@@ -98,6 +102,6 @@ public class APIService {
         }
     }
 
-    private record ResponseJson(String signText) {
+    private record ResponseJson(String signText, boolean status) {
     }
 }

@@ -40,7 +40,7 @@ async function toMC() {
     console.log(resJson);
 
     // もし、成功した場合は このWebUIを閉じる
-    if(resJson.signText) window.close()
+    if(resJson.status) window.close()
 }
 
 // アップロードする画像ファイルが選択されたら
