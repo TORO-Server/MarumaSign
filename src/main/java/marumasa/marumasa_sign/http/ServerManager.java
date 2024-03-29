@@ -14,6 +14,13 @@ public class ServerManager {
         Util.getOperatingSystem().open(String.format("http://localhost:%d%s", engine.port, "/index.html"));
     }
 
+    public static void closeMenu() {
+        if (engine == null) return;
+        // サーバーを閉じる
+        engine.server.stop(0);
+        engine = null;
+    }
+
     private static void build() {
         // ポート番号を設定
         int port = PortManager.generate();

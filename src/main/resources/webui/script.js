@@ -33,10 +33,14 @@ async function toMC() {
         "rz": rz
     }
 
+    // Minecraft に 看板に記述される値を Post で送る
     const resJson = await postJson("./", reqJson);
 
+    // レスポンス Json をコンソールに出力
     console.log(resJson);
 
+    // もし、成功した場合は このWebUIを閉じる
+    if(resJson.signText) window.close()
 }
 
 // アップロードする画像ファイルが選択されたら
