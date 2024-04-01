@@ -2,6 +2,8 @@
 
 看板に画像を表示する Minecraft の Mod です。
 
+https://www.curseforge.com/minecraft/mc-mods/marumasign
+
 解説動画:
 <https://www.youtube.com/watch?v=N-Q-Vtz7m-0>
 
