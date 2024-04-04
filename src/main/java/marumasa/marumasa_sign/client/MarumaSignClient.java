@@ -92,7 +92,7 @@ public class MarumaSignClient implements ClientModInitializer {
             @Override
             public void run() {
                 if (client.world == null || client.getBlockRenderManager() == null) return;
-                ImageRequest.load(config.MaxThreads);
+                ImageRequest.load(config.getMaxThreads());
             }
         }
     }
