@@ -42,14 +42,18 @@ public class ConfigScreen extends Screen {
                 // tooltip設定
                 .tooltip(Tooltip.of(Text.translatable("text.maruma_sign.remove_cache_tooltip")))
                 .build();
-        asyncload_add = ButtonWidget.builder(Text.literal("+"), button -> CONFIG.MaxThreads++)
+        asyncload_add = ButtonWidget.builder(Text.literal("+"), button -> {
+                    // 画像の同時ロード数 を "1" 追加する
+                    CONFIG.addMaxThreads(1);
+                })
                 // レンダリング設定
                 .dimensions(width / 2 - 105, 60, 20, 20)
                 .build();
         asyncload_pull = ButtonWidget.builder(Text.literal("-"), button -> {
                     // 1未満にならないようにチェック
-                    if (CONFIG.MaxThreads > 1) {
-                        CONFIG.MaxThreads--;
+                    if (CONFIG.getMaxThreads() > 1) {
+                        // 画像の同時ロード数 を "-1" 追加する
+                        CONFIG.addMaxThreads(-1);
                     }
                 })
                 // レンダリング設定
@@ -75,6 +79,7 @@ public class ConfigScreen extends Screen {
         // 非同期処理数 ラベルレンダリング
         context.drawCenteredTextWithShadow(textRenderer, Text.translatable("text.maruma_sign.asyncprocessnum"), width / 2 - 155, 65, 0xffffff);
         // 非同期処理数 数字レンダリング
-        context.drawCenteredTextWithShadow(textRenderer, Text.literal(CONFIG.MaxThreads+""), width / 2 - 75, 65, 0xffffff);
+        context.drawCenteredTextWithShadow(textRenderer, Text.literal(CONFIG.getMaxThreads() + ""), width / 2 - 75, 65, 0xffffff);
     }
+
 }
