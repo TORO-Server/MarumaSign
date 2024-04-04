@@ -2,7 +2,6 @@ package marumasa.marumasa_sign.util;
 
 import com.google.common.io.BaseEncoding;
 import marumasa.marumasa_sign.MarumaSign;
-import marumasa.marumasa_sign.client.MarumaSignClient;
 import net.minecraft.util.Identifier;
 
 import java.io.ByteArrayInputStream;
