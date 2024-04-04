@@ -2,7 +2,7 @@ package marumasa.marumasa_sign.client;
 
 import marumasa.marumasa_sign.Config;
 import marumasa.marumasa_sign.MarumaSign;
-import marumasa.marumasa_sign.client.sign.CustomSignProvider;
+import marumasa.marumasa_sign.client.screen.ConfigScreen;
 import marumasa.marumasa_sign.http.ServerManager;
 import marumasa.marumasa_sign.util.GifPlayer;
 import marumasa.marumasa_sign.util.ImageRequest;
@@ -21,12 +21,14 @@ import org.lwjgl.glfw.GLFW;
 import java.util.Timer;
 import java.util.TimerTask;
 
+import static net.minecraft.client.MinecraftClient.getInstance;
+
 public class MarumaSignClient implements ClientModInitializer {
 
     // 看板のブロックエンティティタイプ 取得
     private static final BlockEntityType<SignBlockEntity> signType = BlockEntityType.SIGN;
 
-    private static final MinecraftClient client = MinecraftClient.getInstance();
+    private static final MinecraftClient client = getInstance();
 
     @Override
     public void onInitializeClient() {
@@ -58,9 +60,7 @@ public class MarumaSignClient implements ClientModInitializer {
             if (client.player == null) return;
             // もしキーが押されたら
             while (binding2.wasPressed()) {
-                if (ImageRequest.queueSize() != 0) return;
-                CustomSignProvider.removeCache();
-                client.player.sendMessage(Text.translatable("text.maruma_sign.remove_cache"), false);
+                getInstance().setScreen(new ConfigScreen(getInstance().currentScreen));
             }
         });
     }
