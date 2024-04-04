@@ -3,5 +3,8 @@
   "text.maruma_sign.open_menu": "Open WebUI...",
   "key.marumasa_sign.open_menu": "Open WebUI",
   "key.marumasa_sign.remove_cache": "Delete cache",
-  "key.categories.marumasa_sign": "MarumaSign"
+  "key.categories.marumasa_sign": "MarumaSign",
+  "text.maruma_sign.remove_cache_tooltip": "Delete Image Cache of MarumaSign",
+  "text.maruma_sign.asyncprocessnum": " Simultaneous image loads",
+  "text.maruma_sign.close": "Close"
 }
