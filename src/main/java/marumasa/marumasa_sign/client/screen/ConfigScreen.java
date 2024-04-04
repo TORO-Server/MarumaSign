@@ -59,9 +59,7 @@ public class ConfigScreen extends Screen {
                 // レンダリング設定
                 .dimensions(width / 2 - 45, 60, 20, 20)
                 .build();
-        close_configscreen = ButtonWidget.builder(Text.translatable("text.maruma_sign.close"), button -> {
-                    getInstance().setScreen(parent);
-                })
+        close_configscreen = ButtonWidget.builder(Text.translatable("text.maruma_sign.close"), button -> getInstance().setScreen(parent))
                 // レンダリング設定
                 .dimensions(width / 2 - 105, height - 20, 200, 20)
                 .build();

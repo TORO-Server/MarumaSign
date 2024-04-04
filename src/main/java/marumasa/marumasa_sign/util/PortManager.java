@@ -1,4 +1,4 @@
-package marumasa.maruma_sign_webui.util;
+package marumasa.marumasa_sign.util;
 
 import java.net.InetSocketAddress;
 import java.net.Socket;

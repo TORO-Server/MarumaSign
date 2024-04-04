@@ -1,6 +1,6 @@
 package marumasa.marumasa_sign.http;
 
-import marumasa.maruma_sign_webui.util.PortManager;
+import marumasa.marumasa_sign.util.PortManager;
 import net.minecraft.util.Util;
 
 public class ServerManager {
