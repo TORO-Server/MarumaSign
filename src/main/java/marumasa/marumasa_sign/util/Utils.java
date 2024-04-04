@@ -23,7 +23,7 @@ public class Utils {
 
     private static final MinecraftClient client = MinecraftClient.getInstance();
 
-    public static boolean isGif(byte[] bytes) throws IOException {
+    public static boolean isGif(byte[] bytes) {
         byte[] header = Arrays.copyOf(bytes, 6);
         String s = new String(header);
         return s.equals("GIF89a");
