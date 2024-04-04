@@ -8,6 +8,8 @@ import net.minecraft.client.gui.tooltip.Tooltip;
 import net.minecraft.client.gui.widget.ButtonWidget;
 import net.minecraft.text.Text;
 
+import java.util.Objects;
+
 import static marumasa.marumasa_sign.MarumaSign.CONFIG;
 import static net.minecraft.client.MinecraftClient.getInstance;
 
@@ -34,7 +36,7 @@ public class ConfigScreen extends Screen {
                     // MarumaSignClient.java から丸パクリ
                     if (ImageRequest.queueSize() != 0) return;
                     CustomSignProvider.removeCache();
-                    getInstance().player.sendMessage(Text.translatable("text.maruma_sign.remove_cache"), false);
+                    Objects.requireNonNull(getInstance().player).sendMessage(Text.translatable("text.maruma_sign.remove_cache"), false);
                     getInstance().setScreen(parent);
                 })
                 // レンダリング設定
@@ -77,7 +79,7 @@ public class ConfigScreen extends Screen {
         // 非同期処理数 ラベルレンダリング
         context.drawCenteredTextWithShadow(textRenderer, Text.translatable("text.maruma_sign.asyncprocessnum"), width / 2 - 155, 65, 0xffffff);
         // 非同期処理数 数字レンダリング
-        context.drawCenteredTextWithShadow(textRenderer, Text.literal(CONFIG.getMaxThreads() + ""), width / 2 - 75, 65, 0xffffff);
+        context.drawCenteredTextWithShadow(textRenderer, Text.literal(String.valueOf(CONFIG.getMaxThreads())), width / 2 - 75, 65, 0xffffff);
     }
 
 }
