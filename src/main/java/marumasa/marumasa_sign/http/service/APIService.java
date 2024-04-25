@@ -36,6 +36,9 @@ public class APIService {
         // コマンドを実行
         boolean status = runCommand(signText);
 
+        // キャッシュ
+        MarumaSign._globalSignContent = signText;
+
         // レスポンスボディを設定
         String resBody = gson.toJson(new ResponseJson(signText, true));
         // レスポンスを送信
@@ -48,8 +51,6 @@ public class APIService {
         if (status)
             // サーバーを閉じる
             ServerManager.closeMenu();
-        else
-            MarumaSign._globalSignContent = signText;
     }
 
     private static final Gson gson = new Gson();
