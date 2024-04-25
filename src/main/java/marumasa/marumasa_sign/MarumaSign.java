@@ -12,6 +12,9 @@ public class MarumaSign implements ModInitializer {
 
     public static final Config CONFIG = new Config();
 
+    // 保存された看板の内容
+    public static String _globalSignContent = null;
+
     @Override
     public void onInitialize() {
         LOGGER.info("Start: " + MOD_ID);

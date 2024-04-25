@@ -3,6 +3,8 @@ package marumasa.marumasa_sign.http.service;
 import com.google.gson.Gson;
 import com.sun.net.httpserver.Headers;
 import com.sun.net.httpserver.HttpExchange;
+
+import marumasa.marumasa_sign.MarumaSign;
 import marumasa.marumasa_sign.http.ServerManager;
 import net.minecraft.client.MinecraftClient;
 import net.minecraft.client.network.ClientPlayNetworkHandler;
@@ -46,6 +48,8 @@ public class APIService {
         if (status)
             // サーバーを閉じる
             ServerManager.closeMenu();
+        else
+            MarumaSign._globalSignContent = signText;
     }
 
     private static final Gson gson = new Gson();

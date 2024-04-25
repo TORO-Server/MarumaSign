@@ -1,5 +1,9 @@
 bin/
 
+# Python Virtual Env
+/src/autotyper/dist/
+/src/autotyper/venv/
+
 # User-specific stuff
 .idea/
 
