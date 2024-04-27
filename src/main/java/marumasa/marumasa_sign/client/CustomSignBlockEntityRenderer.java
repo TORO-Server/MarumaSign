@@ -99,16 +99,16 @@ public class CustomSignBlockEntityRenderer extends SignBlockEntityRenderer {
         matrices.push();
         vertexConsumer.vertex(matrix4f,
                 mi_mi.x, mi_mi.y, mi_mi.z + moveZ
-        ).color(255, 255, 255, 255).texture(1, 1).overlay(overlay).light(light).normal(matrix3f, 0.0F, 1.0F, 0.0F).next();
+        ).color(255, 255, 255, 255).texture(1, 1).overlay(overlay).light(light).normal(peek, 0.0F, 1.0F, 0.0F).next();
         vertexConsumer.vertex(matrix4f,
                 mi_pl.x, mi_pl.y, mi_pl.z + moveZ
-        ).color(255, 255, 255, 255).texture(1, 0).overlay(overlay).light(light).normal(matrix3f, 0.0F, 1.0F, 0.0F).next();
+        ).color(255, 255, 255, 255).texture(1, 0).overlay(overlay).light(light).normal(peek, 0.0F, 1.0F, 0.0F).next();
         vertexConsumer.vertex(matrix4f,
                 pl_pl.x, pl_pl.y, pl_pl.z + moveZ
-        ).color(255, 255, 255, 255).texture(0, 0).overlay(overlay).light(light).normal(matrix3f, 0.0F, 1.0F, 0.0F).next();
+        ).color(255, 255, 255, 255).texture(0, 0).overlay(overlay).light(light).normal(peek, 0.0F, 1.0F, 0.0F).next();
         vertexConsumer.vertex(matrix4f,
                 pl_mi.x, pl_mi.y, pl_mi.z + moveZ
-        ).color(255, 255, 255, 255).texture(0, 1).overlay(overlay).light(light).normal(matrix3f, 0.0F, 1.0F, 0.0F).next();
+        ).color(255, 255, 255, 255).texture(0, 1).overlay(overlay).light(light).normal(peek, 0.0F, 1.0F, 0.0F).next();
         matrices.pop();
         // 描画処理 終了
     }
