@@ -19,9 +19,6 @@
       "marumasa.marumasa_sign.MarumaSign"
     ]
   },
-  "mixins": [
-    "marumasa_sign.mixins.json"
-  ],
   "depends": {
     "fabricloader": ">=${loader_version}",
     "fabric": "*",
