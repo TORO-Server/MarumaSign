@@ -14,8 +14,6 @@ import net.minecraft.client.render.VertexConsumerProvider;
 import net.minecraft.client.render.block.entity.BlockEntityRendererFactory;
 import net.minecraft.client.render.block.entity.SignBlockEntityRenderer;
 import net.minecraft.client.util.math.MatrixStack;
-import org.joml.Matrix3f;
-import org.joml.Matrix4f;
 import org.joml.Quaternionf;
 import org.joml.Vector3f;
 
@@ -85,8 +83,6 @@ public class CustomSignBlockEntityRenderer extends SignBlockEntityRenderer {
         matrices.multiply(signRotationY);
 
         final MatrixStack.Entry peek = matrices.peek();
-        final Matrix4f matrix4f = peek.getPositionMatrix();
-        final Matrix3f matrix3f = peek.getNormalMatrix();
 
         final CustomSign.Vertex ver = customSign.vertex;
 
@@ -97,16 +93,16 @@ public class CustomSignBlockEntityRenderer extends SignBlockEntityRenderer {
 
         // 描画処理 開始
         matrices.push();
-        vertexConsumer.vertex(matrix4f,
+        vertexConsumer.vertex(peek,
                 mi_mi.x, mi_mi.y, mi_mi.z + moveZ
         ).color(255, 255, 255, 255).texture(1, 1).overlay(overlay).light(light).normal(peek, 0.0F, 1.0F, 0.0F).next();
-        vertexConsumer.vertex(matrix4f,
+        vertexConsumer.vertex(peek,
                 mi_pl.x, mi_pl.y, mi_pl.z + moveZ
         ).color(255, 255, 255, 255).texture(1, 0).overlay(overlay).light(light).normal(peek, 0.0F, 1.0F, 0.0F).next();
-        vertexConsumer.vertex(matrix4f,
+        vertexConsumer.vertex(peek,
                 pl_pl.x, pl_pl.y, pl_pl.z + moveZ
         ).color(255, 255, 255, 255).texture(0, 0).overlay(overlay).light(light).normal(peek, 0.0F, 1.0F, 0.0F).next();
-        vertexConsumer.vertex(matrix4f,
+        vertexConsumer.vertex(peek,
                 pl_mi.x, pl_mi.y, pl_mi.z + moveZ
         ).color(255, 255, 255, 255).texture(0, 1).overlay(overlay).light(light).normal(peek, 0.0F, 1.0F, 0.0F).next();
         matrices.pop();
