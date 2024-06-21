@@ -37,7 +37,7 @@ public class ImageRegister {
             delay += gifImage.getDelay(i);
 
 
-            Identifier identifier = new Identifier(MarumaSign.MOD_ID, path + "/" + i);
+            Identifier identifier = Identifier.tryParse(MarumaSign.MOD_ID, path + "/" + i);
             if (i == 0) {
                 firstTextureURL = new TextureURL(identifier, width, height);
             }
