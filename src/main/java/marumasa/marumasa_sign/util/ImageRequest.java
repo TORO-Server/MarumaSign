@@ -124,7 +124,7 @@ public class ImageRequest {
                 ImageRegister.registerGif(stream, stringURL, path);
             } else {
 
-                final Identifier identifier = new Identifier(MarumaSign.MOD_ID, path);
+                final Identifier identifier = Identifier.tryParse(MarumaSign.MOD_ID, path);
 
                 if (ImageRegister.registerDefault(stream, stringURL, identifier)) {
                     // ログ出力
