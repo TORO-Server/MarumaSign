@@ -9,19 +9,6 @@ function get(url) {
     });
 }
 
-// Post リクエスト (formData)
-// json を return する
-function post(url, formData) {
-    return new Promise((resolve) => {
-        fetch(url, {
-            method: "POST",
-            body: formData
-        })
-            .then((res) => res.json())
-            .then((json) => resolve(json))
-            .catch(() => resolve(undefined));
-    });
-}
 // Post リクエスト (Json)
 // json を return する
 function postJson(url, data) {
@@ -74,11 +61,18 @@ async function getShortURL(url) {
 
 // ファイルをアップロードする関数
 async function uploadFile(file) {
-    const url = "https://hm-nrm.h3z.jp/uploader/work.php"; // アップロード先のURL
-    const formData = new FormData();
-    formData.append("files", file);
-    const json = await post(url, formData);
-    if (json == undefined) return "アップロードに失敗しました"
-    else if (json.files[0].error != undefined) return json.files[0].error;
-    return json.files[0].url;
+    const url = "./upload"; // アップロード先のURL
+    const json = { file: await toBase64(file), name: file.name };
+    const resJson = await postJson(url, json);
+    if (resJson == undefined || !resJson.status) return "アップロードに失敗しました"
+    return resJson.result;
+}
+
+// base64 変換
+function toBase64(file) {
+    const reader = new FileReader();
+    return new Promise((resolve) => {
+        reader.onload = (e) => resolve(e.target.result);
+        reader.readAsDataURL(file);
+    });
 }

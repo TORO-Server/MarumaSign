@@ -11,13 +11,15 @@ import net.minecraft.util.Identifier;
 
 import javax.imageio.ImageIO;
 import java.awt.image.BufferedImage;
-import java.io.ByteArrayInputStream;
-import java.io.ByteArrayOutputStream;
-import java.io.IOException;
-import java.io.InputStream;
+import java.io.*;
+import java.net.HttpURLConnection;
 import java.net.URI;
 import java.net.URISyntaxException;
+import java.net.URL;
+import java.nio.charset.StandardCharsets;
+import java.text.MessageFormat;
 import java.util.Arrays;
+import java.util.Base64;
 
 public class Utils {
 
@@ -90,6 +92,61 @@ public class Utils {
             return new ByteArrayInputStream(pngOutputStream.toByteArray());
         } catch (IOException | IllegalArgumentException e) {
             return null;
+        }
+    }
+
+    private static final Base64.Decoder decoder = Base64.getDecoder();
+
+    public static byte[] Base64Decoder(String base64) {
+        return decoder.decode(base64);
+    }
+
+    public static String UploadFile(String url, byte[] fileBytes, String filename) throws IOException {
+
+        // POSTリクエストのボディを作成する
+        String boundary = Long.toHexString(System.currentTimeMillis()); // ランダムなバウンダリーを生成
+        String CRLF = "\r\n"; // 改行
+
+        HttpURLConnection conn = (HttpURLConnection) new URL(url).openConnection();
+        conn.setDoOutput(true);
+        conn.setRequestMethod("POST");
+        conn.setRequestProperty("Content-Type", "multipart/form-data; boundary=" + boundary);
+
+        try (
+                OutputStream output = conn.getOutputStream();
+                PrintWriter writer = new PrintWriter(new OutputStreamWriter(output, StandardCharsets.UTF_8), true);
+        ) {
+            // ファイルデータの書き込み
+            writer.append("--").append(boundary).append(CRLF);
+            writer.append("Content-Disposition: form-data; name=\"reqtype\"").append(CRLF);
+            writer.append(CRLF).append("fileupload").append(CRLF);
+
+            writer.append("--").append(boundary).append(CRLF);
+            writer.append("Content-Disposition: form-data; name=\"fileToUpload\"; filename=\"").append(filename).append("\"").append(CRLF);
+            writer.append("Content-Type: image/png").append(CRLF);
+            writer.append(CRLF).flush();
+
+            output.write(fileBytes);
+            output.flush();
+
+            writer.append(CRLF);
+            writer.append("--").append(boundary).append("--").append(CRLF);
+        }
+
+        // レスポンスの取得
+        int responseCode = conn.getResponseCode();
+        MarumaSign.LOGGER.info("Response Code: %d".formatted(responseCode));
+
+        try (
+                BufferedReader in = new BufferedReader(new InputStreamReader(conn.getInputStream()));
+        ) {
+            String inputLine;
+            StringBuilder response = new StringBuilder();
+            while ((inputLine = in.readLine()) != null) {
+                response.append(inputLine);
+            }
+            MarumaSign.LOGGER.info("Response Body: %s".formatted(response));
+            return response.toString();
         }
     }
 }
