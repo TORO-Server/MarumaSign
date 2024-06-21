@@ -100,10 +100,10 @@ public class APIService {
 
         List<String> frontTexts = Stream.concat(texts.stream(), Stream.generate(() -> "'[\"\"]'")).limit(4).collect(Collectors.toList());
         if (texts.size() <= 4) {
-            return "give @p minecraft:oak_sign{BlockEntityTag:{front_text:{messages:[" + String.join(",", frontTexts) + "]}}}";
+            return "give @p oak_sign[block_entity_data={id:oak_sign,front_text:{messages:[" + String.join(",", frontTexts) + "]}}]";
         } else {
-            List<String> backTexts = Stream.concat(texts.stream(), Stream.generate(() -> "'[\"\"]'")).skip(4).limit(8).collect(Collectors.toList());
-            return "give @p minecraft:oak_sign{BlockEntityTag:{front_text:{messages:[" + String.join(",", frontTexts) + "]},back_text:{messages:[" + String.join(",", backTexts) + "]}}}";
+            List<String> backTexts = Stream.concat(texts.stream(), Stream.generate(() -> "'[\"\"]'")).skip(4).limit(4).collect(Collectors.toList());
+            return "give @p oak_sign[block_entity_data={id:oak_sign,front_text:{messages:[" + String.join(",", frontTexts) + "]},back_text:{messages:[" + String.join(",", backTexts) + "]}}]";
         }
     }
 
