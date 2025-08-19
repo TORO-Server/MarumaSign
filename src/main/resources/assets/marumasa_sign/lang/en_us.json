@@ -6,5 +6,6 @@
   "key.categories.marumasa_sign": "MarumaSign",
   "text.maruma_sign.remove_cache_tooltip": "Delete Image Cache of MarumaSign",
   "text.maruma_sign.asyncprocessnum": " Simultaneous image loads",
-  "text.maruma_sign.close": "Close"
+  "text.maruma_sign.close": "Close",
+  "text.maruma_sign.write_mode": "Signboard writing mode has been entered"
 }
