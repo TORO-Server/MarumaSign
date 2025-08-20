@@ -62,45 +62,53 @@ public class ImageRequest {
 
     public static byte[] getURLContent(String stringURL) throws IOException {
 
-        final String encodeURL = Utils.encodeURL(stringURL);
+        // ダウンロードサイズの上限を100MBに設定 (100 * 1024 * 1024 bytes)
+        final long MAX_SIZE = 1024 * 1024 * 100;
 
+        final String encodeURL = Utils.encodeURL(stringURL);
         if (encodeURL == null) return null;
 
-        // 接続オブジェクトを生成
-        final HttpURLConnection connection = (HttpURLConnection) new URL(encodeURL).openConnection();
+        HttpURLConnection connection = null;
+        try {
+            // 接続オブジェクトを生成
+            connection = (HttpURLConnection) new URL(encodeURL).openConnection();
+            connection.setRequestMethod("GET");
+            // ヘッダーを設定
+            connection.setRequestProperty("User-Agent", "Mozilla/5.0 (MarumaSign)");
+            connection.setRequestProperty("Accept", "image/png, image/gif, image/jpeg");
 
-        connection.setRequestMethod("GET");
-        // ヘッダーを設定
-        connection.setRequestProperty("User-Agent", "Mozilla/5.0 (MarumaSign)");
-        connection.setRequestProperty("Accept", "image/png, image/gif, image/jpeg");
+            // 接続を確立
+            connection.connect();
 
-        Map<String, List<String>> headerNames = connection.getHeaderFields();
-        for (String k : headerNames.keySet()) {
-            MarumaSign.LOGGER.info(k + ": " + headerNames.get(k));
+            final long contentLength = connection.getContentLengthLong();
+            if (contentLength > MAX_SIZE) {
+                throw new IOException("Content size (" + contentLength + " bytes) exceeds the limit of " + MAX_SIZE + " bytes.");
+            }
+
+            try (InputStream input = connection.getInputStream();
+                 ByteArrayOutputStream output = new ByteArrayOutputStream()) {
+
+                byte[] buffer = new byte[8192];
+                int len;
+                long downloadedBytes = 0;
+
+                while ((len = input.read(buffer)) != -1) {
+                    downloadedBytes += len;
+                    if (downloadedBytes > MAX_SIZE) {
+                        throw new IOException("Content size exceeds the limit during download.");
+                    }
+                    output.write(buffer, 0, len);
+                }
+                // byte配列に変換して返す
+                return output.toByteArray();
+            }
+
+        } finally {
+            // 接続を閉じる
+            if (connection != null) {
+                connection.disconnect();
+            }
         }
-
-        // 接続を確立
-        connection.connect();
-
-        // InputStreamを取得
-        final InputStream input = connection.getInputStream();
-        // ByteArrayOutputStream 書き込み
-        final ByteArrayOutputStream output = new ByteArrayOutputStream();
-        byte[] buffer = new byte[1024];
-        int len;
-        while ((len = input.read(buffer)) != -1) {
-            output.write(buffer, 0, len);
-        }
-        // InputStreamとByteArrayOutputStreamを閉じる
-        input.close();
-        output.close();
-
-        // 接続を閉じる
-        connection.disconnect();
-
-
-        // byte配列に変換
-        return output.toByteArray();
     }
 
     public static void getURL(String stringURL) {
