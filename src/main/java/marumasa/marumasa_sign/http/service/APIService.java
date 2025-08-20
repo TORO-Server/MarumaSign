@@ -19,7 +19,7 @@ public class APIService {
         String path = exchange.getRequestURI().toString();
         switch (path) {
             case "/upload" -> Upload(exchange);
-            case "/give" -> Give(exchange);
+            case "/write" -> Write(exchange);
         }
     }
 
@@ -50,12 +50,12 @@ public class APIService {
         }
     }
 
-    public static void Give(HttpExchange exchange) throws IOException {
+    public static void Write(HttpExchange exchange) throws IOException {
 
         // リクエストボディ取得
         String reqBody = new String(exchange.getRequestBody().readAllBytes());
         // リクエストボディに書かれている json を解析
-        GiveJson json = gson.fromJson(reqBody, GiveJson.class);
+        WriteJson json = gson.fromJson(reqBody, WriteJson.class);
         // 看板に書かれる文字を生成
         String signText = json.signText();
 
@@ -86,7 +86,7 @@ public class APIService {
     ) {
     }
 
-    private record GiveJson(
+    private record WriteJson(
             String address,
             float width, float height,
             float x, float y, float z,
