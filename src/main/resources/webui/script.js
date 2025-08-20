@@ -34,7 +34,7 @@ async function toMC() {
     }
 
     // Minecraft に 看板に記述される値を Post で送る
-    const resJson = await postJson("./give", reqJson);
+    const resJson = await postJson("./write", reqJson);
 
     // レスポンス Json をコンソールに出力
     console.log(resJson);

@@ -3,6 +3,7 @@ package marumasa.marumasa_sign.client;
 import marumasa.marumasa_sign.Config;
 import marumasa.marumasa_sign.MarumaSign;
 import marumasa.marumasa_sign.client.screen.ConfigScreen;
+import marumasa.marumasa_sign.client.sign.SignWriteManager;
 import marumasa.marumasa_sign.http.ServerManager;
 import marumasa.marumasa_sign.util.GifPlayer;
 import marumasa.marumasa_sign.util.ImageRequest;
@@ -36,8 +37,10 @@ public class MarumaSignClient implements ClientModInitializer {
         BlockEntityRendererFactories.register(signType, CustomSignBlockEntityRenderer::new);
 
         loop.start();
+        SignWriteManager.init();
+
         // キーバインド登録
-        KeyBinding binding1 = KeyBindingHelper.registerKeyBinding(
+        KeyBinding open_menu = KeyBindingHelper.registerKeyBinding(
                 Utils.createKeyBinding("open_menu", GLFW.GLFW_KEY_B)
         );
 
@@ -45,7 +48,7 @@ public class MarumaSignClient implements ClientModInitializer {
         ClientTickEvents.END_CLIENT_TICK.register(client -> {
             if (client.player == null) return;
             // もしキーが押されたら
-            while (binding1.wasPressed()) {
+            while (open_menu.wasPressed()) {
                 Text text = Text.translatable("text.maruma_sign.open_menu");
                 client.player.sendMessage(text, false);
                 ServerManager.openMenu();
