@@ -69,7 +69,7 @@ public class SignWriteManager {
                 // 看板を更新する
                 UpdateSignC2SPacket packet = new UpdateSignC2SPacket(
                         signBlockEntity.getPos(),
-                        true,
+                        signBlockEntity.isPlayerFacingFront(client.player),
                         signLines[0],
                         signLines[1],
                         signLines[2],
