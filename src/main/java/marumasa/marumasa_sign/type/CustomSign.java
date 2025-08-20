@@ -83,7 +83,7 @@ public class CustomSign {
         return new CustomSign(textureURL, parameters);
     }
 
-    private record CustomSignParameters(
+    public record CustomSignParameters(
             // 画像のURL
             TextureURL textureURL,
             // 位置
