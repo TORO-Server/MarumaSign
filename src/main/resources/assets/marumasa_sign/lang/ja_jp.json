@@ -7,5 +7,5 @@
   "text.maruma_sign.remove_cache_tooltip": "MarumaSignの画像キャッシュをすべて削除します",
   "text.maruma_sign.asyncprocessnum": "画像の同時ロード数",
   "text.maruma_sign.close": "閉じる",
-  "text.maruma_sign.write_mode": "看板書き込みモードになりました"
+  "text.maruma_sign.write_mode": "看板書き込みモードになりました。看板を設置してください。"
 }
