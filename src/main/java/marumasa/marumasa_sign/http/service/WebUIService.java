@@ -15,14 +15,22 @@ public class WebUIService {
 
     // アクセスできるファイルのパス一覧
     private static final String[] allowPaths = {
-            "/index.html", "/style.css", "/script.js", "/utils.js", "/preview.js", "/favicon.ico"
+            "/index.html",
+            "/style.css",
+            "/script.js",
+            "/utils.js",
+            "/preview.js",
+            "/favicon.ico",
+            "/bootstrap.min.css",
+            "/sanitize.css",
+            "/sans.css"
     };
 
     public static void Handle(HttpExchange exchange) throws IOException {
 
         String path = exchange.getRequestURI().toString();
 
-        MarumaSign.LOGGER.info(String.format("Requested: %s", path));
+        MarumaSign.LOGGER.info("Requested: {}", path);
 
         // リクエストされたパスをリソースディレクトリ内のファイルの場所に変換
         String resource_path = toResourcePath(path);
