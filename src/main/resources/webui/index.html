@@ -4,63 +4,92 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta http-equiv="X-UA-Compatible" content="IE=edge">
     <title>MarumaSign-WebUI</title>
-    <link rel="stylesheet" type="text/css" href="style.css">
     <script src="script.js"></script>
+    <script src="preview.js"></script>
     <script src="utils.js"></script>
+    <link rel="stylesheet" href="bootstrap.min.css">
+    <link rel="stylesheet" href="sanitize.css">
+    <link rel="stylesheet" href="style.css">
 </head>
 
 <body>
-    <div class="flex">
-        <div class="main">
-            <div class="input">
-                <div class="box">
-                    <label class="upload">
-                        <input type="file" id="upload" name="upload" accept=".png, .jpg, .jpeg, .gif"
-                            onchange="onFile(this)" aria-label="file" />
-                    </label>
-                    <label>
-                        <p class="form">画像アドレス</p><input type="text" id="address" autocomplete="url" aria-label="address">
-                    </label>
-                    <label>
-                        <p class="form">横幅</p><input type="number" id="width" value="1">
-                    </label>
-                    <label>
-                        <p class="form">高さ</p><input type="number" id="height" value="1">
+    <div class="container mt-5">
+        <div class="col text-start">
+            <h1 class="mb-4">MarumaSign-WebUI</h1>
+        </div>
+        <!-- 画像アップロード + プレビュー画像 -->
+        <div class="row mb-4">
+            <!-- 左カラム: 画像アップロード, 横幅, 高さ -->
+            <div class="col-md-6">
+                <div class="mb-3 text-start">
+                    <label for="upload" class="form-label">画像アップロード</label>
+                    <input type="file" class="form-control" id="upload" name="upload" accept=".png,.jpg,.jpeg,.gif"
+                        onchange="onFile(this)">
                     </label>
                 </div>
-                <div class="box">
-                    <label>
-                        <p class="form">X軸位置</p><input type="number" id="x" value="0">
-                    </label>
-                    <label>
-                        <p class="form">Y軸位置</p><input type="number" id="y" value="0">
-                    </label>
-                    <label>
-                        <p class="form">Z軸位置</p><input type="number" id="z" value="0">
+                <div class="mb-3 text-start">
+                    <input type="text" class="form-control" id="address" autocomplete="url" aria-label="address"
+                        onchange="detectChangeURL()">
                     </label>
                 </div>
-                <div class="box">
-                    <label>
-                        <p class="form">X軸回転</p><input type="number" id="rx" value="0">
-                    </label>
-                    <label>
-                        <p class="form">Y軸回転</p><input type="number" id="ry" value="0">
-                    </label>
-                    <label>
-                        <p class="form">Z軸回転</p><input type="number" id="rz" value="0">
-                    </label>
+                <div class=" mb-3 text-start">
+                    <label for="width" class="form-label">横幅</label>
+                    <input type="number" class="form-control" id="width" value="1">
                 </div>
-                <div class="run">
-                    <input type="submit" value="決定" onclick="toMC()">
+                <div class="mb-3 text-start">
+                    <label for="height" class="form-label">高さ</label>
+                    <input type="number" class="form-control" id="height" value="1">
+                </div>
+            </div>
+
+            <!-- 右カラム: プレビュー画像 -->
+            <div class="col-md-6 d-flex">
+                <div class="w-100 border rounded bg-white d-flex justify-content-center align-items-center p-2">
+                    <img id="previewimg" src="" class="img-fluid" alt="プレビュー画像"
+                        style="max-height: 100%; object-fit: contain;">
                 </div>
             </div>
         </div>
-        <div class="sub">
-            <img id="previewimg" src="" />
+
+        <!-- X/Y/Z 位置 -->
+        <div class="row mb-3">
+            <div class="col text-start">
+                <label for="x" class="form-label">X軸位置</label>
+                <input type="number" class="form-control" id="x" value="0">
+            </div>
+            <div class="col text-start">
+                <label for="y" class="form-label">Y軸位置</label>
+                <input type="number" class="form-control" id="y" value="0">
+            </div>
+            <div class="col text-start">
+                <label for="z" class="form-label">Z軸位置</label>
+                <input type="number" class="form-control" id="z" value="0">
+            </div>
+        </div>
+
+        <!-- X/Y/Z 回転 -->
+        <div class="row mb-4">
+            <div class="col text-start">
+                <label for="rx" class="form-label">X軸回転</label>
+                <input type="number" class="form-control" id="rx" value="0">
+            </div>
+            <div class="col text-start">
+                <label for="ry" class="form-label">Y軸回転</label>
+                <input type="number" class="form-control" id="ry" value="0">
+            </div>
+            <div class="col text-start">
+                <label for="rz" class="form-label">Z軸回転</label>
+                <input type="number" class="form-control" id="rz" value="0">
+            </div>
+        </div>
+
+        <!-- 決定ボタン -->
+        <div class="text-center">
+            <button type="button" class="btn btn-primary btn-lg" onclick="toMC()">決定</button>
         </div>
     </div>
-    <script src="preview.js" async defer></script>
 </body>
 
 </html>
