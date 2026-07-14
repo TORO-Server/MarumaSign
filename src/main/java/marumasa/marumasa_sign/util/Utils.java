@@ -89,13 +89,7 @@ public class Utils {
         for (int y = 0; y < height; y++) {
             for (int x = 0; x < width; x++) {
                 int argb = pixels[x + y * width];
-                int a = (argb >>> 24) & 0xFF;
-                int r = (argb >>> 16) & 0xFF;
-                int g = (argb >>> 8) & 0xFF;
-                int b = argb & 0xFF;
-                int abgr = (a << 24) | (b << 16) | (g << 8) | r;
-
-                image.setPixel(x, y, abgr);
+                image.setPixel(x, y, argb);
             }
         }
         registerTexture(id, image);

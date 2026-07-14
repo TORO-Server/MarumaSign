@@ -148,8 +148,13 @@ public final class GifDecoder {
             final int[][] tbl = codes.table;
             int outPos = 0;
             codes.clear();
-            bits.read();
-            int code = bits.read();
+            int firstCode = bits.read();
+            int code;
+            if (firstCode == clearCode) {
+                code = bits.read();
+            } else {
+                code = firstCode;
+            }
             int[] pixels = tbl[code];
             arraycopy(pixels, 0, out, outPos, pixels.length);
             outPos += pixels.length;
@@ -183,6 +188,8 @@ public final class GifDecoder {
                     codes.add(prevValsAndK);
                 }
             } catch (final ArrayIndexOutOfBoundsException ignored) {
+                System.out.println("DEBUG: ArrayIndexOutOfBoundsException in decode!");
+                ignored.printStackTrace();
             }
             return out;
         }
