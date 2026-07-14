@@ -2,12 +2,12 @@ package marumasa.marumasa_sign.client.sign;
 
 import marumasa.marumasa_sign.mixin.SignEditScreenAccessor;
 import net.fabricmc.fabric.api.client.screen.v1.ScreenEvents;
-import net.minecraft.block.entity.SignBlockEntity;
-import net.minecraft.client.MinecraftClient;
-import net.minecraft.client.gui.screen.ingame.SignEditScreen;
-import net.minecraft.network.packet.c2s.play.UpdateSignC2SPacket;
-import net.minecraft.text.Text;
-import net.minecraft.util.Colors;
+import net.minecraft.world.level.block.entity.SignBlockEntity;
+import net.minecraft.client.Minecraft;
+import net.minecraft.client.gui.screens.inventory.SignEditScreen;
+import net.minecraft.network.protocol.game.ServerboundSignUpdatePacket;
+import net.minecraft.network.chat.Component;
+import net.minecraft.ChatFormatting;
 
 import java.util.Arrays;
 import java.util.Objects;
@@ -16,11 +16,11 @@ public class SignWriteManager {
     private static String requestText;
 
     public static void request(String signText) {
-        MinecraftClient client = MinecraftClient.getInstance();
+        Minecraft client = Minecraft.getInstance();
         if (client.player == null) return;
 
-        Text text = Text.translatable("text.maruma_sign.write_mode").withColor(Colors.YELLOW);
-        client.player.sendMessage(text, false);
+        Component text = Component.translatable("text.maruma_sign.write_mode").withStyle(ChatFormatting.YELLOW);
+        client.player.sendSystemMessage(text);
         requestText = signText;
     }
 
@@ -40,12 +40,16 @@ public class SignWriteManager {
         int startIndex = 0;
         for (int i = 0; i < 4; i++) {
             int partSize = basePartSize + (i < remainder ? 1 : 0);
-
+ 
             if (startIndex >= len) {
                 result[i] = "";
             } else {
                 int endIndex = startIndex + partSize;
-                result[i] = text.substring(startIndex, endIndex);
+                String part = text.substring(startIndex, endIndex);
+                if (part.length() > 100) {
+                    part = part.substring(0, 100);
+                }
+                result[i] = part;
                 startIndex = endIndex;
             }
         }
@@ -54,30 +58,36 @@ public class SignWriteManager {
     }
 
     public static void init() {
-
+ 
         ScreenEvents.AFTER_INIT.register((client, screen, scaledWidth, scaledHeight) -> {
             if (requestText == null) return;
             // 開かれたスクリーンが看板の編集のGUIなら
             if (screen instanceof SignEditScreen signEditScreen) {
-
+ 
                 SignEditScreenAccessor accessor = (SignEditScreenAccessor) signEditScreen;
-
+ 
                 SignBlockEntity signBlockEntity = accessor.getBlockEntity();
-
+                if (signBlockEntity == null) return;
+ 
                 String[] signLines = splitStringEvenly(requestText);
-
+ 
                 // 看板を更新する
-                UpdateSignC2SPacket packet = new UpdateSignC2SPacket(
-                        signBlockEntity.getPos(),
-                        signBlockEntity.isPlayerFacingFront(client.player),
+                ServerboundSignUpdatePacket packet = new ServerboundSignUpdatePacket(
+                        signBlockEntity.getBlockPos(),
+                        signBlockEntity.isFacingFrontText(client.player),
                         signLines[0],
                         signLines[1],
                         signLines[2],
                         signLines[3]
                 );
-                Objects.requireNonNull(client.getNetworkHandler()).sendPacket(packet);
+                net.minecraft.client.multiplayer.ClientPacketListener connection = client.getConnection();
+                if (connection != null) {
+                    connection.send(packet);
+                } else {
+                    marumasa.marumasa_sign.MarumaSign.LOGGER.warn("Cannot send SignUpdatePacket: connection is null");
+                }
                 requestText = null;
-                signEditScreen.close();
+                signEditScreen.onClose();
             }
         });
     }

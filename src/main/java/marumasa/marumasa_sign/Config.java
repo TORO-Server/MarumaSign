@@ -19,16 +19,18 @@ public class Config {
 
     // 画像の同時ロード数 設定
     public void setMaxThreads(int value) {
+        if (value < 1) value = 1;
+        if (value > 32) value = 32;
         MaxThreads = value;
         serialize();
     }
-
+ 
     // 画像の同時ロード数 追加
     public void addMaxThreads(int value) {
         final int tmp = getMaxThreads() + value;
         setMaxThreads(tmp);
     }
-
+ 
     // 画像の同時ロード数 取得
     public int getMaxThreads() {
         return MaxThreads;
@@ -44,29 +46,38 @@ public class Config {
     }
 
     private void deserialize() {
-        final JsonModel model = loadJSON();
-        MaxThreads = model.MaxThreads();
-    }
-
-    private void serialize() {
-        saveJSON(new JsonModel(getMaxThreads()));
-    }
-
-    private static final Gson gson = new Gson();
-
-    private static JsonModel loadJSON() {
-        try (final BufferedReader reader = Files.newBufferedReader(Config.path)) {
-            return gson.fromJson(reader, JsonModel.class);
-        } catch (IOException e) {
-            throw new RuntimeException(e);
+        try {
+            final JsonModel model = loadJSON();
+            if (model != null) {
+                int threads = model.MaxThreads();
+                if (threads < 1) threads = 1;
+                if (threads > 32) threads = 32;
+                MaxThreads = threads;
+            }
+        } catch (Exception e) {
+            marumasa.marumasa_sign.MarumaSign.LOGGER.error("Failed to deserialize config", e);
         }
     }
-
-    private static void saveJSON(JsonModel model) {
+ 
+    private void serialize() {
+        try {
+            saveJSON(new JsonModel(getMaxThreads()));
+        } catch (Exception e) {
+            marumasa.marumasa_sign.MarumaSign.LOGGER.error("Failed to serialize config", e);
+        }
+    }
+ 
+    private static final Gson gson = new Gson();
+ 
+    private static JsonModel loadJSON() throws IOException {
+        try (final BufferedReader reader = Files.newBufferedReader(Config.path)) {
+            return gson.fromJson(reader, JsonModel.class);
+        }
+    }
+ 
+    private static void saveJSON(JsonModel model) throws IOException {
         try (final BufferedWriter writer = Files.newBufferedWriter(Config.path)) {
             gson.toJson(model, model.getClass(), writer);
-        } catch (IOException e) {
-            throw new RuntimeException(e);
         }
     }
 
