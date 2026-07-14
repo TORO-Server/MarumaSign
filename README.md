@@ -33,9 +33,9 @@ https://www.curseforge.com/minecraft/mc-mods/marumasign
 
 ## 前提環境
 
-- Minecraft **1.21.1**
-- [Fabric Loader](https://fabricmc.net/use/installer/) 0.16.5 以降
-- [Fabric API](https://www.curseforge.com/minecraft/mc-mods/fabric-api) 0.103.0 以降
+- Minecraft **26.2**
+- [Fabric Loader](https://fabricmc.net/use/installer/) 0.19.3 以降
+- [Fabric API](https://www.curseforge.com/minecraft/mc-mods/fabric-api) 0.154.2 以降
 
 ## 貢献者
 
