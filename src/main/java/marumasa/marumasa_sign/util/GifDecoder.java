@@ -87,6 +87,9 @@ public final class GifDecoder {
             initCodeLimit = (1 << initCodeSize) - 1;
             initTableSize = fr.endOfInfoCode + 1;
             nextCode = initTableSize;
+            for (int c = 0; c < fr.clearCode; c++) {
+                table[c][0] = 0;
+            }
             for (int c = numColors - 1; c >= 0; c--) {
                 table[c][0] = activeColTbl[c];
             }
