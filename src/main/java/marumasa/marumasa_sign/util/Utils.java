@@ -1,13 +1,14 @@
 package marumasa.marumasa_sign.util;
 
 import marumasa.marumasa_sign.MarumaSign;
-import net.minecraft.client.MinecraftClient;
-import net.minecraft.client.option.KeyBinding;
-import net.minecraft.client.render.RenderLayer;
-import net.minecraft.client.texture.NativeImage;
-import net.minecraft.client.texture.NativeImageBackedTexture;
-import net.minecraft.client.util.InputUtil;
-import net.minecraft.util.Identifier;
+import net.minecraft.client.Minecraft;
+import net.minecraft.client.KeyMapping;
+import net.minecraft.client.renderer.rendertype.RenderType;
+import net.minecraft.client.renderer.rendertype.RenderTypes;
+import com.mojang.blaze3d.platform.NativeImage;
+import net.minecraft.client.renderer.texture.DynamicTexture;
+import com.mojang.blaze3d.platform.InputConstants;
+import net.minecraft.resources.Identifier;
 
 import javax.imageio.ImageIO;
 import java.awt.image.BufferedImage;
@@ -22,7 +23,7 @@ import java.util.Base64;
 
 public class Utils {
 
-    private static final MinecraftClient client = MinecraftClient.getInstance();
+    private static final Minecraft client = Minecraft.getInstance();
 
     public static boolean isGif(byte[] bytes) {
         byte[] header = Arrays.copyOf(bytes, 6);
@@ -30,9 +31,8 @@ public class Utils {
         return s.equals("GIF89a");
     }
 
-    public static RenderLayer getRenderLayer(Identifier identifier) {
-        // getEntityTranslucent で 透過と半透明と裏面表示 対応の RenderLayer 生成
-        return RenderLayer.getEntityTranslucent(identifier);
+    public static RenderType getRenderLayer(Identifier identifier) {
+        return RenderTypes.entityTranslucent(identifier);
     }
 
     public static String encodeURL(String url) {
@@ -55,27 +55,29 @@ public class Utils {
         registerTexture(id, NativeImage.read(new ByteArrayInputStream(bytes)));
     }
 
+    public static final KeyMapping.Category CATEGORY = KeyMapping.Category.register(Identifier.fromNamespaceAndPath(MarumaSign.MOD_ID, "key_category"));
+
     public static void registerTexture(Identifier id, NativeImage image) {
         // テクスチャ 登録
-        client.getTextureManager().registerTexture(id, new NativeImageBackedTexture(image));
+        client.getTextureManager().register(id, new DynamicTexture(() -> "marumasasign_texture", image));
     }
 
     public static void destroyTexture(Identifier id) {
         // テクスチャ 削除
-        client.getTextureManager().destroyTexture(id);
+        client.getTextureManager().release(id);
     }
 
     // キーバインド 作成
-    public static KeyBinding createKeyBinding(String name, int code) {
-        return new KeyBinding(
+    public static KeyMapping createKeyBinding(String name, int code) {
+        return new KeyMapping(
                 // ID作成
                 "key." + MarumaSign.MOD_ID + "." + name,
 
                 // どのキーか設定
-                InputUtil.Type.KEYSYM, code,
+                InputConstants.Type.KEYSYM, code,
 
                 // カテゴリ設定
-                "key.categories." + MarumaSign.MOD_ID
+                CATEGORY
         );
     }
 

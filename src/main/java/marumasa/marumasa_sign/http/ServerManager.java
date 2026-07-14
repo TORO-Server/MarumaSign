@@ -1,7 +1,6 @@
 package marumasa.marumasa_sign.http;
 
 import marumasa.marumasa_sign.util.PortManager;
-import net.minecraft.util.Util;
 
 public class ServerManager {
 
@@ -11,7 +10,11 @@ public class ServerManager {
         if (engine == null)  // サーバーが起動していない場合
             build(); // サーバーを起動
         // ブラウザで起動したサーバーに接続する
-        Util.getOperatingSystem().open(String.format("http://localhost:%d%s", engine.port, "/index.html"));
+        try {
+            java.awt.Desktop.getDesktop().browse(new java.net.URI(String.format("http://localhost:%d%s", engine.port, "/index.html")));
+        } catch (Exception e) {
+            e.printStackTrace();
+        }
     }
 
     public static void closeMenu() {

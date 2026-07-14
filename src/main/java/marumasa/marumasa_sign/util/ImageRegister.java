@@ -5,9 +5,9 @@ import marumasa.marumasa_sign.MarumaSign;
 import marumasa.marumasa_sign.client.sign.TextureURLProvider;
 import marumasa.marumasa_sign.type.GifFrame;
 import marumasa.marumasa_sign.type.TextureURL;
-import net.minecraft.client.render.RenderLayer;
-import net.minecraft.client.texture.NativeImage;
-import net.minecraft.util.Identifier;
+import net.minecraft.client.renderer.rendertype.RenderType;
+import com.mojang.blaze3d.platform.NativeImage;
+import net.minecraft.resources.Identifier;
 
 import java.awt.image.BufferedImage;
 import java.io.IOException;
@@ -20,7 +20,7 @@ public class ImageRegister {
 
     public static void registerGif(InputStream stream, String stringURL, String path) throws IOException {
 
-        final NavigableMap<Integer, RenderLayer> frameMap = new TreeMap<>();
+        final NavigableMap<Integer, RenderType> frameMap = new TreeMap<>();
         TextureURL firstTextureURL = TextureURL.error;
 
         final GifDecoder.GifImage gifImage = GifDecoder.read(stream);
@@ -37,7 +37,7 @@ public class ImageRegister {
             delay += gifImage.getDelay(i);
 
 
-            Identifier identifier = Identifier.tryParse(MarumaSign.MOD_ID, path + "/" + i);
+            Identifier identifier = Identifier.fromNamespaceAndPath(MarumaSign.MOD_ID, path + "/" + i);
             if (i == 0) {
                 firstTextureURL = new TextureURL(identifier, width, height);
             }

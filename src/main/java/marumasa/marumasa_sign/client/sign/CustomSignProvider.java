@@ -3,8 +3,8 @@ package marumasa.marumasa_sign.client.sign;
 import marumasa.marumasa_sign.type.CustomSign;
 import marumasa.marumasa_sign.type.TextureURL;
 import marumasa.marumasa_sign.util.GifPlayer;
-import net.minecraft.block.entity.SignBlockEntity;
-import net.minecraft.client.render.RenderLayer;
+import net.minecraft.world.level.block.entity.SignBlockEntity;
+import net.minecraft.client.renderer.rendertype.RenderType;
 
 import java.util.HashMap;
 import java.util.List;
@@ -54,7 +54,7 @@ public class CustomSignProvider {
         loaded.put(signText, customSign);
     }
 
-    public static void updateSignTexture(String signText, RenderLayer renderLayer) {
+    public static void updateSignTexture(String signText, RenderType renderLayer) {
         CustomSign customSign = new CustomSign(renderLayer, loaded.get(signText));
         loaded.put(signText, customSign);
     }

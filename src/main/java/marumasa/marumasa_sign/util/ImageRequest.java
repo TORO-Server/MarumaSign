@@ -2,7 +2,7 @@ package marumasa.marumasa_sign.util;
 
 import com.google.common.io.BaseEncoding;
 import marumasa.marumasa_sign.MarumaSign;
-import net.minecraft.util.Identifier;
+import net.minecraft.resources.Identifier;
 
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
@@ -132,7 +132,7 @@ public class ImageRequest {
                 ImageRegister.registerGif(stream, stringURL, path);
             } else {
 
-                final Identifier identifier = Identifier.tryParse(MarumaSign.MOD_ID, path);
+                final Identifier identifier = Identifier.fromNamespaceAndPath(MarumaSign.MOD_ID, path);
 
                 if (ImageRegister.registerDefault(stream, stringURL, identifier)) {
                     // ログ出力

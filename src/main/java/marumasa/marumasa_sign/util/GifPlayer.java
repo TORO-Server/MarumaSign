@@ -3,7 +3,7 @@ package marumasa.marumasa_sign.util;
 import marumasa.marumasa_sign.MarumaSign;
 import marumasa.marumasa_sign.client.sign.CustomSignProvider;
 import marumasa.marumasa_sign.type.GifFrame;
-import net.minecraft.client.render.RenderLayer;
+import net.minecraft.client.renderer.rendertype.RenderType;
 
 import java.util.*;
 
@@ -17,12 +17,12 @@ public class GifPlayer {
 
             gifFrame.frame++;
 
-            final NavigableMap<Integer, RenderLayer> frameMap = gifFrame.frameMap;
+            final NavigableMap<Integer, RenderType> frameMap = gifFrame.frameMap;
             if (!frameMap.containsKey(gifFrame.frame)) continue;
 
             Integer key = frameMap.higherKey(gifFrame.frame);
 
-            RenderLayer renderLayer;
+            RenderType renderLayer;
             if (key == null) {
                 gifFrame.frame = 0;
                 if (gifFrame.repetitions != 0) {

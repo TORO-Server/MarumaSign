@@ -1,19 +1,18 @@
 package marumasa.marumasa_sign.type;
 
 import marumasa.marumasa_sign.util.Utils;
-import net.minecraft.block.entity.SignBlockEntity;
-import net.minecraft.client.render.RenderLayer;
-import net.minecraft.text.Text;
-import org.apache.commons.lang3.ArrayUtils;
+import net.minecraft.world.level.block.entity.SignBlockEntity;
+import net.minecraft.client.renderer.rendertype.RenderType;
+import net.minecraft.network.chat.Component;
 import org.joml.Vector2f;
 import org.joml.Vector3f;
 
 public class CustomSign {
 
-    public final RenderLayer renderLayer;
+    public final RenderType renderLayer;
     public final Vertex vertex;
 
-    public CustomSign(RenderLayer renderLayer, CustomSign customSign) {
+    public CustomSign(RenderType renderLayer, CustomSign customSign) {
         // getEntityTranslucent で 透過と半透明と裏面表示 対応の RenderLayer 生成
         this.renderLayer = renderLayer;
         this.vertex = customSign.vertex;
@@ -61,22 +60,18 @@ public class CustomSign {
     }
 
     public static String read(SignBlockEntity sign) {
+        final StringBuilder stringAll = new StringBuilder();
 
-        // 表面と裏面に書いてある文字を合わせる
-        final Text[] textAll = ArrayUtils.addAll(
-                // 看板の表面に書かれている文字を取得
-                sign.getFrontText().getMessages(true),
-                // 看板の裏面に書かれている文字を取得
-                sign.getBackText().getMessages(true)
-        );
+        // 表面のテキストを結合
+        for (int i = 0; i < 4; i++) {
+            stringAll.append(sign.getFrontText().getMessage(i, false).getString());
+        }
+        // 裏面のテキストを結合
+        for (int i = 0; i < 4; i++) {
+            stringAll.append(sign.getBackText().getMessage(i, false).getString());
+        }
 
-        // return で 返す String型の 文字 を作成するためのもの
-        final StringBuilder StringAll = new StringBuilder();
-
-        // textAll を読み取り StringAll に追加
-        for (Text text : textAll) StringAll.append(text.getString());
-
-        return StringAll.toString();
+        return stringAll.toString();
     }
 
     public static CustomSign create(TextureURL textureURL, Object[] parameters) {
