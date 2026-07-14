@@ -8,9 +8,9 @@ import java.util.*;
 
 public class TextureURLProvider {
 
-    private static final Map<String, TextureURL> loaded = new HashMap<>();// 読み込み済みテクスチャマップ
-    private static final Map<String, List<String>> loading = new HashMap<>();// 読み込み中テクスチャマップ
-    private static final List<String> failure = new ArrayList<>();// 読み込み失敗テクスチャリスト
+    private static final Map<String, TextureURL> loaded = new java.util.concurrent.ConcurrentHashMap<>();// 読み込み済みテクスチャマップ
+    private static final Map<String, List<String>> loading = new java.util.concurrent.ConcurrentHashMap<>();// 読み込み中テクスチャマップ
+    private static final List<String> failure = java.util.Collections.synchronizedList(new ArrayList<>());// 読み込み失敗テクスチャリスト
 
 
     public static TextureURL get(String stringURL, String signText) {
@@ -22,8 +22,9 @@ public class TextureURLProvider {
         } else if (loading.containsKey(stringURL)) {
 
             List<String> customSignList = loading.get(stringURL);
-            customSignList.add(signText);
-            loading.put(stringURL, customSignList);
+            if (customSignList != null) {
+                customSignList.add(signText);
+            }
             return TextureURL.loading;
 
         } else if (failure.contains(stringURL)) {
@@ -45,8 +46,10 @@ public class TextureURLProvider {
         List<String> signTextList = loading.remove(stringURL);
 
         loaded.put(stringURL, textureURL);
-        for (String signText : signTextList) {
-            CustomSignProvider.changeSignTexture(textureURL, signText);
+        if (signTextList != null) {
+            for (String signText : signTextList) {
+                CustomSignProvider.changeSignTexture(textureURL, signText);
+            }
         }
         return signTextList;
     }
@@ -55,9 +58,14 @@ public class TextureURLProvider {
 
         List<String> signTextList = loading.remove(stringURL);
 
+        if (failure.size() > 1000) {
+            failure.remove(0);
+        }
         failure.add(stringURL);
-        for (String signText : signTextList) {
-            CustomSignProvider.changeSignTexture(TextureURL.error, signText);
+        if (signTextList != null) {
+            for (String signText : signTextList) {
+                CustomSignProvider.changeSignTexture(TextureURL.error, signText);
+            }
         }
     }
 

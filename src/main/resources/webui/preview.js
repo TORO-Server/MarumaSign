@@ -7,7 +7,7 @@ function detectChangeURL() {
     const urlinput = document.getElementById("address");
 
     // initエラーチェック
-    if (imgelem == null | urlinput == null | urlinput.value == undefined | imgelem.src == undefined) {
+    if (imgelem == null || urlinput == null || urlinput.value == undefined || imgelem.src == undefined) {
         console.error('Cannnot get HTMLElement')
         return;
     }

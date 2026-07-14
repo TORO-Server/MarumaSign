@@ -11,18 +11,27 @@ import java.net.InetSocketAddress;
 
 public class ServerEngine {
 
-    public final HttpServer server;
+    public HttpServer server;
     public final int port;
-
+ 
     public ServerEngine(int port) {
         this.port = port;
+        HttpServer tempServer = null;
         try {
-            server = HttpServer.create(new InetSocketAddress(port), 0);
-            server.start();
+            tempServer = HttpServer.create(new InetSocketAddress("127.0.0.1", port), 0);
+            tempServer.setExecutor(java.util.concurrent.Executors.newFixedThreadPool(2, r -> {
+                Thread thread = new Thread(r);
+                thread.setDaemon(true);
+                thread.setName("MarumaSign-HttpServer");
+                return thread;
+            }));
+            tempServer.createContext("/", new Handler());
+            tempServer.start();
+            server = tempServer;
         } catch (IOException e) {
-            throw new RuntimeException(e);
+            marumasa.marumasa_sign.MarumaSign.LOGGER.error("Failed to start HttpServer on port " + port, e);
+            server = null;
         }
-        server.createContext("/", new Handler());
     }
 
     public static class Handler implements HttpHandler {

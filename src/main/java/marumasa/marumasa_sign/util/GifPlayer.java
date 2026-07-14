@@ -3,44 +3,37 @@ package marumasa.marumasa_sign.util;
 import marumasa.marumasa_sign.MarumaSign;
 import marumasa.marumasa_sign.client.sign.CustomSignProvider;
 import marumasa.marumasa_sign.type.GifFrame;
-import net.minecraft.client.render.RenderLayer;
+import net.minecraft.client.renderer.rendertype.RenderType;
 
 import java.util.*;
 
 
 public class GifPlayer {
-    public static final List<GifFrame> gifList = new ArrayList<>();
-    public static final Map<String, List<String>> signTextMap = new HashMap<>();
+    public static final Map<String, GifFrame> gifMap = new java.util.concurrent.ConcurrentHashMap<>();
 
-    public static void load() {
-        for (GifFrame gifFrame : gifList) {
+    public static RenderType getRenderType(String stringURL, RenderType defaultRenderType, long startTime) {
+        GifFrame gifFrame = gifMap.get(stringURL);
+        if (gifFrame == null) return defaultRenderType;
 
-            gifFrame.frame++;
+        NavigableMap<Integer, RenderType> frameMap = gifFrame.frameMap;
+        if (frameMap.isEmpty()) return defaultRenderType;
 
-            final NavigableMap<Integer, RenderLayer> frameMap = gifFrame.frameMap;
-            if (!frameMap.containsKey(gifFrame.frame)) continue;
+        long elapsed = System.currentTimeMillis() - startTime;
+        int totalDuration = gifFrame.totalDuration;
+        int repetitions = gifFrame.repetitions;
 
-            Integer key = frameMap.higherKey(gifFrame.frame);
-
-            RenderLayer renderLayer;
-            if (key == null) {
-                gifFrame.frame = 0;
-                if (gifFrame.repetitions != 0) {
-                    gifFrame.repeat_count++;
-                    if (gifFrame.repeat_count >= gifFrame.repetitions) {
-                        MarumaSign.LOGGER.info("test");
-                        gifList.remove(gifFrame);
-                        continue;
-                    }
-                }
-                renderLayer = frameMap.firstEntry().getValue();
-            } else {
-                renderLayer = frameMap.get(key);
-            }
-
-            for (String signText : signTextMap.get(gifFrame.stringURL)) {
-                CustomSignProvider.updateSignTexture(signText, renderLayer);
+        if (repetitions > 0) {
+            long maxDuration = (long) totalDuration * repetitions;
+            if (elapsed >= maxDuration) {
+                return frameMap.lastEntry().getValue();
             }
         }
+
+        int loopElapsed = (int) (elapsed % totalDuration);
+        Map.Entry<Integer, RenderType> entry = frameMap.higherEntry(loopElapsed);
+        if (entry == null) {
+            return frameMap.firstEntry().getValue();
+        }
+        return entry.getValue();
     }
 }

@@ -2,7 +2,7 @@ package marumasa.marumasa_sign.util;
 
 import com.google.common.io.BaseEncoding;
 import marumasa.marumasa_sign.MarumaSign;
-import net.minecraft.util.Identifier;
+import net.minecraft.resources.Identifier;
 
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
@@ -13,57 +13,53 @@ import java.net.URL;
 import java.util.*;
 
 public class ImageRequest {
-    private static final Queue<String> queue = new ArrayDeque<>();
+    private static final Queue<String> queue = new java.util.concurrent.ConcurrentLinkedQueue<>();
+    private static final java.util.concurrent.atomic.AtomicInteger activeDownloads = new java.util.concurrent.atomic.AtomicInteger(0);
+    private static final java.util.concurrent.ExecutorService executor = java.util.concurrent.Executors.newCachedThreadPool(
+        r -> {
+            Thread thread = new Thread(r);
+            thread.setDaemon(true);
+            thread.setName("MarumaSign-ImageLoader");
+            return thread;
+        }
+    );
 
     public static int queueSize() {
         return queue.size();
     }
 
-
     public static void add(
             // 画像のURL
             String stringURL
     ) {
-        queue.add(stringURL);
-    }
-
-    record ImageLoader(String stringURL) implements Runnable {
-        public void run() {
-            getURL(stringURL);
+        if (!queue.contains(stringURL)) {
+            queue.add(stringURL);
         }
     }
 
     public static void load(int maxThreads) {
-
-        // 読み込みスレッド作成
-        final Thread[] threadList = new Thread[maxThreads];
-        for (int i = 0; i < threadList.length; i++) {
-            if (queue.isEmpty()) break;
-            String stringURL = queue.remove();
-            threadList[i] = new Thread(new ImageLoader(stringURL));
-            threadList[i].setName(String.format("ImageLoader-%d", i));
-        }
-        try {
-
-            // 読み込み開始
-            for (Thread thread : threadList)
-                if (thread != null) thread.start();
-                else break;
-
-            // 読み込み終わるまで待機
-            for (Thread thread : threadList)
-                if (thread != null) thread.join();
-                else break;
-
-        } catch (InterruptedException e) {
-            throw new RuntimeException(e);
+        while (activeDownloads.get() < maxThreads && !queue.isEmpty()) {
+            String stringURL = queue.poll();
+            if (stringURL == null) break;
+            activeDownloads.incrementAndGet();
+            executor.submit(() -> {
+                try {
+                    getURL(stringURL);
+                } finally {
+                    activeDownloads.decrementAndGet();
+                }
+            });
         }
     }
 
     public static byte[] getURLContent(String stringURL) throws IOException {
+        if (stringURL == null) return null;
+        if (!stringURL.startsWith("http://") && !stringURL.startsWith("https://")) {
+            throw new IOException("Unsupported protocol scheme in URL: " + stringURL);
+        }
 
-        // ダウンロードサイズの上限を100MBに設定 (100 * 1024 * 1024 bytes)
-        final long MAX_SIZE = 1024 * 1024 * 100;
+        // ダウンロードサイズの上限を10MBに設定 (10 * 1024 * 1024 bytes)
+        final long MAX_SIZE = 1024 * 1024 * 10;
 
         final String encodeURL = Utils.encodeURL(stringURL);
         if (encodeURL == null) return null;
@@ -72,6 +68,8 @@ public class ImageRequest {
         try {
             // 接続オブジェクトを生成
             connection = (HttpURLConnection) new URL(encodeURL).openConnection();
+            connection.setConnectTimeout(5000);
+            connection.setReadTimeout(5000);
             connection.setRequestMethod("GET");
             // ヘッダーを設定
             connection.setRequestProperty("User-Agent", "Mozilla/5.0 (MarumaSign)");
@@ -128,11 +126,11 @@ public class ImageRequest {
 
             InputStream stream = new ByteArrayInputStream(content);
 
-            if (Utils.isGif(content)) {
-                ImageRegister.registerGif(stream, stringURL, path);
+            if (Utils.isGif(content) || Utils.isApng(content) || Utils.isAnimatedWebp(content)) {
+                ImageRegister.registerAnimation(content, stringURL, path);
             } else {
 
-                final Identifier identifier = Identifier.tryParse(MarumaSign.MOD_ID, path);
+                final Identifier identifier = Identifier.fromNamespaceAndPath(MarumaSign.MOD_ID, path);
 
                 if (ImageRegister.registerDefault(stream, stringURL, identifier)) {
                     // ログ出力
@@ -154,12 +152,18 @@ public class ImageRequest {
 
     // URLを Identifier で使える ID に変換
     public static String URLtoPath(String stringURL) {
-        // base32 に変換
-        String base32 = BaseEncoding.base32().encode(stringURL.getBytes());
-        // Identifier は 大文字使えないので すべて小文字にする
-        base32 = base32.toLowerCase();
-        // Identifier は イコール という文字が使えないので アンダーバー に置き換える
-        base32 = base32.replace('=', '_');
-        return base32;
+        String path;
+        if (stringURL.length() > 150) {
+            try {
+                java.security.MessageDigest digest = java.security.MessageDigest.getInstance("SHA-256");
+                byte[] hash = digest.digest(stringURL.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+                path = "hash_" + BaseEncoding.base32().encode(hash).toLowerCase().replace('=', '_');
+            } catch (java.security.NoSuchAlgorithmException e) {
+                path = BaseEncoding.base32().encode(stringURL.getBytes()).toLowerCase().replace('=', '_');
+            }
+        } else {
+            path = BaseEncoding.base32().encode(stringURL.getBytes()).toLowerCase().replace('=', '_');
+        }
+        return path;
     }
 }

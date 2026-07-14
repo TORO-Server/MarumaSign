@@ -10,37 +10,35 @@ import marumasa.marumasa_sign.util.ImageRequest;
 import marumasa.marumasa_sign.util.Utils;
 import net.fabricmc.api.ClientModInitializer;
 import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientTickEvents;
-import net.fabricmc.fabric.api.client.keybinding.v1.KeyBindingHelper;
-import net.minecraft.block.entity.BlockEntityType;
-import net.minecraft.block.entity.SignBlockEntity;
-import net.minecraft.client.MinecraftClient;
-import net.minecraft.client.option.KeyBinding;
-import net.minecraft.client.render.block.entity.BlockEntityRendererFactories;
-import net.minecraft.text.Text;
+import net.fabricmc.fabric.api.client.keymapping.v1.KeyMappingHelper;
+import net.minecraft.world.level.block.entity.BlockEntityType;
+import net.minecraft.world.level.block.entity.BlockEntityTypes;
+import net.minecraft.world.level.block.entity.SignBlockEntity;
+import net.minecraft.client.Minecraft;
+import net.minecraft.client.KeyMapping;
+import net.minecraft.client.renderer.blockentity.BlockEntityRenderers;
+import net.minecraft.network.chat.Component;
 import org.lwjgl.glfw.GLFW;
 
-import java.util.Timer;
-import java.util.TimerTask;
-
-import static net.minecraft.client.MinecraftClient.getInstance;
+import static net.minecraft.client.Minecraft.getInstance;
 
 public class MarumaSignClient implements ClientModInitializer {
 
     // 看板のブロックエンティティタイプ 取得
-    private static final BlockEntityType<SignBlockEntity> signType = BlockEntityType.SIGN;
+    private static final BlockEntityType<SignBlockEntity> signType = BlockEntityTypes.SIGN;
 
-    private static final MinecraftClient client = getInstance();
+    private static final Minecraft client = getInstance();
 
     @Override
     public void onInitializeClient() {
         // 看板のブロックエンティティのレンダラーを置き換える
-        BlockEntityRendererFactories.register(signType, CustomSignBlockEntityRenderer::new);
+        BlockEntityRenderers.register(signType, CustomSignBlockEntityRenderer::new);
 
         loop.start();
         SignWriteManager.init();
 
         // キーバインド登録
-        KeyBinding open_menu = KeyBindingHelper.registerKeyBinding(
+        KeyMapping open_menu = KeyMappingHelper.registerKeyMapping(
                 Utils.createKeyBinding("open_menu", GLFW.GLFW_KEY_B)
         );
 
@@ -48,43 +46,33 @@ public class MarumaSignClient implements ClientModInitializer {
         ClientTickEvents.END_CLIENT_TICK.register(client -> {
             if (client.player == null) return;
             // もしキーが押されたら
-            while (open_menu.wasPressed()) {
-                Text text = Text.translatable("text.maruma_sign.open_menu");
-                client.player.sendMessage(text, false);
+            while (open_menu.consumeClick()) {
+                Component text = Component.translatable("text.maruma_sign.open_menu");
+                client.player.sendSystemMessage(text);
                 ServerManager.openMenu();
             }
         });
 
         // キーバインド登録
-        KeyBinding binding2 = KeyBindingHelper.registerKeyBinding(
+        KeyMapping binding2 = KeyMappingHelper.registerKeyMapping(
                 Utils.createKeyBinding("remove_cache", GLFW.GLFW_KEY_M)
         );
         ClientTickEvents.END_CLIENT_TICK.register(client -> {
             if (client.player == null) return;
             // もしキーが押されたら
-            while (binding2.wasPressed()) {
-                getInstance().setScreen(new ConfigScreen(getInstance().currentScreen));
+            while (binding2.consumeClick()) {
+                client.gui.setScreen(new ConfigScreen(client.gui.screen()));
             }
         });
     }
 
     private static class loop {
         public static void start() {
-            // 10ms timer
-            new Timer().schedule(new loopGifPlayer(), 0, 10);
             // 100ms timer
-            new Timer().schedule(new loopImageRequest(MarumaSign.CONFIG), 0, 100);
+            new java.util.Timer(true).schedule(new loopImageRequest(MarumaSign.CONFIG), 0, 100);
         }
 
-        private static class loopGifPlayer extends TimerTask {
-            @Override
-            public void run() {
-                if (client.world == null || client.getBlockRenderManager() == null) return;
-                GifPlayer.load();
-            }
-        }
-
-        private static class loopImageRequest extends TimerTask {
+        private static class loopImageRequest extends java.util.TimerTask {
 
             private final Config config;
 
@@ -94,8 +82,8 @@ public class MarumaSignClient implements ClientModInitializer {
 
             @Override
             public void run() {
-                if (client.world == null || client.getBlockRenderManager() == null) return;
-                ImageRequest.load(config.getMaxThreads());
+                if (client.level == null) return;
+                client.execute(() -> ImageRequest.load(config.getMaxThreads()));
             }
         }
     }
