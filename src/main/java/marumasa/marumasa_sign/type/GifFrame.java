@@ -10,8 +10,8 @@ public class GifFrame {
     public final NavigableMap<Integer, RenderType> frameMap;
     public final int repetitions;
 
-    public int frame = 0;
-    public int repeat_count = 0;
+    public volatile int frame = 0;
+    public volatile int repeat_count = 0;
 
     public GifFrame(String stringURL, NavigableMap<Integer, RenderType> frameMap, int repetitions) {
         this.stringURL = stringURL;

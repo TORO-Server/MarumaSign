@@ -20,9 +20,6 @@ import net.minecraft.client.renderer.blockentity.BlockEntityRenderers;
 import net.minecraft.network.chat.Component;
 import org.lwjgl.glfw.GLFW;
 
-import java.util.Timer;
-import java.util.TimerTask;
-
 import static net.minecraft.client.Minecraft.getInstance;
 
 public class MarumaSignClient implements ClientModInitializer {
@@ -72,20 +69,20 @@ public class MarumaSignClient implements ClientModInitializer {
     private static class loop {
         public static void start() {
             // 10ms timer
-            new Timer(true).schedule(new loopGifPlayer(), 0, 10);
+            new java.util.Timer(true).schedule(new loopGifPlayer(), 0, 10);
             // 100ms timer
-            new Timer(true).schedule(new loopImageRequest(MarumaSign.CONFIG), 0, 100);
+            new java.util.Timer(true).schedule(new loopImageRequest(MarumaSign.CONFIG), 0, 100);
         }
 
-        private static class loopGifPlayer extends TimerTask {
+        private static class loopGifPlayer extends java.util.TimerTask {
             @Override
             public void run() {
                 if (client.level == null) return;
-                GifPlayer.load();
+                client.execute(GifPlayer::load);
             }
         }
 
-        private static class loopImageRequest extends TimerTask {
+        private static class loopImageRequest extends java.util.TimerTask {
 
             private final Config config;
 
@@ -96,7 +93,7 @@ public class MarumaSignClient implements ClientModInitializer {
             @Override
             public void run() {
                 if (client.level == null) return;
-                ImageRequest.load(config.getMaxThreads());
+                client.execute(() -> ImageRequest.load(config.getMaxThreads()));
             }
         }
     }

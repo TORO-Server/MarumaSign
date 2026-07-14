@@ -38,7 +38,9 @@ public class ConfigScreen extends Screen {
                     // MarumaSignClient.java から丸パクリ
                     if (ImageRequest.queueSize() != 0) return;
                     CustomSignProvider.removeCache();
-                    Objects.requireNonNull(client.player).sendSystemMessage(Component.translatable("text.maruma_sign.remove_cache"));
+                    if (client.player != null) {
+                        client.player.sendSystemMessage(Component.translatable("text.maruma_sign.remove_cache"));
+                    }
                     client.gui.setScreen(parent);
                 })
                 // レンダリング設定
@@ -47,8 +49,10 @@ public class ConfigScreen extends Screen {
                 .tooltip(Tooltip.create(Component.translatable("text.maruma_sign.remove_cache_tooltip")))
                 .build();
         asyncload_add = Button.builder(Component.literal("+"), button -> {
-                    // 画像の同時ロード数 を "1" 追加する
-                    CONFIG.addMaxThreads(1);
+                    // 画像の同時ロード数 を "1" 追加する (最大32)
+                    if (CONFIG.getMaxThreads() < 32) {
+                        CONFIG.addMaxThreads(1);
+                    }
                 })
                 // レンダリング設定
                 .bounds(width / 2 - 105, 60, 20, 20)

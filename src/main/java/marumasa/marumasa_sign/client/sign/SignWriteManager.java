@@ -40,12 +40,16 @@ public class SignWriteManager {
         int startIndex = 0;
         for (int i = 0; i < 4; i++) {
             int partSize = basePartSize + (i < remainder ? 1 : 0);
-
+ 
             if (startIndex >= len) {
                 result[i] = "";
             } else {
                 int endIndex = startIndex + partSize;
-                result[i] = text.substring(startIndex, endIndex);
+                String part = text.substring(startIndex, endIndex);
+                if (part.length() > 100) {
+                    part = part.substring(0, 100);
+                }
+                result[i] = part;
                 startIndex = endIndex;
             }
         }
@@ -54,18 +58,19 @@ public class SignWriteManager {
     }
 
     public static void init() {
-
+ 
         ScreenEvents.AFTER_INIT.register((client, screen, scaledWidth, scaledHeight) -> {
             if (requestText == null) return;
             // 開かれたスクリーンが看板の編集のGUIなら
             if (screen instanceof SignEditScreen signEditScreen) {
-
+ 
                 SignEditScreenAccessor accessor = (SignEditScreenAccessor) signEditScreen;
-
+ 
                 SignBlockEntity signBlockEntity = accessor.getBlockEntity();
-
+                if (signBlockEntity == null) return;
+ 
                 String[] signLines = splitStringEvenly(requestText);
-
+ 
                 // 看板を更新する
                 ServerboundSignUpdatePacket packet = new ServerboundSignUpdatePacket(
                         signBlockEntity.getBlockPos(),
@@ -75,7 +80,12 @@ public class SignWriteManager {
                         signLines[2],
                         signLines[3]
                 );
-                Objects.requireNonNull(client.getConnection()).send(packet);
+                net.minecraft.client.multiplayer.ClientPacketListener connection = client.getConnection();
+                if (connection != null) {
+                    connection.send(packet);
+                } else {
+                    marumasa.marumasa_sign.MarumaSign.LOGGER.warn("Cannot send SignUpdatePacket: connection is null");
+                }
                 requestText = null;
                 signEditScreen.onClose();
             }

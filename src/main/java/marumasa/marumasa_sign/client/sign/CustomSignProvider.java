@@ -13,7 +13,7 @@ import java.util.Objects;
 
 public class CustomSignProvider {
 
-    private static final Map<String, CustomSign> loaded = new HashMap<>();// 読み込み済み看板マップ
+    private static final Map<String, CustomSign> loaded = new java.util.concurrent.ConcurrentHashMap<>();// 読み込み済み看板マップ
 
     public static CustomSign get(SignBlockEntity signBlockEntity) {
 
@@ -48,20 +48,24 @@ public class CustomSignProvider {
     }
 
     public static void changeSignTexture(TextureURL textureURL, String signText) {
-        CustomSign customSign = CustomSign.create(textureURL,
-                Objects.requireNonNull(toParameters(signText))
-        );
+        Object[] params = toParameters(signText);
+        if (params == null) return;
+        CustomSign customSign = CustomSign.create(textureURL, params);
         loaded.put(signText, customSign);
     }
-
+ 
     public static void updateSignTexture(String signText, RenderType renderLayer) {
-        CustomSign customSign = new CustomSign(renderLayer, loaded.get(signText));
+        CustomSign oldSign = loaded.get(signText);
+        if (oldSign == null) return;
+        CustomSign customSign = new CustomSign(renderLayer, oldSign);
         loaded.put(signText, customSign);
     }
-
+ 
     private static Object[] toParameters(String signText) {
+        if (signText == null) return null;
         try {
             final String[] parameters = signText.split("\\|");
+            if (parameters.length < 9) return null;
             return new Object[]{
                     parameters[0],
                     Float.parseFloat(parameters[1]),

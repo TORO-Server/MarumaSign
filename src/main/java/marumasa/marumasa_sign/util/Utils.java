@@ -13,6 +13,7 @@ import net.minecraft.resources.Identifier;
 import javax.imageio.ImageIO;
 import java.awt.image.BufferedImage;
 import java.io.*;
+import java.lang.reflect.Method;
 import java.net.HttpURLConnection;
 import java.net.URI;
 import java.net.URISyntaxException;
@@ -26,9 +27,95 @@ public class Utils {
     private static final Minecraft client = Minecraft.getInstance();
 
     public static boolean isGif(byte[] bytes) {
+        if (bytes == null || bytes.length < 6) return false;
         byte[] header = Arrays.copyOf(bytes, 6);
         String s = new String(header);
         return s.equals("GIF89a");
+    }
+
+    public static boolean isWebp(byte[] bytes) {
+        if (bytes == null || bytes.length < 12) return false;
+        return bytes[0] == 'R' && bytes[1] == 'I' && bytes[2] == 'F' && bytes[3] == 'F'
+                && bytes[8] == 'W' && bytes[9] == 'E' && bytes[10] == 'B' && bytes[11] == 'P';
+    }
+
+    public static boolean isAnimatedWebp(byte[] bytes) {
+        if (!isWebp(bytes)) return false;
+        int pos = 12;
+        while (pos < bytes.length - 8) {
+            String type = new String(bytes, pos, 4, StandardCharsets.US_ASCII);
+            int size = (bytes[pos + 4] & 0xFF) | ((bytes[pos + 5] & 0xFF) << 8)
+                     | ((bytes[pos + 6] & 0xFF) << 16) | ((bytes[pos + 7] & 0xFF) << 24);
+            if (type.equals("VP8X")) {
+                if (pos + 8 < bytes.length) {
+                    int flags = bytes[pos + 8] & 0xFF;
+                    return (flags & 0x02) != 0;
+                }
+            }
+            pos += 8 + size;
+            if (size % 2 != 0) {
+                pos++;
+            }
+            if (size < 0) break;
+        }
+        return false;
+    }
+
+    public static boolean isApng(byte[] bytes) {
+        if (bytes == null || bytes.length < 8) return false;
+        byte[] pngSig = {(byte) 137, 80, 78, 71, 13, 10, 26, 10};
+        for (int i = 0; i < 8; i++) {
+            if (bytes[i] != pngSig[i]) return false;
+        }
+        int pos = 8;
+        while (pos < bytes.length - 8) {
+            int length = ((bytes[pos] & 0xFF) << 24) | ((bytes[pos + 1] & 0xFF) << 16)
+                    | ((bytes[pos + 2] & 0xFF) << 8) | (bytes[pos + 3] & 0xFF);
+            if (pos + 4 >= bytes.length) break;
+            String type = new String(bytes, pos + 4, 4, StandardCharsets.US_ASCII);
+            if (type.equals("acTL")) {
+                return true;
+            }
+            pos += 8 + length + 4;
+            if (length < 0) break; // prevent infinite loop
+        }
+        return false;
+    }
+
+    private static Method setPixelMethod = null;
+    static {
+        try {
+            setPixelMethod = NativeImage.class.getMethod("setPixelColor", int.class, int.class, int.class);
+        } catch (NoSuchMethodException e) {
+            try {
+                setPixelMethod = NativeImage.class.getMethod("setPixelRGBA", int.class, int.class, int.class);
+            } catch (NoSuchMethodException ex) {
+                // handle error
+            }
+        }
+    }
+
+    public static void registerTexture(Identifier id, int width, int height, int[] pixels) throws IOException {
+        NativeImage image = new NativeImage(width, height, false);
+        for (int y = 0; y < height; y++) {
+            for (int x = 0; x < width; x++) {
+                int argb = pixels[x + y * width];
+                int a = (argb >>> 24) & 0xFF;
+                int r = (argb >>> 16) & 0xFF;
+                int g = (argb >>> 8) & 0xFF;
+                int b = argb & 0xFF;
+                int abgr = (a << 24) | (b << 16) | (g << 8) | r;
+
+                if (setPixelMethod != null) {
+                    try {
+                        setPixelMethod.invoke(image, x, y, abgr);
+                    } catch (Exception e) {
+                        // ignore
+                    }
+                }
+            }
+        }
+        registerTexture(id, image);
     }
 
     public static RenderType getRenderLayer(Identifier identifier) {
@@ -103,12 +190,15 @@ public class Utils {
     }
 
     public static String UploadFile(String url, byte[] fileBytes, String filename) throws IOException {
+        String sanitizedFilename = filename == null ? "file.png" : filename.replace("\"", "").replace("\r", "").replace("\n", "");
 
         // POSTリクエストのボディを作成する
         String boundary = Long.toHexString(System.currentTimeMillis()); // ランダムなバウンダリーを生成
         String CRLF = "\r\n"; // 改行
 
         HttpURLConnection conn = (HttpURLConnection) new URL(url).openConnection();
+        conn.setConnectTimeout(5000);
+        conn.setReadTimeout(5000);
         conn.setDoOutput(true);
         conn.setRequestMethod("POST");
         conn.setRequestProperty("Content-Type", "multipart/form-data; boundary=" + boundary);
@@ -123,7 +213,7 @@ public class Utils {
             writer.append(CRLF).append("fileupload").append(CRLF);
 
             writer.append("--").append(boundary).append(CRLF);
-            writer.append("Content-Disposition: form-data; name=\"fileToUpload\"; filename=\"").append(filename).append("\"").append(CRLF);
+            writer.append("Content-Disposition: form-data; name=\"fileToUpload\"; filename=\"").append(sanitizedFilename).append("\"").append(CRLF);
             writer.append("Content-Type: image/png").append(CRLF);
             writer.append(CRLF).flush();
 

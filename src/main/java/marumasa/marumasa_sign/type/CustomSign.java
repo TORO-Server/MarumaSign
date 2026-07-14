@@ -15,39 +15,40 @@ public class CustomSign {
     public CustomSign(RenderType renderLayer, CustomSign customSign) {
         // getEntityTranslucent で 透過と半透明と裏面表示 対応の RenderLayer 生成
         this.renderLayer = renderLayer;
-        this.vertex = customSign.vertex;
+        this.vertex = customSign != null ? customSign.vertex : new Vertex(new Vector3f(), new Vector3f(), new Vector3f(), new Vector3f());
     }
 
     public CustomSign(TextureURL textureURL, Object[] parameters) {
         this(new CustomSignParameters(
                 textureURL,
-                (float) parameters[1],
-                (float) parameters[2],
-                (float) parameters[3],
-                (float) parameters[4],
-                (float) parameters[5],
-                (float) parameters[6],
-                (float) parameters[7],
-                (float) parameters[8]
+                (parameters != null && parameters.length > 1) ? (float) parameters[1] : 0.0f,
+                (parameters != null && parameters.length > 2) ? (float) parameters[2] : 0.0f,
+                (parameters != null && parameters.length > 3) ? (float) parameters[3] : 0.0f,
+                (parameters != null && parameters.length > 4) ? (float) parameters[4] : 1.0f,
+                (parameters != null && parameters.length > 5) ? (float) parameters[5] : 1.0f,
+                (parameters != null && parameters.length > 6) ? (float) parameters[6] : 0.0f,
+                (parameters != null && parameters.length > 7) ? (float) parameters[7] : 0.0f,
+                (parameters != null && parameters.length > 8) ? (float) parameters[8] : 0.0f
         ));
     }
 
     public CustomSign(CustomSignParameters csp) {
 
         // getEntityTranslucent で 透過と半透明と裏面表示 対応の RenderLayer 生成
-        this.renderLayer = Utils.getRenderLayer(csp.textureURL.identifier());
+        this.renderLayer = Utils.getRenderLayer(csp.textureURL != null ? csp.textureURL.identifier() : TextureURL.error.identifier());
 
-        final int width = csp.textureURL.width();
-        final int height = csp.textureURL.height();
+        final int width = csp.textureURL != null ? csp.textureURL.width() : 1;
+        final int height = csp.textureURL != null ? csp.textureURL.height() : 1;
         // 頂点の位置 設定
 
-
         double maxVal = Math.max(width, height);
+        if (maxVal <= 0.0) {
+            maxVal = 1.0;
+        }
         Vector2f vec = new Vector2f(
                 (float) (width / maxVal),
                 (float) (height / maxVal)
         );
-
 
         vec.mul(csp.ScaleX, csp.ScaleY);
 

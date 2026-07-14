@@ -9,26 +9,25 @@ import java.util.*;
 
 
 public class GifPlayer {
-    public static final List<GifFrame> gifList = new ArrayList<>();
-    public static final Map<String, List<String>> signTextMap = new HashMap<>();
-
+    public static final List<GifFrame> gifList = new java.util.concurrent.CopyOnWriteArrayList<>();
+    public static final Map<String, List<String>> signTextMap = new java.util.concurrent.ConcurrentHashMap<>();
+ 
     public static void load() {
         for (GifFrame gifFrame : gifList) {
-
+ 
             gifFrame.frame++;
-
+ 
             final NavigableMap<Integer, RenderType> frameMap = gifFrame.frameMap;
             if (!frameMap.containsKey(gifFrame.frame)) continue;
-
+ 
             Integer key = frameMap.higherKey(gifFrame.frame);
-
+ 
             RenderType renderLayer;
             if (key == null) {
                 gifFrame.frame = 0;
                 if (gifFrame.repetitions != 0) {
                     gifFrame.repeat_count++;
                     if (gifFrame.repeat_count >= gifFrame.repetitions) {
-                        MarumaSign.LOGGER.info("test");
                         gifList.remove(gifFrame);
                         continue;
                     }
@@ -37,9 +36,12 @@ public class GifPlayer {
             } else {
                 renderLayer = frameMap.get(key);
             }
-
-            for (String signText : signTextMap.get(gifFrame.stringURL)) {
-                CustomSignProvider.updateSignTexture(signText, renderLayer);
+ 
+            List<String> signTexts = signTextMap.get(gifFrame.stringURL);
+            if (signTexts != null) {
+                for (String signText : signTexts) {
+                    CustomSignProvider.updateSignTexture(signText, renderLayer);
+                }
             }
         }
     }
