@@ -9,40 +9,31 @@ import java.util.*;
 
 
 public class GifPlayer {
-    public static final List<GifFrame> gifList = new java.util.concurrent.CopyOnWriteArrayList<>();
-    public static final Map<String, List<String>> signTextMap = new java.util.concurrent.ConcurrentHashMap<>();
- 
-    public static void load() {
-        for (GifFrame gifFrame : gifList) {
- 
-            gifFrame.frame++;
- 
-            final NavigableMap<Integer, RenderType> frameMap = gifFrame.frameMap;
-            if (!frameMap.containsKey(gifFrame.frame)) continue;
- 
-            Integer key = frameMap.higherKey(gifFrame.frame);
- 
-            RenderType renderLayer;
-            if (key == null) {
-                gifFrame.frame = 0;
-                if (gifFrame.repetitions != 0) {
-                    gifFrame.repeat_count++;
-                    if (gifFrame.repeat_count >= gifFrame.repetitions) {
-                        gifList.remove(gifFrame);
-                        continue;
-                    }
-                }
-                renderLayer = frameMap.firstEntry().getValue();
-            } else {
-                renderLayer = frameMap.get(key);
-            }
- 
-            List<String> signTexts = signTextMap.get(gifFrame.stringURL);
-            if (signTexts != null) {
-                for (String signText : signTexts) {
-                    CustomSignProvider.updateSignTexture(signText, renderLayer);
-                }
+    public static final Map<String, GifFrame> gifMap = new java.util.concurrent.ConcurrentHashMap<>();
+
+    public static RenderType getRenderType(String stringURL, RenderType defaultRenderType, long startTime) {
+        GifFrame gifFrame = gifMap.get(stringURL);
+        if (gifFrame == null) return defaultRenderType;
+
+        NavigableMap<Integer, RenderType> frameMap = gifFrame.frameMap;
+        if (frameMap.isEmpty()) return defaultRenderType;
+
+        long elapsed = System.currentTimeMillis() - startTime;
+        int totalDuration = gifFrame.totalDuration;
+        int repetitions = gifFrame.repetitions;
+
+        if (repetitions > 0) {
+            long maxDuration = (long) totalDuration * repetitions;
+            if (elapsed >= maxDuration) {
+                return frameMap.lastEntry().getValue();
             }
         }
+
+        int loopElapsed = (int) (elapsed % totalDuration);
+        Map.Entry<Integer, RenderType> entry = frameMap.higherEntry(loopElapsed);
+        if (entry == null) {
+            return frameMap.firstEntry().getValue();
+        }
+        return entry.getValue();
     }
 }

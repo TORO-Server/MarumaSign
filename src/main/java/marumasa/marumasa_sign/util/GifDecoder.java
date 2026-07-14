@@ -283,7 +283,8 @@ public final class GifDecoder {
                             pos = readGraphicControlExt(frame, in, pos);
                             break;
                         default:
-                            throw new IOException("Unknown extension at " + pos);
+                            pos = readTextExtension(in, pos);
+                            break;
                     }
                     break;
                 case 0x2C:

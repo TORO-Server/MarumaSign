@@ -1,9 +1,11 @@
 package marumasa.marumasa_sign.client.sign;
 
 import marumasa.marumasa_sign.type.CustomSign;
+import marumasa.marumasa_sign.type.CustomSignHolder;
 import marumasa.marumasa_sign.type.TextureURL;
 import marumasa.marumasa_sign.util.GifPlayer;
 import net.minecraft.world.level.block.entity.SignBlockEntity;
+import net.minecraft.world.level.block.entity.SignText;
 import net.minecraft.client.renderer.rendertype.RenderType;
 
 import java.util.HashMap;
@@ -16,6 +18,24 @@ public class CustomSignProvider {
     private static final Map<String, CustomSign> loaded = new java.util.concurrent.ConcurrentHashMap<>();// 読み込み済み看板マップ
 
     public static CustomSign get(SignBlockEntity signBlockEntity) {
+        CustomSignHolder holder = (CustomSignHolder) signBlockEntity;
+        SignText frontText = signBlockEntity.getFrontText();
+        SignText backText = signBlockEntity.getBackText();
+
+        if (frontText == holder.marumasa$getLastFrontText() && backText == holder.marumasa$getLastBackText()) {
+            CustomSign cached = holder.marumasa$getCustomSign();
+            if (cached != null) {
+                if (cached.isLoading()) {
+                    String signText = CustomSign.read(signBlockEntity);
+                    CustomSign latest = loaded.get(signText);
+                    if (latest != null && !latest.isLoading()) {
+                        holder.marumasa$setCustomSign(latest);
+                        return latest;
+                    }
+                }
+                return cached;
+            }
+        }
 
         // 看板に書いてある文字(表面裏面両方)を String に変更
         String signText = CustomSign.read(signBlockEntity);
@@ -23,19 +43,19 @@ public class CustomSignProvider {
         // 読み込み済み看板マップ から 取得
         CustomSign customSign = loaded.get(signText);
 
-        if (customSign != null) return customSign;
-
+        if (customSign != null) {
+            holder.marumasa$setLastFrontText(frontText);
+            holder.marumasa$setLastBackText(backText);
+            holder.marumasa$setCustomSign(customSign);
+            return customSign;
+        }
 
         Object[] parameters = toParameters(signText);
         if (parameters == null || parameters.length != 9) return null;
 
         final String stringURL = (String) parameters[0];
 
-        if (GifPlayer.signTextMap.containsKey(stringURL)) {
-            List<String> signTextList = GifPlayer.signTextMap.get(stringURL);
-            signTextList.add(signText);
-            GifPlayer.signTextMap.put(stringURL, signTextList);
-        }
+
 
         TextureURL textureURL = TextureURLProvider.get(stringURL, signText);
 
@@ -43,6 +63,10 @@ public class CustomSignProvider {
 
         // 読み込み済み看板 追加
         loaded.put(signText, customSign);
+
+        holder.marumasa$setLastFrontText(frontText);
+        holder.marumasa$setLastBackText(backText);
+        holder.marumasa$setCustomSign(customSign);
 
         return customSign;
     }
@@ -54,13 +78,7 @@ public class CustomSignProvider {
         loaded.put(signText, customSign);
     }
  
-    public static void updateSignTexture(String signText, RenderType renderLayer) {
-        CustomSign oldSign = loaded.get(signText);
-        if (oldSign == null) return;
-        CustomSign customSign = new CustomSign(renderLayer, oldSign);
-        loaded.put(signText, customSign);
-    }
- 
+
     public static Object[] toParameters(String signText) {
         if (signText == null) return null;
         try {
@@ -85,8 +103,7 @@ public class CustomSignProvider {
 
     public static void removeCache() {
         loaded.clear();
-        GifPlayer.gifList.clear();
-        GifPlayer.signTextMap.clear();
+        GifPlayer.gifMap.clear();
         TextureURLProvider.removeCache();
     }
 }

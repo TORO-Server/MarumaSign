@@ -23,6 +23,8 @@ import net.minecraft.world.level.block.state.properties.RotationSegment;
 import org.joml.Quaternionf;
 import org.joml.Vector3f;
 import net.minecraft.client.renderer.texture.OverlayTexture;
+import net.minecraft.world.phys.AABB;
+import net.minecraft.core.BlockPos;
 
 public class CustomSignBlockEntityRenderer extends StandingSignRenderer {
 
@@ -88,12 +90,45 @@ public class CustomSignBlockEntityRenderer extends StandingSignRenderer {
 
                 boolean isWallSignBlock = blockState.getBlock() instanceof WallSignBlock;
 
+                // 視錐台カリングの実行
+                final AABB signAABB = calculateSignAABB(customState.customSign, signRotationY, isWallSignBlock, state.blockPos);
+                if (!camera.cullFrustum.isVisible(signAABB)) {
+                    return;
+                }
+
                 render(customState.customSign, signRotationY, isWallSignBlock, poseStack, submitNodeCollector, state.lightCoords, OverlayTexture.NO_OVERLAY);
             }
             return;
         }
 
         super.submit(state, poseStack, submitNodeCollector, camera);
+    }
+
+    private AABB calculateSignAABB(
+            final CustomSign customSign,
+            final Quaternionf signRotationY,
+            final boolean isWallSignBlock,
+            final BlockPos blockPos
+    ) {
+        float moveZ = isWallSignBlock ? 0.4375f * 2 : 0f;
+        final CustomSign.Vertex ver = customSign.vertex;
+        
+        Vector3f[] vertices = new Vector3f[]{
+                ver.mi_mi(),
+                ver.mi_pl(),
+                ver.pl_pl(),
+                ver.pl_mi()
+        };
+        
+        AABB.Builder builder = new AABB.Builder();
+        for (Vector3f v : vertices) {
+            Vector3f transformed = signRotationY.transform(v, new Vector3f());
+            transformed.mul(0.5f);
+            transformed.add(0.5f, 0.5f, 0.5f + moveZ);
+            transformed.add((float) blockPos.getX(), (float) blockPos.getY(), (float) blockPos.getZ());
+            builder.include(transformed);
+        }
+        return builder.build();
     }
 
     public void render(CustomSign customSign, Quaternionf signRotationY, boolean isWallSignBlock, PoseStack poseStack, SubmitNodeCollector submitNodeCollector, int light, int overlay) {
@@ -112,7 +147,7 @@ public class CustomSignBlockEntityRenderer extends StandingSignRenderer {
 
         submitNodeCollector.submitCustomGeometry(
                 poseStack,
-                customSign.renderLayer,
+                customSign.getRenderLayer(),
                 (pose, vertexConsumer) -> {
                     vertexConsumer.addVertex(pose, mi_mi.x, mi_mi.y, mi_mi.z + moveZ)
                             .setColor(255, 255, 255, 255)
@@ -154,5 +189,14 @@ public class CustomSignBlockEntityRenderer extends StandingSignRenderer {
     @Override
     public boolean shouldRenderOffScreen() {
         return true;
+    }
+
+    @Override
+    public boolean shouldRender(final SignBlockEntity blockEntity, final Vec3 cameraPosition) {
+        final CustomSign customSign = CustomSignProvider.get(blockEntity);
+        if (customSign == null) {
+            return Vec3.atCenterOf(blockEntity.getBlockPos()).closerThan(cameraPosition, 64.0);
+        }
+        return Vec3.atCenterOf(blockEntity.getBlockPos()).closerThan(cameraPosition, customSign.getViewDistance());
     }
 }

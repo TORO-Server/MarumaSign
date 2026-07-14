@@ -56,11 +56,8 @@ public class ImageRegister {
                     currentDelay += frame.getDelay();
                     frameMap.put(currentDelay, Utils.getRenderLayer(identifier));
                 }
-                GifPlayer.gifList.add(new GifFrame(stringURL, frameMap, repetitions));
-                List<String> signTextList = TextureURLProvider.loadedTextureURL(stringURL, firstTextureURL);
-                if (signTextList != null) {
-                    GifPlayer.signTextMap.put(stringURL, signTextList);
-                }
+                GifPlayer.gifMap.put(stringURL, new GifFrame(stringURL, frameMap, repetitions));
+                TextureURLProvider.loadedTextureURL(stringURL, firstTextureURL);
             } catch (IOException e) {
                 MarumaSign.LOGGER.error("Failed to register animation texture", e);
             }

@@ -9,14 +9,13 @@ public class GifFrame {
     public final String stringURL;
     public final NavigableMap<Integer, RenderType> frameMap;
     public final int repetitions;
-
-    public volatile int frame = 0;
-    public volatile int repeat_count = 0;
+    public final int totalDuration;
 
     public GifFrame(String stringURL, NavigableMap<Integer, RenderType> frameMap, int repetitions) {
         this.stringURL = stringURL;
         this.frameMap = frameMap;
         this.repetitions = repetitions;
+        this.totalDuration = frameMap.isEmpty() ? 1 : frameMap.lastKey();
         MarumaSign.LOGGER.info(String.valueOf(repetitions));
     }
 }

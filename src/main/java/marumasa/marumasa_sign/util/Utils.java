@@ -21,6 +21,8 @@ import java.net.URL;
 import java.nio.charset.StandardCharsets;
 import java.util.Arrays;
 import java.util.Base64;
+import java.lang.invoke.MethodHandle;
+import java.lang.invoke.MethodHandles;
 
 public class Utils {
 
@@ -82,19 +84,6 @@ public class Utils {
         return false;
     }
 
-    private static Method setPixelMethod = null;
-    static {
-        try {
-            setPixelMethod = NativeImage.class.getMethod("setPixelColor", int.class, int.class, int.class);
-        } catch (NoSuchMethodException e) {
-            try {
-                setPixelMethod = NativeImage.class.getMethod("setPixelRGBA", int.class, int.class, int.class);
-            } catch (NoSuchMethodException ex) {
-                // handle error
-            }
-        }
-    }
-
     public static void registerTexture(Identifier id, int width, int height, int[] pixels) throws IOException {
         NativeImage image = new NativeImage(width, height, false);
         for (int y = 0; y < height; y++) {
@@ -106,13 +95,7 @@ public class Utils {
                 int b = argb & 0xFF;
                 int abgr = (a << 24) | (b << 16) | (g << 8) | r;
 
-                if (setPixelMethod != null) {
-                    try {
-                        setPixelMethod.invoke(image, x, y, abgr);
-                    } catch (Exception e) {
-                        // ignore
-                    }
-                }
+                image.setPixel(x, y, abgr);
             }
         }
         registerTexture(id, image);

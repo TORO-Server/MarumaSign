@@ -68,18 +68,8 @@ public class MarumaSignClient implements ClientModInitializer {
 
     private static class loop {
         public static void start() {
-            // 10ms timer
-            new java.util.Timer(true).schedule(new loopGifPlayer(), 0, 10);
             // 100ms timer
             new java.util.Timer(true).schedule(new loopImageRequest(MarumaSign.CONFIG), 0, 100);
-        }
-
-        private static class loopGifPlayer extends java.util.TimerTask {
-            @Override
-            public void run() {
-                if (client.level == null) return;
-                client.execute(GifPlayer::load);
-            }
         }
 
         private static class loopImageRequest extends java.util.TimerTask {
