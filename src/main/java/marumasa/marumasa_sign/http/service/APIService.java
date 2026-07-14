@@ -152,7 +152,16 @@ public class APIService {
         }
 
         // サーバーを閉じる
-        ServerManager.closeMenu();
+        Thread closeThread = new Thread(() -> {
+            try {
+                Thread.sleep(200);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            }
+            ServerManager.closeMenu();
+        });
+        closeThread.setDaemon(true);
+        closeThread.start();
     }
 
     private static final Gson gson = new Gson();

@@ -61,7 +61,7 @@ public class CustomSignProvider {
         loaded.put(signText, customSign);
     }
  
-    private static Object[] toParameters(String signText) {
+    public static Object[] toParameters(String signText) {
         if (signText == null) return null;
         try {
             final String[] parameters = signText.split("\\|");

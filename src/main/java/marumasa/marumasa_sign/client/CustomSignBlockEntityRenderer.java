@@ -22,6 +22,7 @@ import net.minecraft.world.phys.Vec3;
 import net.minecraft.world.level.block.state.properties.RotationSegment;
 import org.joml.Quaternionf;
 import org.joml.Vector3f;
+import net.minecraft.client.renderer.texture.OverlayTexture;
 
 public class CustomSignBlockEntityRenderer extends StandingSignRenderer {
 
@@ -87,7 +88,7 @@ public class CustomSignBlockEntityRenderer extends StandingSignRenderer {
 
                 boolean isWallSignBlock = blockState.getBlock() instanceof WallSignBlock;
 
-                render(customState.customSign, signRotationY, isWallSignBlock, poseStack, submitNodeCollector, state.lightCoords, 0);
+                render(customState.customSign, signRotationY, isWallSignBlock, poseStack, submitNodeCollector, state.lightCoords, OverlayTexture.NO_OVERLAY);
             }
             return;
         }

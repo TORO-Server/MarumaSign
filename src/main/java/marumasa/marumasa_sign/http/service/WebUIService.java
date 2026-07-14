@@ -26,6 +26,9 @@ public class WebUIService {
     public static void Handle(HttpExchange exchange) throws IOException {
 
         String path = exchange.getRequestURI().getPath();
+        if ("/".equals(path)) {
+            path = "/index.html";
+        }
 
         MarumaSign.LOGGER.info("Requested: {}", path);
 

@@ -4,9 +4,11 @@
   "package": "marumasa.marumasa_sign.mixin",
   "compatibilityLevel": "JAVA_25",
   "mixins": [
-    "SignEditScreenAccessor"
+    "SignEditScreenAccessor",
+    "BlockStateBaseMixin"
   ],
   "client": [
+    "RenderSectionRegionMixin"
   ],
   "injectors": {
     "defaultRequire": 1
