@@ -1,7 +1,7 @@
 package marumasa.marumasa_sign.client.screen;
 
 import marumasa.marumasa_sign.client.sign.CustomSignProvider;
-import marumasa.marumasa_sign.util.ImageRequest;
+import marumasa.marumasa_sign.image.ImageRequest;
 import net.minecraft.client.gui.GuiGraphicsExtractor;
 import net.minecraft.client.gui.screens.Screen;
 import net.minecraft.client.gui.components.Tooltip;
@@ -83,9 +83,9 @@ public class ConfigScreen extends Screen {
     public void extractRenderState(final GuiGraphicsExtractor graphics, int mouseX, int mouseY, final float a) {
         super.extractRenderState(graphics, mouseX, mouseY, a);
         // 非同期処理数 ラベルレンダリング
-        graphics.centeredText(font, Component.translatable("text.maruma_sign.asyncprocessnum"), width / 2 - 155, 65, 0xffffff);
+        graphics.centeredText(font, Component.translatable("text.maruma_sign.asyncprocessnum"), width / 2 - 155, 65, 0xffffffff);
         // 非同期処理数 数字レンダリング
-        graphics.centeredText(font, Component.literal(String.valueOf(CONFIG.getMaxThreads())), width / 2 - 75, 65, 0xffffff);
+        graphics.centeredText(font, Component.literal(String.valueOf(CONFIG.getMaxThreads())), width / 2 - 75, 65, 0xffffffff);
     }
 
 }

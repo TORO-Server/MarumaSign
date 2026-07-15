@@ -1,7 +1,8 @@
-package marumasa.marumasa_sign.util;
+package marumasa.marumasa_sign.image;
 
 import com.google.common.io.BaseEncoding;
 import marumasa.marumasa_sign.MarumaSign;
+import marumasa.marumasa_sign.util.Utils;
 import net.minecraft.resources.Identifier;
 
 import java.io.ByteArrayInputStream;

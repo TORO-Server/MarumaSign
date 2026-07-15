@@ -1,12 +1,10 @@
-package marumasa.marumasa_sign.util;
+package marumasa.marumasa_sign.animation;
 
 import marumasa.marumasa_sign.MarumaSign;
 import marumasa.marumasa_sign.client.sign.CustomSignProvider;
-import marumasa.marumasa_sign.type.GifFrame;
 import net.minecraft.client.renderer.rendertype.RenderType;
 
 import java.util.*;
-
 
 public class GifPlayer {
     public static final Map<String, GifFrame> gifMap = new java.util.concurrent.ConcurrentHashMap<>();

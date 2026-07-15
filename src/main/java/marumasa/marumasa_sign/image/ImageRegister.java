@@ -1,11 +1,16 @@
-package marumasa.marumasa_sign.util;
+package marumasa.marumasa_sign.image;
 
 import marumasa.marumasa_sign.MarumaSign;
 import marumasa.marumasa_sign.client.sign.TextureURLProvider;
-import marumasa.marumasa_sign.type.GifFrame;
-import marumasa.marumasa_sign.type.TextureURL;
-import marumasa.marumasa_sign.type.DecodedAnimation;
-import marumasa.marumasa_sign.type.AnimationFrame;
+import marumasa.marumasa_sign.animation.AnimationFrame;
+import marumasa.marumasa_sign.animation.DecodedAnimation;
+import marumasa.marumasa_sign.animation.GifFrame;
+import marumasa.marumasa_sign.animation.GifPlayer;
+import marumasa.marumasa_sign.animation.ApngDecoder;
+import marumasa.marumasa_sign.animation.GifDecoder;
+import marumasa.marumasa_sign.animation.WebpDecoder;
+import marumasa.marumasa_sign.model.TextureURL;
+import marumasa.marumasa_sign.util.Utils;
 import net.minecraft.client.renderer.rendertype.RenderType;
 import com.mojang.blaze3d.platform.NativeImage;
 import net.minecraft.resources.Identifier;

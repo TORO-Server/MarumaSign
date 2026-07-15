@@ -1,7 +1,4 @@
-package marumasa.marumasa_sign.util;
-
-import marumasa.marumasa_sign.type.AnimationFrame;
-import marumasa.marumasa_sign.type.DecodedAnimation;
+package marumasa.marumasa_sign.animation;
 
 import javax.imageio.ImageIO;
 import java.awt.image.BufferedImage;
