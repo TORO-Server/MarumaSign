@@ -4,6 +4,9 @@ import marumasa.marumasa_sign.model.CustomSign;
 import marumasa.marumasa_sign.model.CustomSignHolder;
 import marumasa.marumasa_sign.model.TextureURL;
 import marumasa.marumasa_sign.animation.GifPlayer;
+import marumasa.marumasa_sign.animation.GifFrame;
+import marumasa.marumasa_sign.util.Utils;
+import net.minecraft.resources.Identifier;
 import net.minecraft.world.level.block.entity.SignBlockEntity;
 import net.minecraft.world.level.block.entity.SignText;
 import net.minecraft.client.renderer.rendertype.RenderType;
@@ -105,6 +108,13 @@ public class CustomSignProvider {
     public static void removeCache() {
         cacheVersion++;
         loaded.clear();
+        for (GifFrame gifFrame : GifPlayer.gifMap.values()) {
+            if (gifFrame.identifiers != null) {
+                for (Identifier id : gifFrame.identifiers) {
+                    Utils.destroyTexture(id);
+                }
+            }
+        }
         GifPlayer.gifMap.clear();
         TextureURLProvider.removeCache();
     }

@@ -124,7 +124,7 @@ public class CustomSignBlockEntityRenderer extends StandingSignRenderer {
             final boolean isWallSignBlock,
             final BlockPos blockPos
     ) {
-        float moveZ = isWallSignBlock ? 0.4375f * 2 : 0f;
+        final float moveZ = isWallSignBlock ? 0.4375f * 2 : 0f;
         final CustomSign.Vertex ver = customSign.vertex;
         
         final Vector3f temp = new Vector3f();
@@ -139,41 +139,31 @@ public class CustomSignBlockEntityRenderer extends StandingSignRenderer {
         final float py = (float) blockPos.getY();
         final float pz = (float) blockPos.getZ();
 
-        // 1: mi_mi
-        signRotationY.transform(ver.mi_mi(), temp);
-        float x = temp.x * 0.5f + 0.5f + px;
-        float y = temp.y * 0.5f + 0.5f + py;
-        float z = temp.z * 0.5f + 0.5f + moveZ + pz;
-        if (x < minX) minX = x; if (x > maxX) maxX = x;
-        if (y < minY) minY = y; if (y > maxY) maxY = y;
-        if (z < minZ) minZ = z; if (z > maxZ) maxZ = z;
+        final Vector3f[] vertices = {
+                ver.mi_mi(), ver.mi_pl(), ver.pl_pl(), ver.pl_mi()
+        };
 
-        // 2: mi_pl
-        signRotationY.transform(ver.mi_pl(), temp);
-        x = temp.x * 0.5f + 0.5f + px;
-        y = temp.y * 0.5f + 0.5f + py;
-        z = temp.z * 0.5f + 0.5f + moveZ + pz;
-        if (x < minX) minX = x; if (x > maxX) maxX = x;
-        if (y < minY) minY = y; if (y > maxY) maxY = y;
-        if (z < minZ) minZ = z; if (z > maxZ) maxZ = z;
+        for (Vector3f v : vertices) {
+            // Front face offset
+            temp.set(v.x, v.y, v.z + moveZ + 0.005f);
+            signRotationY.transform(temp);
+            float x = temp.x * 0.5f + 0.5f + px;
+            float y = temp.y * 0.5f + 0.5f + py;
+            float z = temp.z * 0.5f + 0.5f + pz;
+            if (x < minX) minX = x; if (x > maxX) maxX = x;
+            if (y < minY) minY = y; if (y > maxY) maxY = y;
+            if (z < minZ) minZ = z; if (z > maxZ) maxZ = z;
 
-        // 3: pl_pl
-        signRotationY.transform(ver.pl_pl(), temp);
-        x = temp.x * 0.5f + 0.5f + px;
-        y = temp.y * 0.5f + 0.5f + py;
-        z = temp.z * 0.5f + 0.5f + moveZ + pz;
-        if (x < minX) minX = x; if (x > maxX) maxX = x;
-        if (y < minY) minY = y; if (y > maxY) maxY = y;
-        if (z < minZ) minZ = z; if (z > maxZ) maxZ = z;
-
-        // 4: pl_mi
-        signRotationY.transform(ver.pl_mi(), temp);
-        x = temp.x * 0.5f + 0.5f + px;
-        y = temp.y * 0.5f + 0.5f + py;
-        z = temp.z * 0.5f + 0.5f + moveZ + pz;
-        if (x < minX) minX = x; if (x > maxX) maxX = x;
-        if (y < minY) minY = y; if (y > maxY) maxY = y;
-        if (z < minZ) minZ = z; if (z > maxZ) maxZ = z;
+            // Back face offset
+            temp.set(v.x, v.y, v.z + moveZ - 0.005f);
+            signRotationY.transform(temp);
+            x = temp.x * 0.5f + 0.5f + px;
+            y = temp.y * 0.5f + 0.5f + py;
+            z = temp.z * 0.5f + 0.5f + pz;
+            if (x < minX) minX = x; if (x > maxX) maxX = x;
+            if (y < minY) minY = y; if (y > maxY) maxY = y;
+            if (z < minZ) minZ = z; if (z > maxZ) maxZ = z;
+        }
 
         return new AABB(minX, minY, minZ, maxX, maxY, maxZ);
     }

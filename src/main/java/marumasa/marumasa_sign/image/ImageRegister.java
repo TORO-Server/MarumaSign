@@ -49,10 +49,12 @@ public class ImageRegister {
         net.minecraft.client.Minecraft.getInstance().execute(() -> {
             try {
                 final NavigableMap<Integer, RenderType> frameMap = new TreeMap<>();
+                final List<Identifier> identifiers = new java.util.ArrayList<>();
                 TextureURL firstTextureURL = TextureURL.error;
                 int currentDelay = 0;
                 for (int i = 0; i < frameCount; i++) {
                     Identifier identifier = Identifier.fromNamespaceAndPath(MarumaSign.MOD_ID, path + "/" + i);
+                    identifiers.add(identifier);
                     if (i == 0) {
                         firstTextureURL = new TextureURL(identifier, width, height);
                     }
@@ -61,7 +63,7 @@ public class ImageRegister {
                     currentDelay += frame.getDelay();
                     frameMap.put(currentDelay, Utils.getRenderLayer(identifier));
                 }
-                GifPlayer.gifMap.put(stringURL, new GifFrame(stringURL, frameMap, repetitions));
+                GifPlayer.gifMap.put(stringURL, new GifFrame(stringURL, frameMap, repetitions, identifiers));
                 TextureURLProvider.loadedTextureURL(stringURL, firstTextureURL);
             } catch (IOException e) {
                 MarumaSign.LOGGER.error("Failed to register animation texture", e);
