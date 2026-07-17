@@ -1,4 +1,4 @@
-package marumasa.marumasa_sign.type;
+package marumasa.marumasa_sign.model;
 
 import marumasa.marumasa_sign.MarumaSign;
 import net.minecraft.resources.Identifier;

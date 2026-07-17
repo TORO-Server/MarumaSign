@@ -1,7 +1,7 @@
 package marumasa.marumasa_sign.mixin;
 
 import marumasa.marumasa_sign.client.sign.CustomSignProvider;
-import marumasa.marumasa_sign.type.CustomSign;
+import marumasa.marumasa_sign.model.CustomSign;
 import marumasa.marumasa_sign.util.SignRenderCanceledThreadLocal;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.renderer.block.BlockAndTintGetter;

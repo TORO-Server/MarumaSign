@@ -1,7 +1,8 @@
 package marumasa.marumasa_sign.client;
 
 import marumasa.marumasa_sign.client.sign.CustomSignProvider;
-import marumasa.marumasa_sign.type.CustomSign;
+import marumasa.marumasa_sign.model.CustomSign;
+import marumasa.marumasa_sign.model.CustomSignHolder;
 import net.minecraft.world.level.block.SignBlock;
 import net.minecraft.world.level.block.Block;
 import net.minecraft.world.level.block.state.BlockState;
@@ -39,6 +40,9 @@ public class CustomSignBlockEntityRenderer extends StandingSignRenderer {
         public CustomSign customSign;
         public boolean isSpectator;
         public BlockState blockState;
+        public final Quaternionf signRotationY = new Quaternionf();
+        public boolean isWallSignBlock;
+        public AABB signAABB;
     }
 
     @Override
@@ -57,10 +61,36 @@ public class CustomSignBlockEntityRenderer extends StandingSignRenderer {
         super.extractRenderState(blockEntity, state, partialTicks, cameraPosition, breakProgress);
 
         if (state instanceof CustomSignRenderState customState) {
-            customState.customSign = CustomSignProvider.get(blockEntity);
-            customState.blockState = blockEntity.getBlockState();
+            final CustomSign customSign = CustomSignProvider.get(blockEntity);
+            customState.customSign = customSign;
+            final BlockState blockState = blockEntity.getBlockState();
+            customState.blockState = blockState;
             final LocalPlayer player = client.player;
             customState.isSpectator = player != null && player.isSpectator();
+
+            if (customSign != null) {
+                final Block block = blockState.getBlock();
+                if (block instanceof SignBlock) {
+                    final boolean isWallSign = block instanceof WallSignBlock;
+                    customState.isWallSignBlock = isWallSign;
+
+                    float rot;
+                    if (isWallSign) {
+                        rot = blockState.getValue(WallSignBlock.FACING).toYRot();
+                    } else {
+                        rot = RotationSegment.convertToDegrees(blockState.getValue(StandingSignBlock.ROTATION));
+                    }
+                    customState.signRotationY.fromAxisAngleDeg(0, 1, 0, -rot - 180);
+
+                    final CustomSignHolder holder = (CustomSignHolder) blockEntity;
+                    AABB aabb = holder.marumasa$getCustomSignAABB();
+                    if (aabb == null) {
+                        aabb = calculateSignAABB(customSign, customState.signRotationY, isWallSign, blockEntity.getBlockPos());
+                        holder.marumasa$setCustomSignAABB(aabb);
+                    }
+                    customState.signAABB = aabb;
+                }
+            }
         }
     }
 
@@ -76,28 +106,12 @@ public class CustomSignBlockEntityRenderer extends StandingSignRenderer {
                 super.submit(state, poseStack, submitNodeCollector, camera);
             }
 
-            final BlockState blockState = customState.blockState;
-            final Block block = blockState.getBlock();
-            if (block instanceof SignBlock signBlock) {
-                Quaternionf signRotationY = new Quaternionf();
-                float rot;
-                if (blockState.getBlock() instanceof WallSignBlock) {
-                    rot = blockState.getValue(WallSignBlock.FACING).toYRot();
-                } else {
-                    rot = RotationSegment.convertToDegrees(blockState.getValue(StandingSignBlock.ROTATION));
-                }
-                signRotationY.fromAxisAngleDeg(0, 1, 0, -rot - 180);
-
-                boolean isWallSignBlock = blockState.getBlock() instanceof WallSignBlock;
-
-                // 視錐台カリングの実行
-                final AABB signAABB = calculateSignAABB(customState.customSign, signRotationY, isWallSignBlock, state.blockPos);
-                if (!camera.cullFrustum.isVisible(signAABB)) {
-                    return;
-                }
-
-                render(customState.customSign, signRotationY, isWallSignBlock, poseStack, submitNodeCollector, state.lightCoords, OverlayTexture.NO_OVERLAY);
+            // 視錐台カリングの実行
+            if (customState.signAABB != null && !camera.cullFrustum.isVisible(customState.signAABB)) {
+                return;
             }
+
+            render(customState.customSign, customState.signRotationY, customState.isWallSignBlock, poseStack, submitNodeCollector, state.lightCoords, OverlayTexture.NO_OVERLAY);
             return;
         }
 
@@ -110,25 +124,48 @@ public class CustomSignBlockEntityRenderer extends StandingSignRenderer {
             final boolean isWallSignBlock,
             final BlockPos blockPos
     ) {
-        float moveZ = isWallSignBlock ? 0.4375f * 2 : 0f;
+        final float moveZ = isWallSignBlock ? 0.4375f * 2 : 0f;
         final CustomSign.Vertex ver = customSign.vertex;
         
-        Vector3f[] vertices = new Vector3f[]{
-                ver.mi_mi(),
-                ver.mi_pl(),
-                ver.pl_pl(),
-                ver.pl_mi()
+        final Vector3f temp = new Vector3f();
+        float minX = Float.POSITIVE_INFINITY;
+        float minY = Float.POSITIVE_INFINITY;
+        float minZ = Float.POSITIVE_INFINITY;
+        float maxX = Float.NEGATIVE_INFINITY;
+        float maxY = Float.NEGATIVE_INFINITY;
+        float maxZ = Float.NEGATIVE_INFINITY;
+
+        final float px = (float) blockPos.getX();
+        final float py = (float) blockPos.getY();
+        final float pz = (float) blockPos.getZ();
+
+        final Vector3f[] vertices = {
+                ver.mi_mi(), ver.mi_pl(), ver.pl_pl(), ver.pl_mi()
         };
-        
-        AABB.Builder builder = new AABB.Builder();
+
         for (Vector3f v : vertices) {
-            Vector3f transformed = signRotationY.transform(v, new Vector3f());
-            transformed.mul(0.5f);
-            transformed.add(0.5f, 0.5f, 0.5f + moveZ);
-            transformed.add((float) blockPos.getX(), (float) blockPos.getY(), (float) blockPos.getZ());
-            builder.include(transformed);
+            // Front face offset
+            temp.set(v.x, v.y, v.z + moveZ + 0.005f);
+            signRotationY.transform(temp);
+            float x = temp.x * 0.5f + 0.5f + px;
+            float y = temp.y * 0.5f + 0.5f + py;
+            float z = temp.z * 0.5f + 0.5f + pz;
+            if (x < minX) minX = x; if (x > maxX) maxX = x;
+            if (y < minY) minY = y; if (y > maxY) maxY = y;
+            if (z < minZ) minZ = z; if (z > maxZ) maxZ = z;
+
+            // Back face offset
+            temp.set(v.x, v.y, v.z + moveZ - 0.005f);
+            signRotationY.transform(temp);
+            x = temp.x * 0.5f + 0.5f + px;
+            y = temp.y * 0.5f + 0.5f + py;
+            z = temp.z * 0.5f + 0.5f + pz;
+            if (x < minX) minX = x; if (x > maxX) maxX = x;
+            if (y < minY) minY = y; if (y > maxY) maxY = y;
+            if (z < minZ) minZ = z; if (z > maxZ) maxZ = z;
         }
-        return builder.build();
+
+        return new AABB(minX, minY, minZ, maxX, maxY, maxZ);
     }
 
     public void render(CustomSign customSign, Quaternionf signRotationY, boolean isWallSignBlock, PoseStack poseStack, SubmitNodeCollector submitNodeCollector, int light, int overlay) {
@@ -149,33 +186,63 @@ public class CustomSignBlockEntityRenderer extends StandingSignRenderer {
                 poseStack,
                 customSign.getRenderLayer(),
                 (pose, vertexConsumer) -> {
-                    vertexConsumer.addVertex(pose, mi_mi.x, mi_mi.y, mi_mi.z + moveZ)
+                    // Front face
+                    vertexConsumer.addVertex(pose, mi_mi.x, mi_mi.y, mi_mi.z + moveZ + 0.005F)
                             .setColor(255, 255, 255, 255)
                             .setUv(1, 1)
                             .setOverlay(overlay)
                             .setLight(light)
-                            .setNormal(pose, 0.0F, 1.0F, 0.0F);
+                            .setNormal(pose, 0.0F, 0.0F, 1.0F);
 
-                    vertexConsumer.addVertex(pose, mi_pl.x, mi_pl.y, mi_pl.z + moveZ)
+                    vertexConsumer.addVertex(pose, mi_pl.x, mi_pl.y, mi_pl.z + moveZ + 0.005F)
                             .setColor(255, 255, 255, 255)
                             .setUv(1, 0)
                             .setOverlay(overlay)
                             .setLight(light)
-                            .setNormal(pose, 0.0F, 1.0F, 0.0F);
+                            .setNormal(pose, 0.0F, 0.0F, 1.0F);
 
-                    vertexConsumer.addVertex(pose, pl_pl.x, pl_pl.y, pl_pl.z + moveZ)
+                    vertexConsumer.addVertex(pose, pl_pl.x, pl_pl.y, pl_pl.z + moveZ + 0.005F)
                             .setColor(255, 255, 255, 255)
                             .setUv(0, 0)
                             .setOverlay(overlay)
                             .setLight(light)
-                            .setNormal(pose, 0.0F, 1.0F, 0.0F);
+                            .setNormal(pose, 0.0F, 0.0F, 1.0F);
 
-                    vertexConsumer.addVertex(pose, pl_mi.x, pl_mi.y, pl_mi.z + moveZ)
+                    vertexConsumer.addVertex(pose, pl_mi.x, pl_mi.y, pl_mi.z + moveZ + 0.005F)
                             .setColor(255, 255, 255, 255)
                             .setUv(0, 1)
                             .setOverlay(overlay)
                             .setLight(light)
-                            .setNormal(pose, 0.0F, 1.0F, 0.0F);
+                            .setNormal(pose, 0.0F, 0.0F, 1.0F);
+
+                    // Back face
+                    vertexConsumer.addVertex(pose, pl_mi.x, pl_mi.y, pl_mi.z + moveZ - 0.005F)
+                            .setColor(255, 255, 255, 255)
+                            .setUv(0, 1)
+                            .setOverlay(overlay)
+                            .setLight(light)
+                            .setNormal(pose, 0.0F, 0.0F, -1.0F);
+
+                    vertexConsumer.addVertex(pose, pl_pl.x, pl_pl.y, pl_pl.z + moveZ - 0.005F)
+                            .setColor(255, 255, 255, 255)
+                            .setUv(0, 0)
+                            .setOverlay(overlay)
+                            .setLight(light)
+                            .setNormal(pose, 0.0F, 0.0F, -1.0F);
+
+                    vertexConsumer.addVertex(pose, mi_pl.x, mi_pl.y, mi_pl.z + moveZ - 0.005F)
+                            .setColor(255, 255, 255, 255)
+                            .setUv(1, 0)
+                            .setOverlay(overlay)
+                            .setLight(light)
+                            .setNormal(pose, 0.0F, 0.0F, -1.0F);
+
+                    vertexConsumer.addVertex(pose, mi_mi.x, mi_mi.y, mi_mi.z + moveZ - 0.005F)
+                            .setColor(255, 255, 255, 255)
+                            .setUv(1, 1)
+                            .setOverlay(overlay)
+                            .setLight(light)
+                            .setNormal(pose, 0.0F, 0.0F, -1.0F);
                 }
         );
         poseStack.popPose();

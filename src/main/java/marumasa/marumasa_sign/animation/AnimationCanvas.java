@@ -1,4 +1,4 @@
-package marumasa.marumasa_sign.util;
+package marumasa.marumasa_sign.animation;
 
 public class AnimationCanvas {
     private final int width;

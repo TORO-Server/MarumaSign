@@ -1,6 +1,8 @@
-package marumasa.marumasa_sign.type;
+package marumasa.marumasa_sign.model;
 
 import marumasa.marumasa_sign.util.Utils;
+import marumasa.marumasa_sign.client.sign.CustomSignProvider;
+import marumasa.marumasa_sign.animation.GifPlayer;
 import net.minecraft.world.level.block.entity.SignBlockEntity;
 import net.minecraft.client.renderer.rendertype.RenderType;
 import net.minecraft.network.chat.Component;
@@ -16,6 +18,7 @@ public class CustomSign {
     private final double viewDistance;
     private final boolean isAnimated;
     private final boolean isLoading;
+    private final int cacheVersion;
 
     public CustomSign(TextureURL textureURL, Object[] parameters) {
         this(new CustomSignParameters(
@@ -34,6 +37,7 @@ public class CustomSign {
     public CustomSign(CustomSignParameters csp, String stringURL) {
         this.stringURL = stringURL;
         this.startTime = System.currentTimeMillis();
+        this.cacheVersion = CustomSignProvider.cacheVersion;
 
         // getEntityTranslucent で 透過と半透明と裏面表示 対応の RenderLayer 生成
         this.renderLayer = Utils.getRenderLayer(csp.textureURL != null ? csp.textureURL.identifier() : TextureURL.error.identifier());
@@ -67,7 +71,7 @@ public class CustomSign {
         maxDistSqr = Math.max(maxDistSqr, this.vertex.pl_mi().lengthSquared());
         double maxOffset = Math.sqrt(maxDistSqr);
         this.viewDistance = Math.min(512.0, 64.0 + maxOffset * 2.0);
-        this.isAnimated = marumasa.marumasa_sign.util.GifPlayer.gifMap.containsKey(stringURL);
+        this.isAnimated = GifPlayer.gifMap.containsKey(stringURL);
         this.isLoading = (csp.textureURL == TextureURL.loading);
     }
 
@@ -75,7 +79,7 @@ public class CustomSign {
         if (!this.isAnimated) {
             return this.renderLayer;
         }
-        return marumasa.marumasa_sign.util.GifPlayer.getRenderType(this.stringURL, this.renderLayer, this.startTime);
+        return GifPlayer.getRenderType(this.stringURL, this.renderLayer, this.startTime);
     }
 
     public double getViewDistance() {
@@ -84,6 +88,10 @@ public class CustomSign {
 
     public boolean isLoading() {
         return isLoading;
+    }
+
+    public int getCacheVersion() {
+        return cacheVersion;
     }
 
     public static String read(SignBlockEntity sign) {

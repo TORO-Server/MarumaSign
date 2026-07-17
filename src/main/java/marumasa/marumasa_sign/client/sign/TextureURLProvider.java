@@ -1,7 +1,7 @@
 package marumasa.marumasa_sign.client.sign;
 
-import marumasa.marumasa_sign.type.TextureURL;
-import marumasa.marumasa_sign.util.ImageRequest;
+import marumasa.marumasa_sign.model.TextureURL;
+import marumasa.marumasa_sign.image.ImageRequest;
 import marumasa.marumasa_sign.util.Utils;
 
 import java.util.*;
