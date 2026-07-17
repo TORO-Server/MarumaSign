@@ -44,6 +44,23 @@ public class CustomSignProvider {
         // 看板に書いてある文字(表面裏面両方)を String に変更
         String signText = CustomSign.read(signBlockEntity);
 
+        // テキスト更新時のチャンク再描画トリガー
+        boolean wasCustom = false;
+        CustomSign lastSign = holder.marumasa$getCustomSign();
+        if (lastSign != null && !lastSign.isLoading()) {
+            wasCustom = true;
+        }
+        boolean isCustom = (CustomSignProvider.toParameters(signText) != null);
+
+        if (wasCustom || isCustom) {
+            net.minecraft.world.level.Level level = signBlockEntity.getLevel();
+            if (level != null && level.isClientSide()) {
+                net.minecraft.core.BlockPos pos = signBlockEntity.getBlockPos();
+                net.minecraft.world.level.block.state.BlockState state = signBlockEntity.getBlockState();
+                level.sendBlockUpdated(pos, state, state, 3);
+            }
+        }
+
         // 読み込み済み看板マップ から 取得
         CustomSign customSign = loaded.get(signText);
 
