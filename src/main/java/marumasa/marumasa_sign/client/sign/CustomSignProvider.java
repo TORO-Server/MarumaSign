@@ -1,9 +1,12 @@
 package marumasa.marumasa_sign.client.sign;
 
-import marumasa.marumasa_sign.type.CustomSign;
-import marumasa.marumasa_sign.type.CustomSignHolder;
-import marumasa.marumasa_sign.type.TextureURL;
-import marumasa.marumasa_sign.util.GifPlayer;
+import marumasa.marumasa_sign.model.CustomSign;
+import marumasa.marumasa_sign.model.CustomSignHolder;
+import marumasa.marumasa_sign.model.TextureURL;
+import marumasa.marumasa_sign.animation.GifPlayer;
+import marumasa.marumasa_sign.animation.GifFrame;
+import marumasa.marumasa_sign.util.Utils;
+import net.minecraft.resources.Identifier;
 import net.minecraft.world.level.block.entity.SignBlockEntity;
 import net.minecraft.world.level.block.entity.SignText;
 import net.minecraft.client.renderer.rendertype.RenderType;
@@ -16,6 +19,7 @@ import java.util.Objects;
 public class CustomSignProvider {
 
     private static final Map<String, CustomSign> loaded = new java.util.concurrent.ConcurrentHashMap<>();// 読み込み済み看板マップ
+    public static int cacheVersion = 0; // キャッシュ削除の世代管理用
 
     public static CustomSign get(SignBlockEntity signBlockEntity) {
         CustomSignHolder holder = (CustomSignHolder) signBlockEntity;
@@ -24,7 +28,7 @@ public class CustomSignProvider {
 
         if (frontText == holder.marumasa$getLastFrontText() && backText == holder.marumasa$getLastBackText()) {
             CustomSign cached = holder.marumasa$getCustomSign();
-            if (cached != null) {
+            if (cached != null && cached.getCacheVersion() == cacheVersion) {
                 if (cached.isLoading()) {
                     String signText = CustomSign.read(signBlockEntity);
                     CustomSign latest = loaded.get(signText);
@@ -102,7 +106,15 @@ public class CustomSignProvider {
 
 
     public static void removeCache() {
+        cacheVersion++;
         loaded.clear();
+        for (GifFrame gifFrame : GifPlayer.gifMap.values()) {
+            if (gifFrame.identifiers != null) {
+                for (Identifier id : gifFrame.identifiers) {
+                    Utils.destroyTexture(id);
+                }
+            }
+        }
         GifPlayer.gifMap.clear();
         TextureURLProvider.removeCache();
     }

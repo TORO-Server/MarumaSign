@@ -1,4 +1,4 @@
-package marumasa.marumasa_sign.type;
+package marumasa.marumasa_sign.animation;
 
 import java.util.List;
 

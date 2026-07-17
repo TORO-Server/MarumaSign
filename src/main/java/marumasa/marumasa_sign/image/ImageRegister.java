@@ -1,11 +1,16 @@
-package marumasa.marumasa_sign.util;
+package marumasa.marumasa_sign.image;
 
 import marumasa.marumasa_sign.MarumaSign;
 import marumasa.marumasa_sign.client.sign.TextureURLProvider;
-import marumasa.marumasa_sign.type.GifFrame;
-import marumasa.marumasa_sign.type.TextureURL;
-import marumasa.marumasa_sign.type.DecodedAnimation;
-import marumasa.marumasa_sign.type.AnimationFrame;
+import marumasa.marumasa_sign.animation.AnimationFrame;
+import marumasa.marumasa_sign.animation.DecodedAnimation;
+import marumasa.marumasa_sign.animation.GifFrame;
+import marumasa.marumasa_sign.animation.GifPlayer;
+import marumasa.marumasa_sign.animation.ApngDecoder;
+import marumasa.marumasa_sign.animation.GifDecoder;
+import marumasa.marumasa_sign.animation.WebpDecoder;
+import marumasa.marumasa_sign.model.TextureURL;
+import marumasa.marumasa_sign.util.Utils;
 import net.minecraft.client.renderer.rendertype.RenderType;
 import com.mojang.blaze3d.platform.NativeImage;
 import net.minecraft.resources.Identifier;
@@ -44,10 +49,12 @@ public class ImageRegister {
         net.minecraft.client.Minecraft.getInstance().execute(() -> {
             try {
                 final NavigableMap<Integer, RenderType> frameMap = new TreeMap<>();
+                final List<Identifier> identifiers = new java.util.ArrayList<>();
                 TextureURL firstTextureURL = TextureURL.error;
                 int currentDelay = 0;
                 for (int i = 0; i < frameCount; i++) {
                     Identifier identifier = Identifier.fromNamespaceAndPath(MarumaSign.MOD_ID, path + "/" + i);
+                    identifiers.add(identifier);
                     if (i == 0) {
                         firstTextureURL = new TextureURL(identifier, width, height);
                     }
@@ -56,7 +63,7 @@ public class ImageRegister {
                     currentDelay += frame.getDelay();
                     frameMap.put(currentDelay, Utils.getRenderLayer(identifier));
                 }
-                GifPlayer.gifMap.put(stringURL, new GifFrame(stringURL, frameMap, repetitions));
+                GifPlayer.gifMap.put(stringURL, new GifFrame(stringURL, frameMap, repetitions, identifiers));
                 TextureURLProvider.loadedTextureURL(stringURL, firstTextureURL);
             } catch (IOException e) {
                 MarumaSign.LOGGER.error("Failed to register animation texture", e);

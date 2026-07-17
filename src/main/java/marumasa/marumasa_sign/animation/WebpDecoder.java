@@ -1,7 +1,5 @@
-package marumasa.marumasa_sign.util;
+package marumasa.marumasa_sign.animation;
 
-import marumasa.marumasa_sign.type.AnimationFrame;
-import marumasa.marumasa_sign.type.DecodedAnimation;
 import com.mojang.blaze3d.platform.NativeImage;
 
 import java.io.ByteArrayInputStream;

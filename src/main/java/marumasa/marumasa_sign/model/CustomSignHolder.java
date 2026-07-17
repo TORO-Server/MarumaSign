@@ -1,6 +1,7 @@
-package marumasa.marumasa_sign.type;
+package marumasa.marumasa_sign.model;
 
 import net.minecraft.world.level.block.entity.SignText;
+import net.minecraft.world.phys.AABB;
 
 public interface CustomSignHolder {
     CustomSign marumasa$getCustomSign();
@@ -9,4 +10,7 @@ public interface CustomSignHolder {
     void marumasa$setLastFrontText(SignText frontText);
     SignText marumasa$getLastBackText();
     void marumasa$setLastBackText(SignText backText);
+
+    AABB marumasa$getCustomSignAABB();
+    void marumasa$setCustomSignAABB(AABB aabb);
 }
