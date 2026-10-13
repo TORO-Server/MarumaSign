@@ -5,6 +5,7 @@ import net.minecraft.client.Minecraft;
 import net.minecraft.client.renderer.OpenGlHelper;
 import net.minecraft.client.renderer.tileentity.TileEntityRendererDispatcher;
 import net.minecraft.init.Items;
+import net.minecraft.item.ItemStack;
 import net.minecraft.tileentity.TileEntitySign;
 import net.minecraft.util.text.TextComponentString;
 
@@ -106,7 +107,8 @@ final class Mc {
     // ホットバーにある看板を手に持つ
     static void selectSign() {
         for (int slot = 0; slot < 9; slot++) {
-            if (mc.player.inventory.mainInventory.get(slot).getItem() == Items.SIGN) {
+            final ItemStack stack = mc.player.inventory.mainInventory.get(slot);
+            if (stack != null && stack.getItem() == Items.SIGN) {
                 mc.player.inventory.currentItem = slot;
             }
         }
