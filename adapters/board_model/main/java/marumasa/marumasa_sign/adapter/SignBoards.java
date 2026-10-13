@@ -44,6 +44,8 @@ final class SignBoards {
 
     // 看板のブロックのモデルがまだ包まれていなければ包む。リソースの再読み込みで元に戻るため、毎 tick 確認する
     static void install(Minecraft mc) {
+        // ブロックのモデルは、ワールドに入る前にはまだ読み込まれていないことがある
+        if (mc.level == null) return;
         final ModelManager manager = mc.getModelManager();
         if (manager == null) return;
         final BlockStateModelSet set = manager.getBlockStateModelSet();
