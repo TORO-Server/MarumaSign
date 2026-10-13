@@ -961,8 +961,9 @@ def run(args):
                 if grab_screen(shot):
                     result["item_visible"], result["item_detail"] = analyze_item_view(shot)
                 item_stage = "done"
-            if args.baseline and joined_handled and time.time() - joined_at > 25:
+            if args.baseline and joined_handled and time.time() - joined_at > (75 if shaders else 25):
                 # 基準の取得では、ワールドに入ってしばらくしたら終了する
+                # (シェーダーは、ワールドに入ってからの準備に時間がかかり、その間に警告を出すので長く待つ)
                 result["detail"] = "baseline"
                 break
             time.sleep(0.5)
