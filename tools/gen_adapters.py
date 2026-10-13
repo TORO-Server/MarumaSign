@@ -1351,11 +1351,20 @@ final class SignRendererBase extends BlockEntityRenderer<SignBlockEntity> {
         }
         final SignImage.Batch[] batches = image.batches(yaw, wall, Math.sqrt(x * x + y * y + z * z));
 
+        GL11.glPushMatrix();
+        GL11.glTranslated(x, y, z);
+        drawBatches(batches);
+        GL11.glPopMatrix();
+        MarumaSign.drawn(image);
+    }
+
+    /**
+     * 四角形のまとまりを、現在の座標系に描く。看板のアイテムを描くときにも使う。
+     */
+    static void drawBatches(SignImage.Batch[] batches) {
         // 変更した状態は glPopAttrib で元に戻す
         GL11.glPushAttrib(GL11.GL_ENABLE_BIT | GL11.GL_COLOR_BUFFER_BIT | GL11.GL_CURRENT_BIT | GL11.GL_LIGHTING_BIT
                 | GL11.GL_DEPTH_BUFFER_BIT);
-        GL11.glPushMatrix();
-        GL11.glTranslated(x, y, z);
         GL11.glDisable(GL11.GL_LIGHTING);
         GL11.glEnable(GL11.GL_TEXTURE_2D);
         GL11.glEnable(GL11.GL_DEPTH_TEST);
@@ -1365,7 +1374,7 @@ final class SignRendererBase extends BlockEntityRenderer<SignBlockEntity> {
         GL11.glColor4f(1f, 1f, 1f, 1f);
 
         for (SignImage.Batch batch : batches) {
-            mc.getTextureManager().bind(((Tex) batch.texture).id);
+            Minecraft.getInstance().getTextureManager().bind(((Tex) batch.texture).id);
             if (batch.colors != null) {
                 // 3D モデルは裏を向いた面と、透明な部分を描かない
                 GL11.glEnable(GL11.GL_CULL_FACE);
@@ -1384,10 +1393,7 @@ final class SignRendererBase extends BlockEntityRenderer<SignBlockEntity> {
             }
             GL11.glEnd();
         }
-
-        GL11.glPopMatrix();
         GL11.glPopAttrib();
-        MarumaSign.drawn(image);
     }
 
     @Override
@@ -1406,6 +1412,7 @@ import org.lwjgl.opengl.GL11;
 import org.lwjgl.opengl.GL13;
 import org.lwjgl.opengl.GL15;
 
+import java.nio.Buffer;
 import java.nio.ByteBuffer;
 import java.nio.FloatBuffer;
 import java.util.Map;
@@ -1443,16 +1450,17 @@ final class ModelArrays {
             BUFFERS.put(batch, buffers);
         }
         if (buffers.revision != batch.revision) {
-            // 内容が変わったときだけ詰め直す
-            buffers.vertices.clear();
+            // 内容が変わったときだけ詰め直す。
+            // clear などは、新しい Java とは戻り値の型が違うので、どの Java でも同じ呼び出しになるよう Buffer として呼ぶ
+            ((Buffer) buffers.vertices).clear();
             buffers.vertices.put(batch.vertices, 0, batch.vertexCount * SignImage.Batch.STRIDE);
-            buffers.colors.clear();
+            ((Buffer) buffers.colors).clear();
             final int[] colors = batch.colors;
             for (int i = 0; i < batch.vertexCount; i++) {
                 final int color = colors[i];
                 buffers.colors.put((byte) (color >> 16)).put((byte) (color >> 8)).put((byte) color).put((byte) (color >>> 24));
             }
-            buffers.colors.flip();
+            ((Buffer) buffers.colors).flip();
             buffers.revision = batch.revision;
         }
 
@@ -1465,11 +1473,11 @@ final class ModelArrays {
         GL11.glEnableClientState(GL11.GL_TEXTURE_COORD_ARRAY);
         GL11.glEnableClientState(GL11.GL_COLOR_ARRAY);
         // 位置とテクスチャ座標は、同じバッファに交互に入っている
-        buffers.vertices.position(0);
+        ((Buffer) buffers.vertices).position(0);
         GL11.glVertexPointer(3, GL11.GL_FLOAT, BYTES_PER_VERTEX, buffers.vertices);
-        buffers.vertices.position(3);
+        ((Buffer) buffers.vertices).position(3);
         GL11.glTexCoordPointer(2, GL11.GL_FLOAT, BYTES_PER_VERTEX, buffers.vertices);
-        buffers.colors.position(0);
+        ((Buffer) buffers.colors).position(0);
         GL11.glColorPointer(4, GL11.GL_UNSIGNED_BYTE, 0, buffers.colors);
         GL11.glDrawArrays(GL11.GL_QUADS, 0, batch.vertexCount);
         GL11.glPopClientAttrib();

@@ -6,6 +6,7 @@ import org.lwjgl.opengl.GL11;
 import org.lwjgl.opengl.GL13;
 import org.lwjgl.opengl.GL15;
 
+import java.nio.Buffer;
 import java.nio.ByteBuffer;
 import java.nio.FloatBuffer;
 import java.util.Map;
@@ -43,16 +44,17 @@ final class ModelArrays {
             BUFFERS.put(batch, buffers);
         }
         if (buffers.revision != batch.revision) {
-            // 内容が変わったときだけ詰め直す
-            buffers.vertices.clear();
+            // 内容が変わったときだけ詰め直す。
+            // clear などは、新しい Java とは戻り値の型が違うので、どの Java でも同じ呼び出しになるよう Buffer として呼ぶ
+            ((Buffer) buffers.vertices).clear();
             buffers.vertices.put(batch.vertices, 0, batch.vertexCount * SignImage.Batch.STRIDE);
-            buffers.colors.clear();
+            ((Buffer) buffers.colors).clear();
             final int[] colors = batch.colors;
             for (int i = 0; i < batch.vertexCount; i++) {
                 final int color = colors[i];
                 buffers.colors.put((byte) (color >> 16)).put((byte) (color >> 8)).put((byte) color).put((byte) (color >>> 24));
             }
-            buffers.colors.flip();
+            ((Buffer) buffers.colors).flip();
             buffers.revision = batch.revision;
         }
 
@@ -65,11 +67,11 @@ final class ModelArrays {
         GL11.glEnableClientState(GL11.GL_TEXTURE_COORD_ARRAY);
         GL11.glEnableClientState(GL11.GL_COLOR_ARRAY);
         // 位置とテクスチャ座標は、同じバッファに交互に入っている
-        buffers.vertices.position(0);
+        ((Buffer) buffers.vertices).position(0);
         GL11.glVertexPointer(3, GL11.GL_FLOAT, BYTES_PER_VERTEX, buffers.vertices);
-        buffers.vertices.position(3);
+        ((Buffer) buffers.vertices).position(3);
         GL11.glTexCoordPointer(2, GL11.GL_FLOAT, BYTES_PER_VERTEX, buffers.vertices);
-        buffers.colors.position(0);
+        ((Buffer) buffers.colors).position(0);
         GL11.glColorPointer(4, GL11.GL_UNSIGNED_BYTE, 0, buffers.colors);
         GL11.glDrawArrays(GL11.GL_QUADS, 0, batch.vertexCount);
         GL11.glPopClientAttrib();
