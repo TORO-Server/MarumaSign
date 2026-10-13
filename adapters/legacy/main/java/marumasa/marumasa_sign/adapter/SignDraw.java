@@ -37,11 +37,20 @@ final class SignDraw {
         // x, y, z はカメラから見た位置なので、そのまま看板までの距離になる
         final SignImage.Batch[] batches = image.batches(yaw, wall, Math.sqrt(x * x + y * y + z * z));
 
+        GL11.glPushMatrix();
+        GL11.glTranslated(x, y, z);
+        drawBatches(batches);
+        GL11.glPopMatrix();
+        MarumaSign.drawn(image);
+    }
+
+    /**
+     * 四角形のまとまりを、現在の座標系に描く。看板のアイテムを描くときにも使う。
+     */
+    static void drawBatches(SignImage.Batch[] batches) {
         // 変更した状態は glPopAttrib で元に戻す
         GL11.glPushAttrib(GL11.GL_ENABLE_BIT | GL11.GL_COLOR_BUFFER_BIT | GL11.GL_CURRENT_BIT | GL11.GL_LIGHTING_BIT
                 | GL11.GL_DEPTH_BUFFER_BIT);
-        GL11.glPushMatrix();
-        GL11.glTranslated(x, y, z);
         GL11.glDisable(GL11.GL_LIGHTING);
         GL11.glEnable(GL11.GL_TEXTURE_2D);
         GL11.glEnable(GL11.GL_DEPTH_TEST);
@@ -70,9 +79,6 @@ final class SignDraw {
             }
             GL11.glEnd();
         }
-
-        GL11.glPopMatrix();
         GL11.glPopAttrib();
-        MarumaSign.drawn(image);
     }
 }

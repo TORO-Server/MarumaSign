@@ -112,8 +112,15 @@ abstract class SignRendererBase implements BlockEntityRenderer<SignBlockEntity, 
             return;
         }
 
-        final int light = state.lightCoords;
-        for (final SignImage.Batch batch : image.batches(state.yaw, state.wall, state.distance)) {
+        submitBatches(image.batches(state.yaw, state.wall, state.distance), poseStack, collector, state.lightCoords);
+        MarumaSign.drawn(image);
+    }
+
+    /**
+     * 四角形のまとまりを、現在の座標系に描く。看板のアイテムを描くときにも使う。
+     */
+    static void submitBatches(SignImage.Batch[] batches, PoseStack poseStack, SubmitNodeCollector collector, final int light) {
+        for (final SignImage.Batch batch : batches) {
             collector.submitCustomGeometry(poseStack, ((Tex) batch.texture).renderType, (pose, vertices) -> {
                 final float[] mesh = batch.vertices;
                 final int[] colors = batch.colors;
@@ -127,7 +134,6 @@ abstract class SignRendererBase implements BlockEntityRenderer<SignBlockEntity, 
                 }
             });
         }
-        MarumaSign.drawn(image);
     }
 
     // 看板そのものを描くかどうか。スペクテイターには看板も見せる
