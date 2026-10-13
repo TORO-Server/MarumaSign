@@ -107,6 +107,15 @@ final class SignRendererBase extends BlockEntityRenderer<SignBlockEntity> {
             GL11.glBegin(GL11.GL_QUADS);
             for (int i = 0; i < batch.vertexCount; i++) {
                 final int o = i * SignImage.Batch.STRIDE;
+                if ((i & 3) == 0 && i + 2 < batch.vertexCount) {
+                    // 面の向き。影 Mod が光の当たり方を計算するのに使う (通常の描画では使われない)
+                    final int b = o + SignImage.Batch.STRIDE, c = b + SignImage.Batch.STRIDE;
+                    final float ux = mesh[b] - mesh[o], uy = mesh[b + 1] - mesh[o + 1], uz = mesh[b + 2] - mesh[o + 2];
+                    final float vx = mesh[c] - mesh[o], vy = mesh[c + 1] - mesh[o + 1], vz = mesh[c + 2] - mesh[o + 2];
+                    final float nx = uy * vz - uz * vy, ny = uz * vx - ux * vz, nz = ux * vy - uy * vx;
+                    final float length = (float) Math.sqrt(nx * nx + ny * ny + nz * nz);
+                    if (length > 0) GL11.glNormal3f(nx / length, ny / length, nz / length);
+                }
                 GL11.glTexCoord2f(mesh[o + 3], mesh[o + 4]);
                 GL11.glVertex3f(mesh[o], mesh[o + 1], mesh[o + 2]);
             }
