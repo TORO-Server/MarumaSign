@@ -1,4 +1,4 @@
-package marumasa.marumasa_sign.v1_12;
+package marumasa.marumasa_sign.adapter;
 
 import marumasa.marumasa_sign.core.MarumaSign;
 import marumasa.marumasa_sign.core.util.Reflect;
@@ -7,14 +7,14 @@ import net.minecraft.client.gui.inventory.GuiEditSign;
 import net.minecraft.client.renderer.tileentity.TileEntityRendererDispatcher;
 import net.minecraft.client.settings.KeyBinding;
 import net.minecraft.tileentity.TileEntitySign;
-import net.minecraft.util.text.TextComponentString;
 import org.apache.commons.lang3.ArrayUtils;
 
 import java.lang.reflect.Field;
 import java.util.Map;
 
 /**
- * Minecraft 1.12.2 向けの実装の入口。ローダーごとの処理から init と tick が呼ばれる。
+ * Minecraft 1.7.10 - 1.12.2 向けの実装の入口。ローダーごとの処理から init と tick が呼ばれる。
+ * バージョンによって違う部分は Mc クラスにまとめてある。
  */
 public final class Adapter {
 
@@ -35,7 +35,7 @@ public final class Adapter {
         MarumaSign.init(new PlatformImpl(loaderName));
         active = true;
 
-        // キーバインド登録
+        // キーバインド登録 (48 は B キー)
         openMenu = new KeyBinding("key." + MarumaSign.MOD_ID + ".open_menu", 48, "key.categories.misc");
         mc.gameSettings.keyBindings = ArrayUtils.add(mc.gameSettings.keyBindings, openMenu);
         // 保存されているキーの割り当てを読み直す
@@ -51,7 +51,7 @@ public final class Adapter {
         MarumaSign.tick();
 
         while (openMenu.isPressed()) {
-            if (mc.player != null && mc.currentScreen == null) MarumaSign.openMenu();
+            if (Mc.inWorld() && mc.currentScreen == null) MarumaSign.openMenu();
         }
 
         // 看板の編集画面が開かれたら、予約されている文字列を書き込んで閉じる
@@ -60,12 +60,17 @@ public final class Adapter {
         }
     }
 
+    // ワールドの描画の最後に呼ばれる
+    public static void renderWorld() {
+        if (active) WorldPass.render();
+    }
+
     // 看板のレンダラーを置き換える
     private static void installRenderer() {
         final TileEntityRendererDispatcher dispatcher = TileEntityRendererDispatcher.instance;
         final Map<Class<?>, Object> renderers = Reflect.get(Reflect.fieldOfType(TileEntityRendererDispatcher.class, Map.class), dispatcher);
         final SignRenderer renderer = new SignRenderer();
-        renderer.setRendererDispatcher(dispatcher);
+        Mc.attach(renderer, dispatcher);
         renderers.put(TileEntitySign.class, renderer);
         rendererInstalled = true;
     }
@@ -75,9 +80,7 @@ public final class Adapter {
         final TileEntitySign sign = Reflect.get(editSignTile, screen);
         final String[] lines = MarumaSign.takePendingWrite();
         if (sign != null && lines != null) {
-            for (int i = 0; i < 4; i++) {
-                sign.signText[i] = new TextComponentString(lines[i]);
-            }
+            Mc.setSignText(sign, lines);
             sign.markDirty();
         }
         // 画面を閉じると、看板の内容がサーバーへ送信される

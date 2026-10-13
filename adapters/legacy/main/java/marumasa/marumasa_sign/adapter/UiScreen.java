@@ -1,15 +1,12 @@
-package marumasa.marumasa_sign.v1_12;
+package marumasa.marumasa_sign.adapter;
 
 import marumasa.marumasa_sign.core.MarumaSign;
 import marumasa.marumasa_sign.core.ui.Key;
 import marumasa.marumasa_sign.core.ui.UiRoot;
 import net.minecraft.client.gui.GuiScreen;
-import net.minecraft.client.renderer.BufferBuilder;
-import net.minecraft.client.renderer.GlStateManager;
-import net.minecraft.client.renderer.Tessellator;
-import net.minecraft.client.renderer.vertex.DefaultVertexFormats;
 import org.lwjgl.input.Keyboard;
 import org.lwjgl.input.Mouse;
+import org.lwjgl.opengl.GL11;
 
 /**
  * MarumaSign の画面。描画と入力を core の UiRoot に橋渡しするだけ。
@@ -53,30 +50,36 @@ final class UiScreen extends GuiScreen {
         if (texture == null) return;
         mc.getTextureManager().bindTexture(((PlatformImpl.Texture) texture).location);
 
-        final double x0 = ui.originX();
-        final double y0 = ui.originY();
-        final double x1 = x0 + ui.pixelWidth();
-        final double y1 = y0 + ui.pixelHeight();
+        final float x0 = ui.originX();
+        final float y0 = ui.originY();
+        final float x1 = x0 + ui.pixelWidth();
+        final float y1 = y0 + ui.pixelHeight();
 
-        GlStateManager.pushMatrix();
+        // 変更した状態は glPopAttrib で元に戻す
+        GL11.glPushAttrib(GL11.GL_ENABLE_BIT | GL11.GL_COLOR_BUFFER_BIT | GL11.GL_CURRENT_BIT | GL11.GL_LIGHTING_BIT);
+        GL11.glPushMatrix();
         // GUI の拡大率を打ち消して、ピクセル単位で描く
-        final double unscale = (double) width / mc.displayWidth;
-        GlStateManager.scale(unscale, unscale, 1.0);
-        GlStateManager.enableBlend();
-        GlStateManager.tryBlendFuncSeparate(770, 771, 1, 0);
-        GlStateManager.color(1f, 1f, 1f, 1f);
+        final float unscale = (float) width / mc.displayWidth;
+        GL11.glScalef(unscale, unscale, 1f);
+        GL11.glDisable(GL11.GL_LIGHTING);
+        GL11.glDisable(GL11.GL_ALPHA_TEST);
+        GL11.glEnable(GL11.GL_BLEND);
+        GL11.glBlendFunc(GL11.GL_SRC_ALPHA, GL11.GL_ONE_MINUS_SRC_ALPHA);
+        GL11.glColor4f(1f, 1f, 1f, 1f);
 
-        final Tessellator tessellator = Tessellator.getInstance();
-        final BufferBuilder buffer = tessellator.getBuffer();
-        buffer.begin(7, DefaultVertexFormats.POSITION_TEX);
-        buffer.pos(x0, y1, 0).tex(0, 1).endVertex();
-        buffer.pos(x1, y1, 0).tex(1, 1).endVertex();
-        buffer.pos(x1, y0, 0).tex(1, 0).endVertex();
-        buffer.pos(x0, y0, 0).tex(0, 0).endVertex();
-        tessellator.draw();
+        GL11.glBegin(GL11.GL_QUADS);
+        GL11.glTexCoord2f(0f, 1f);
+        GL11.glVertex3f(x0, y1, 0f);
+        GL11.glTexCoord2f(1f, 1f);
+        GL11.glVertex3f(x1, y1, 0f);
+        GL11.glTexCoord2f(1f, 0f);
+        GL11.glVertex3f(x1, y0, 0f);
+        GL11.glTexCoord2f(0f, 0f);
+        GL11.glVertex3f(x0, y0, 0f);
+        GL11.glEnd();
 
-        GlStateManager.disableBlend();
-        GlStateManager.popMatrix();
+        GL11.glPopMatrix();
+        GL11.glPopAttrib();
     }
 
     @Override

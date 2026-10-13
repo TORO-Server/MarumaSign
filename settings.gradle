@@ -43,7 +43,7 @@ include 'bootstrap'
 include 'dist'
 
 // targets.json の各項目が、Minecraft のバージョン 1 つ分のビルド対象
-new groovy.json.JsonSlurper().parse(file('targets.json')).each { target ->
+new groovy.json.JsonSlurper().parse(file('targets.json')).targets.each { target ->
     include "targets:${target.name}"
     def dir = file("targets/${target.name}")
     dir.mkdirs()

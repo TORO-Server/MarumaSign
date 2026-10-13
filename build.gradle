@@ -2,7 +2,13 @@ plugins {
     id 'xyz.wagyourtail.unimined' apply false
 }
 
-ext.marumaTargets = new groovy.json.JsonSlurper().parse(file('targets.json'))
+def targetTable = new groovy.json.JsonSlurper().parse(file('targets.json'))
+// 各ビルド対象に、世代 (era) ごとの共通設定を合わせたもの
+ext.marumaTargets = targetTable.targets.collect { target ->
+    def era = targetTable.eras[target.era]
+    if (era == null) throw new GradleException("Unknown era '${target.era}' in targets.json")
+    era + target
+}
 
 allprojects {
     version = rootProject.mod_version

@@ -97,7 +97,8 @@ public final class SignManager {
             }
             entry.set(TextureEntry.LOADED, decoded.width, decoded.height, frames, frameEnd, decoded.repetitions);
             MarumaSign.LOGGER.info("Load: " + url);
-        } catch (RuntimeException e) {
+        } catch (RuntimeException | Error e) {
+            // スケジュールされたタスクの中の例外は呼び出し元で捨てられるため、ここで記録する
             MarumaSign.LOGGER.error("Failed to register texture: " + url, e);
             fail(url, entry);
         }

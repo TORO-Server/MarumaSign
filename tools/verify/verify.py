@@ -449,11 +449,54 @@ def grab_screen(path):
         from PIL import ImageGrab
     except ImportError:
         return False
-    box = minecraft_window_box() if sys.platform == "win32" else None
-    if box is None:
+    if sys.platform != "win32":
         return False
+    windows = minecraft_windows()
+    if not windows:
+        return False
+    import ctypes
+    # 他のウィンドウに隠れていると写らないので、手前に出してから撮る
+    window, box = windows[0]
+    ctypes.windll.user32.ShowWindow(window, 9)  # SW_RESTORE
+    ctypes.windll.user32.SetForegroundWindow(window)
+    time.sleep(0.7)
     ImageGrab.grab(bbox=box, all_screens=True).save(path)
     return True
+
+
+# テスト画像の 4 つの領域の色 (左上, 右上, 左下, 右下)
+TEST_COLORS = {"red": (230, 60, 60), "green": (60, 180, 75), "blue": (60, 110, 230), "yellow": (250, 200, 40)}
+
+
+def analyze_screenshot(path):
+    """スクリーンショットにテスト画像が正しい向きで写っているかを調べる。"""
+    from PIL import Image
+
+    image = Image.open(path).convert("RGB")
+    image.thumbnail((640, 640))
+    width, height = image.size
+    pixels = image.load()
+    sums = {name: [0, 0, 0] for name in TEST_COLORS}
+    for y in range(height):
+        for x in range(width):
+            r, g, b = pixels[x, y]
+            for name, (cr, cg, cb) in TEST_COLORS.items():
+                if abs(r - cr) < 45 and abs(g - cg) < 45 and abs(b - cb) < 45:
+                    entry = sums[name]
+                    entry[0] += 1
+                    entry[1] += x
+                    entry[2] += y
+                    break
+    counts = {name: entry[0] for name, entry in sums.items()}
+    minimum = width * height // 400
+    if any(count < minimum for count in counts.values()):
+        return False, f"test image colours not found (pixels: {counts})"
+    centre = {name: (entry[1] / entry[0], entry[2] / entry[0]) for name, entry in sums.items()}
+    ordered = (centre["red"][0] < centre["green"][0] and centre["blue"][0] < centre["yellow"][0]
+               and centre["red"][1] < centre["blue"][1] and centre["green"][1] < centre["yellow"][1])
+    if not ordered:
+        return False, f"test image is mirrored or rotated (centres: {centre})"
+    return True, "test image visible"
 
 
 # ---------- ログの確認 ----------
@@ -485,6 +528,8 @@ def load_known_noise():
 def normalize(line):
     """時刻や数値の違いを無視して比較できる形にする。"""
     line = re.sub(r"^\[[^\]]*\d\d:\d\d:\d\d[^\]]*\]\s*", "", line)
+    # 基準の取得と本番では作業フォルダの名前が違う
+    line = line.replace("-baseline\\", "\\").replace("-baseline/", "/")
     return re.sub(r"\d+", "N", line)
 
 
@@ -575,8 +620,9 @@ def run(args):
             if (result_dir / "result.txt").is_file() and not captured:
                 captured = True
                 time.sleep(0.5)
-                if grab_screen(work_dir / "screenshot.png"):
+                if not args.baseline and grab_screen(work_dir / "screenshot.png"):
                     result["screenshot"] = str(work_dir / "screenshot.png")
+                    result["image_visible"], result["image_detail"] = analyze_screenshot(work_dir / "screenshot.png")
             if args.baseline and joined_handled and time.time() - joined_at > 25:
                 # 基準の取得では、ワールドに入ってしばらくしたら終了する
                 result["detail"] = "baseline"
@@ -638,7 +684,8 @@ def run(args):
         result["baseline"] = True
         result["new_client_findings"] = [line for line in client_findings if is_new(line, baseline["client"])]
         result["new_server_findings"] = [line for line in server_findings if is_new(line, baseline["server"])]
-        result["clean"] = result["ok"] and not result["new_client_findings"] and not result["new_server_findings"]
+        result["clean"] = (result["ok"] and bool(result.get("image_visible"))
+                           and not result["new_client_findings"] and not result["new_server_findings"])
     else:
         result["baseline"] = False
         result["client_findings"] = client_findings
