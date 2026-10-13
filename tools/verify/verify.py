@@ -21,6 +21,8 @@ import threading
 import time
 import urllib.parse
 import urllib.request
+
+import shadermods
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[2]
@@ -750,7 +752,10 @@ def run(args):
     main_dir = root / "main"
     if args.baseline:
         args.mod = None
-    name = f"{args.loader}-{args.minecraft}" + ("-baseline" if args.baseline else "")
+    # 影 Mod を入れて確認する場合は、結果も基準も別に持つ
+    shaders = bool(getattr(args, "shaders", False))
+    variant = f"{args.loader}-{args.minecraft}" + ("-shaders" if shaders else "")
+    name = variant + ("-baseline" if args.baseline else "")
     work_dir = root / "runs" / name
     result_dir = work_dir / "selftest"
     mod = Path(args.mod).resolve() if args.mod else None
@@ -762,6 +767,15 @@ def run(args):
         "minecraft": args.minecraft, "loader": args.loader, "loader_version": args.loader_version,
         "mod": mod.name if mod else None, "ok": False, "detail": "",
     }
+    shader_setup = None
+    if shaders:
+        shader_setup = shadermods.resolve(args.loader, args.minecraft)
+        if shader_setup is None:
+            result["detail"] = "No shader mod is available for this combination"
+            return result
+        shadermods.install(shader_setup, root / "shadermods", work_dir)
+        result["shader_mod"] = shader_setup["name"]
+        log(f"shader mod: {shader_setup['name']} {[item for item, _ in shader_setup['mods']]} + {shader_setup['pack'][0]}")
 
     host = MockHost()
     # 通信が途中で止まっても待ち続けないように、ランチャーの通信にタイムアウトを付ける
@@ -915,6 +929,11 @@ def run(args):
     result["uploads"] = len(host.files)
     result["http_requests"] = host.requests
 
+    if shaders:
+        # シェーダーが実際に有効になっていたかどうかを、ログで確かめる
+        client_log_file = find_client_log(work_dir)
+        log_text = client_log_file.read_text(encoding="utf-8", errors="replace") if client_log_file.is_file() else ""
+        result["shaders_active"] = shadermods.is_active(log_text)
     client_findings = scan_log(find_client_log(work_dir))
     result["client_log"] = str(find_client_log(work_dir))
     client_findings = unique(client_findings) if client_findings is not None else ["(no client log)"]
@@ -922,7 +941,7 @@ def run(args):
     (work_dir / "server-output.log").write_text("\n".join(server.lines), encoding="utf-8")
 
     # Mod を入れていない状態 (基準) でも出る警告は、ローダーや Minecraft 自体のもの
-    baseline_file = root / "baselines" / f"{args.loader}-{args.minecraft}.json"
+    baseline_file = root / "baselines" / f"{variant}.json"
     if args.baseline:
         result["ok"] = server.joined.is_set()
         baseline_file.parent.mkdir(parents=True, exist_ok=True)
@@ -946,6 +965,7 @@ def run(args):
         result["new_server_findings"] = [line for line in server_findings if is_new(line, baseline["server"])]
         result["clean"] = (result["ok"] and bool(result.get("image_visible")) and bool(result.get("sign_hidden"))
                            and bool(result.get("item_visible"))
+                           and (not shaders or bool(result.get("shaders_active")))
                            and not result["new_client_findings"] and not result["new_server_findings"])
     else:
         result["baseline"] = False

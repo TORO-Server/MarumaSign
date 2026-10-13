@@ -164,19 +164,21 @@ final class SelfTest {
                 break;
 
             case WAIT_RENDER:
-                // 画像の全体が見えるように正面を向く
-                if (ticksInStep == 1) platform.selfTestLook(0f);
+                // 画像の全体が見えるように正面を向く。
+                // サーバーからの位置の補正で向きが戻されることがあるので、毎 tick 向き直す
+                platform.selfTestLook(0f);
                 if (drawnCount > 0 && ticksInStep > 40) next(LOOK_AT_SIGN);
                 break;
 
             case LOOK_AT_SIGN:
                 // 外部のスクリプトが画面を記録できるように、合図のファイルを書きながら進める。
                 // まず、画像の全体が写っている状態
+                if (ticksInStep < 60) platform.selfTestLook(0f);
                 if (ticksInStep == 20) writeFile("view-" + index + ".txt", "ready\n");
                 // 次に、看板そのものが消えていることを確認できるように、看板の位置を見下ろす
-                if (ticksInStep == 60) platform.selfTestLook(50f);
+                if (ticksInStep >= 60 && ticksInStep < 140) platform.selfTestLook(50f);
                 if (ticksInStep == 90) writeFile("sign-view-" + index + ".txt", "ready\n");
-                if (ticksInStep == 140) platform.selfTestLook(0f);
+                if (ticksInStep >= 140) platform.selfTestLook(0f);
                 if (ticksInStep == 150) {
                     if (summary.length() > 0) summary.append(", ");
                     summary.append(new File(images[index]).getName()).append(" rendered ").append(drawnCount).append(" times");

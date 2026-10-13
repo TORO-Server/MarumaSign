@@ -60,10 +60,10 @@ MEDIA = {
 }
 
 
-def run_one(root, loader, minecraft, loader_version, mod, baseline, timeout, media=("image",)):
+def run_one(root, loader, minecraft, loader_version, mod, baseline, timeout, media=("image",), shaders=False):
     args = SimpleNamespace(
         minecraft=minecraft, loader=loader, loader_version=loader_version, spec="",
-        mod=None if baseline else str(mod), baseline=baseline,
+        mod=None if baseline else str(mod), baseline=baseline, shaders=shaders,
         image="|".join(str(REPO / "tools" / "verify" / MEDIA[kind]) for kind in media), lang="en_us",
         port=25570, timeout=timeout, root=str(root),
     )
@@ -80,6 +80,8 @@ def main():
     parser.add_argument("--rebaseline", action="store_true", help="基準のログを取り直す")
     parser.add_argument("--media", nargs="+", choices=sorted(MEDIA), default=list(MEDIA),
                         help="看板に表示して確かめるものの種類。1 回の起動で順に確かめる")
+    parser.add_argument("--shaders", action="store_true",
+                        help="影 Mod とシェーダーパックを入れた状態で確かめる。結果は「loader:version+shaders」として記録する")
     parser.add_argument("--timeout", type=int, default=480)
     parser.add_argument("--root", default=str(verify.DEFAULT_ROOT))
     parser.add_argument("--libs", default=str(REPO / "dist" / "build" / "libs"),
@@ -95,6 +97,8 @@ def main():
         key = f"{loader}:{minecraft}"
         if args.only and key not in args.only:
             continue
+        if args.shaders:
+            key += "+shaders"
         selected.add(key)
         if not mod.is_file():
             summary[key] = {"ok": False, "clean": False, "detail": f"missing {mod.name}"}
@@ -106,27 +110,29 @@ def main():
                 and set(args.media) <= set(previous.get("media", []))):
             continue
 
-        baseline_file = root / "baselines" / f"{loader}-{minecraft}.json"
+        baseline_file = root / "baselines" / (f"{loader}-{minecraft}" + ("-shaders" if args.shaders else "") + ".json")
         if args.rebaseline or not baseline_file.is_file():
             verify.log(f"=== baseline {key}")
-            baseline = run_one(root, loader, minecraft, loader_version, mod, True, args.timeout)
+            baseline = run_one(root, loader, minecraft, loader_version, mod, True, args.timeout, shaders=args.shaders)
             if not baseline.get("ok"):
                 summary[key] = {"ok": False, "clean": False, "detail": "baseline failed: " + str(baseline.get("detail"))[:300]}
                 summary_file.write_text(json.dumps(summary, indent=2, ensure_ascii=False), encoding="utf-8")
                 continue
 
         verify.log(f"=== verify {key}")
-        result = run_one(root, loader, minecraft, loader_version, mod, False, args.timeout, args.media)
+        result = run_one(root, loader, minecraft, loader_version, mod, False, args.timeout, args.media, args.shaders)
         if not result.get("clean"):
             # 他の処理と重なって時間切れになることがあるので、1 回だけやり直す
             verify.log(f"=== retry {key} ({str(result.get('detail'))[:80]})")
-            result = run_one(root, loader, minecraft, loader_version, mod, False, args.timeout, args.media)
+            result = run_one(root, loader, minecraft, loader_version, mod, False, args.timeout, args.media, args.shaders)
         summary[key] = {
             "ok": bool(result.get("ok")),
             "clean": bool(result.get("clean")),
             "detail": " / ".join([str(result.get("detail"))[:300], str(result.get("image_detail", "no screenshot")),
                                   str(result.get("sign_detail", "sign view not captured")),
-                                  str(result.get("item_detail", "item view not captured"))]),
+                                  str(result.get("item_detail", "item view not captured"))]
+                                 + ([f"shaders ({result.get('shader_mod')}): "
+                                     + ("active" if result.get("shaders_active") else "NOT active")] if args.shaders else [])),
             "mod": mod.name,
             "mod_sha256": digest,
             "media": list(args.media),
