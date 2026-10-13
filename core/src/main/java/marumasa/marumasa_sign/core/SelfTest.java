@@ -56,6 +56,11 @@ final class SelfTest {
     private int itemGivenAt = -1;
     private int itemViewAt = -1;
 
+    // 起動が済んでから自分で接続するサーバー (host:port)。指定がなければ、起動時の指定に任せる
+    private final String server = System.getProperty("marumasign.selftest.server", "");
+    private boolean joining;
+    private int joinAttempts;
+
     private int step = WAIT_WORLD;
     private int ticksInStep;
     private int worldTicks;
@@ -77,6 +82,16 @@ final class SelfTest {
         return new SelfTest(platform, new File(directory), images.split("\\|"));
     }
 
+    // 看板を描こうとして内容を調べた回数と、そのうち MarumaSign の看板だった回数。
+    // 表示されないときに、看板の描画そのものが呼ばれていないのか、内容を読み取れていないのかを見分ける
+    private volatile int lookups;
+    private volatile int recognised;
+
+    void onLookup(boolean found) {
+        lookups++;
+        if (found) recognised++;
+    }
+
     // 読み込みが完了した看板が描画されたとき
     void onDrawn(SignImage image) {
         final String url = expectedUrl;
@@ -96,7 +111,8 @@ final class SelfTest {
         if (step == FINISHED) return;
         // ワールドに入るまでは、影 Mod のシェーダーの準備などで時間がかかることがあるので、長めに待つ
         if (++ticksInStep > (step == WAIT_WORLD ? STEP_TIMEOUT * 3 : STEP_TIMEOUT)) {
-            finish(false, "Timed out at step " + STEP_NAMES[step]);
+            finish(false, "Timed out at step " + STEP_NAMES[step]
+                    + (step == WAIT_RENDER ? " (signs looked up " + lookups + " times, recognised " + recognised + " times)" : ""));
             return;
         }
         try {
@@ -112,6 +128,19 @@ final class SelfTest {
         switch (step) {
             case WAIT_WORLD:
                 // ワールドに入ってから、サーバー側の準備 (アイテムの付与など) が済むまで待つ
+                if (!server.isEmpty() && !platform.isInWorld()) {
+                    // 初期の Forge には、接続が途中で止まることがある不具合がある。入れないまま時間が経ったら、やり直す
+                    if (joining && ticksInStep > 20 * 40) joining = false;
+                    if (!joining && ticksInStep > 60 && joinAttempts < 6) {
+                        final int colon = server.lastIndexOf(':');
+                        joining = platform.selfTestJoin(server.substring(0, colon), Integer.parseInt(server.substring(colon + 1)));
+                        if (joining) {
+                            joinAttempts++;
+                            // 接続を始めた時点から、待ち時間を数え直す
+                            ticksInStep = 0;
+                        }
+                    }
+                }
                 worldTicks = platform.isInWorld() ? worldTicks + 1 : 0;
                 if (worldTicks > 20 * 8) {
                     worldTicks = 0;

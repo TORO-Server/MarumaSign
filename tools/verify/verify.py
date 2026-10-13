@@ -15,7 +15,6 @@ import json
 import os
 import re
 import shutil
-import socket
 import subprocess
 import sys
 import threading
@@ -43,8 +42,10 @@ def log(message):
 
 
 def version_key(version):
-    """バージョン文字列を比較できる形にする ("1.12.2" -> (1, 12, 2))。"""
-    return tuple(int(part) for part in re.findall(r"\d+", version)[:3])
+    """バージョン文字列を比較できる形にする ("1.12.2" -> (1, 12, 2)、"1.14" -> (1, 14, 0))。"""
+    parts = [int(part) for part in re.findall(r"\d+", version)[:3]]
+    # 桁数をそろえる (そろえないと、"1.14" が (1, 14, 0) より小さいと判定される)
+    return tuple(parts + [0] * (3 - len(parts)))
 
 
 def fetch_json(url):
@@ -191,72 +192,17 @@ def sign_item(minecraft):
     return "minecraft:oak_sign" if version_key(minecraft) >= (1, 14, 0) else "minecraft:sign"
 
 
-# 起動してすぐにサーバーへ接続すると、リソースの読み込みが終わる前にワールドが表示されて落ちるバージョン
-# (Mod を入れていなくても起きる Minecraft の不具合。1.14.1 で直っている)。接続を待たせる秒数
-SLOW_JOIN = {"1.14": 15}
-
+# 起動と同時にサーバーへ接続すると、うまく入れない組み合わせ。キーは Minecraft のバージョンか「ローダー:バージョン」。
+# どれも、タイトル画面から普通に入る分には起きない。
+# - 1.14: リソースの読み込みが終わる前にワールドが表示されて落ちる (Mod なしでも起きる。1.14.1 で直っている)
+# - Forge 1.14.2 / 1.14.3: 接続の手順が、Mod の読み込みと重なると途中で止まる
+# - Forge 1.15 / 1.15.1: 読み込み中の画面と接続の画面が重なると落ちる (Mod なしでも起きる)
+# これらでは、起動時には接続せず、タイトル画面が出てから Mod の動作確認の機能に接続させる。
+# 基準の取得 (Mod なし) では接続できないので、タイトル画面までの警告だけを基準にする
+MOD_JOIN = {"1.14", "forge:1.14.2", "forge:1.14.3", "forge:1.15", "forge:1.15.1"}
 
 # ランチャーだけでは Forge をインストールできないバージョン (forge_install_fix.py を参照)
 FORGE_INSTALL_FIX = {"1.14.2", "1.14.3"}
-
-
-class DelayedRelay:
-    """クライアントからの接続を、少し待たせてからサーバーへ中継する。"""
-
-    def __init__(self, target_port, delay):
-        self.target_port = target_port
-        self.delay = delay
-        self.listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        self.listener.bind(("127.0.0.1", 0))
-        self.listener.listen(4)
-        self.port = self.listener.getsockname()[1]
-        self.sockets = []
-        threading.Thread(target=self._accept, daemon=True).start()
-
-    def _accept(self):
-        while True:
-            try:
-                client, _ = self.listener.accept()
-            except OSError:
-                return
-            self.sockets.append(client)
-            threading.Thread(target=self._serve, args=(client,), daemon=True).start()
-
-    def _serve(self, client):
-        time.sleep(self.delay)
-        try:
-            upstream = socket.create_connection(("127.0.0.1", self.target_port), timeout=30)
-        except OSError:
-            client.close()
-            return
-        upstream.settimeout(None)
-        self.sockets.append(upstream)
-        threading.Thread(target=self._pump, args=(upstream, client), daemon=True).start()
-        self._pump(client, upstream)
-
-    @staticmethod
-    def _pump(source, target):
-        try:
-            while True:
-                data = source.recv(65536)
-                if not data:
-                    break
-                target.sendall(data)
-        except OSError:
-            pass
-        finally:
-            for item in (source, target):
-                try:
-                    item.close()
-                except OSError:
-                    pass
-
-    def close(self):
-        for item in [self.listener] + self.sockets:
-            try:
-                item.close()
-            except OSError:
-                pass
 
 
 class Server:
@@ -960,7 +906,8 @@ def run(args):
 
     server = Server(args.minecraft, root, main_dir, args.port)
     client = None
-    relay = None
+    title_only = False
+    mod_join = args.minecraft in MOD_JOIN or f"{args.loader}:{args.minecraft}" in MOD_JOIN
     try:
         server.prepare()
         server.start()
@@ -972,18 +919,16 @@ def run(args):
             "-Dmarumasign.selftest.item=true",
             f"-Dmarumasign.uploadUrl=http://127.0.0.1:{host.port}/upload",
             f"-Dmarumasign.shortenUrl=http://127.0.0.1:{host.port}/shorten",
-        ])
-        connect_port = args.port
-        if args.minecraft in SLOW_JOIN:
-            relay = DelayedRelay(args.port, SLOW_JOIN[args.minecraft])
-            connect_port = relay.port
-        command = base + ["start", spec, "-u", PLAYER, "-s", "127.0.0.1", "-p", str(connect_port),
-                          "--resolution", "1280x720", f"--jvm-args={jvm_args}"]
+        ] + ([f"-Dmarumasign.selftest.server=127.0.0.1:{args.port}"] if mod_join else [])
+            + os.environ.get("MARUMASIGN_VERIFY_JVM_ARGS", "").split())
+        command = base + ["start", spec, "-u", PLAYER] + ([] if mod_join else ["-s", "127.0.0.1", "-p", str(args.port)]) \
+            + ["--resolution", "1280x720", f"--jvm-args={jvm_args}"]
         log("starting client")
         client_log = open(work_dir / "launcher-output.log", "w", encoding="utf-8", errors="replace")
         client = subprocess.Popen(command, stdout=client_log, stderr=subprocess.STDOUT)
 
         deadline = time.time() + args.timeout
+        started_at = time.time()
         joined_handled = False
         joined_at = 0.0
         captured = False
@@ -1049,6 +994,13 @@ def run(args):
                 # (シェーダーは、ワールドに入ってからの準備に時間がかかり、その間に警告を出すので長く待つ)
                 result["detail"] = "baseline"
                 break
+            if args.baseline and mod_join and time.time() - started_at > 40:
+                # 接続しない基準の取得では、ログが落ち着いたら (タイトル画面まで進んだら) 終了する
+                client_log_file = find_client_log(work_dir)
+                if client_log_file.is_file() and time.time() - client_log_file.stat().st_mtime > 15:
+                    result["detail"] = "baseline (title screen only)"
+                    title_only = True
+                    break
             time.sleep(0.5)
         else:
             result["detail"] = "Timed out"
@@ -1067,8 +1019,6 @@ def run(args):
     finally:
         server.stop()
         host.close()
-        if relay is not None:
-            relay.close()
 
     if not args.baseline:
         result["media"] = media
@@ -1102,7 +1052,7 @@ def run(args):
     # Mod を入れていない状態 (基準) でも出る警告は、ローダーや Minecraft 自体のもの
     baseline_file = root / "baselines" / f"{variant}.json"
     if args.baseline:
-        result["ok"] = server.joined.is_set()
+        result["ok"] = server.joined.is_set() or title_only
         baseline_file.parent.mkdir(parents=True, exist_ok=True)
         baseline_file.write_text(json.dumps({
             "client": sorted({normalize(line) for line in client_findings}),

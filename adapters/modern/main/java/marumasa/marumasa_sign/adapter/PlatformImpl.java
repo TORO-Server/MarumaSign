@@ -108,6 +108,11 @@ final class PlatformImpl implements Platform {
     }
 
     @Override
+    public boolean selfTestJoin(String host, int port) {
+        return Join.start(mc, host, port);
+    }
+
+    @Override
     public void quit() {
         mc.stop();
     }
