@@ -22,6 +22,30 @@ public final class Reflect {
         throw new IllegalStateException("No field of type " + type.getName() + " in " + owner.getName());
     }
 
+    // instance のフィールドのうち、いま value そのものを保持しているものを返す
+    public static Field fieldHolding(Object instance, Object value) {
+        for (Class<?> type = instance.getClass(); type != null; type = type.getSuperclass()) {
+            for (Field field : type.getDeclaredFields()) {
+                if (java.lang.reflect.Modifier.isStatic(field.getModifiers()) || field.getType().isPrimitive()) continue;
+                field.setAccessible(true);
+                try {
+                    if (field.get(instance) == value) return field;
+                } catch (IllegalAccessException e) {
+                    throw new IllegalStateException(e);
+                }
+            }
+        }
+        throw new IllegalStateException("No field holding the value in " + instance.getClass().getName());
+    }
+
+    public static void set(Field field, Object instance, Object value) {
+        try {
+            field.set(instance, value);
+        } catch (IllegalAccessException e) {
+            throw new IllegalStateException(e);
+        }
+    }
+
     @SuppressWarnings("unchecked")
     public static <T> T get(Field field, Object instance) {
         try {

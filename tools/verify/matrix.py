@@ -39,7 +39,7 @@ def combinations(libs):
                 continue
             for minecraft in spec["versions"]:
                 # 対応表のバージョンがビルドに使ったものと違う場合は、ランチャーに選ばせる
-                loader_version = spec["loader"] if minecraft == target["minecraft"] else spec.get("launch", {}).get(minecraft, "")
+                loader_version = spec.get("launch", spec["loader"]) if minecraft == target["minecraft"] else ""
                 yield loader, minecraft, loader_version, universal
 
 
