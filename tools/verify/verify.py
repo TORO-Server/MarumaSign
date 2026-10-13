@@ -853,7 +853,9 @@ def run(args):
                     stage = "move"
                 elif stage == "move" and (result_dir / f"move-{current}.txt").is_file():
                     # 次のファイルは、前の看板が見えない場所で確認する
-                    server.move_player(300)
+                    # 前の看板が読み込まれている範囲 (描画距離 4 チャンク) の外まで離れる。
+                    # 遠くへ飛ばしすぎると、古いバージョンでは移動先の地形がなかなか届かない
+                    server.move_player(112)
                     time.sleep(1.0)
                     (result_dir / f"moved-{current}.txt").write_text("done\n")
                     current += 1

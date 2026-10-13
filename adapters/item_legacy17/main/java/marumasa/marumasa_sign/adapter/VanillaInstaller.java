@@ -74,7 +74,8 @@ final class VanillaInstaller {
             guiScreenItemRenderField = Reflect.fieldOfType(GuiScreen.class, RenderItem.class);
         }
         if (Reflect.get(guiScreenItemRenderField, null) != customRenderItem) {
-            Reflect.set(guiScreenItemRenderField, null, customRenderItem);
+            // このフィールドは書き換えられない指定 (static final) になっている
+            Reflect.setStaticFinal(guiScreenItemRenderField, customRenderItem);
         }
 
         // 5. ホットバーのレンダラー (GuiIngame の itemRenderer)
