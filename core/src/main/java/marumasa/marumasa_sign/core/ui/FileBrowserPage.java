@@ -2,6 +2,7 @@ package marumasa.marumasa_sign.core.ui;
 
 import marumasa.marumasa_sign.core.Lang;
 import marumasa.marumasa_sign.core.MarumaSign;
+import marumasa.marumasa_sign.core.media.MediaTools;
 
 import java.io.File;
 import java.util.ArrayList;
@@ -36,13 +37,13 @@ final class FileBrowserPage extends Page {
         add(new Button(Lang.get("browser.up"), this::up)).bounds(462, 37, 74, 23);
 
         list = add(new ListBox().onSelect(this::selectionChanged).onActivate(this::activate));
-        list.bounds(12, 66, 524, 240);
+        list.bounds(12, 66, 524, 268);
 
-        add(new Label("*.png, *.jpg, *.jpeg, *.gif")).bounds(12, 320, 300, 16);
+        add(new Label(Lang.get("browser.filter"))).bounds(12, 348, 340, 16);
         open = add(new Button(Lang.get("browser.open"), this::activate));
-        open.bounds(362, 316, 84, 24);
+        open.bounds(362, 344, 84, 24);
         final Button cancel = add(new Button(Lang.get("ui.cancel"), root::showMainPage));
-        cancel.bounds(452, 316, 84, 24);
+        cancel.bounds(452, 344, 84, 24);
 
         defaultButton = open;
         cancelButton = cancel;
@@ -80,7 +81,7 @@ final class FileBrowserPage extends Page {
         for (String extension : EXTENSIONS) {
             if (name.endsWith(extension)) return true;
         }
-        return false;
+        return MediaTools.hasMediaExtension(name);
     }
 
     private static final Comparator<File> BY_NAME = new Comparator<File>() {

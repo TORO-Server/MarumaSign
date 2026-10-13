@@ -1,6 +1,7 @@
 package marumasa.marumasa_sign.adapter;
 
 import com.mojang.blaze3d.platform.InputConstants;
+import com.mojang.blaze3d.platform.Window;
 import com.mojang.blaze3d.vertex.PoseStack;
 import com.mojang.blaze3d.vertex.VertexConsumer;
 import com.mojang.math.Matrix4f;
@@ -33,6 +34,10 @@ final class Mc {
 
     static String version() {
         return SharedConstants.getCurrentVersion().getName();
+    }
+
+    static Window window(Minecraft mc) {
+        return mc.getWindow();
     }
 
     static Screen screen(Minecraft mc) {

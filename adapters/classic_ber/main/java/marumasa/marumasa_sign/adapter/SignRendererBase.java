@@ -73,9 +73,18 @@ abstract class SignRendererBase implements BlockEntityRenderer<SignBlockEntity> 
             return true;
         }
 
-        Mc.quads(buffers.getBuffer(((Tex) image.texture()).renderType), poseStack, image.mesh(yaw, wall), light);
+        Mc.quads(buffers.getBuffer(((Tex) image.texture(distance(sign))).renderType), poseStack, image.mesh(yaw, wall), light);
         MarumaSign.drawn(image);
         return mc.player != null && mc.player.isSpectator();
+    }
+
+    // カメラから看板までの距離 (ブロック)
+    private double distance(SignBlockEntity sign) {
+        final Vec3 camera = mc.gameRenderer.getMainCamera().getPosition();
+        final double x = sign.getBlockPos().getX() + 0.5 - camera.x;
+        final double y = sign.getBlockPos().getY() + 0.5 - camera.y;
+        final double z = sign.getBlockPos().getZ() + 0.5 - camera.z;
+        return Math.sqrt(x * x + y * y + z * z);
     }
 
     // 以下のメソッドはバージョンによって有無や引数が違う。

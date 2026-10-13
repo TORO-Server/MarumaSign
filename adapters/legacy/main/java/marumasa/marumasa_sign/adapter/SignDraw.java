@@ -36,7 +36,9 @@ final class SignDraw {
         final float yaw = wall ? wallYaw(metadata) : metadata * 22.5f;
         final float[] mesh = image.mesh(yaw, wall);
 
-        Minecraft.getMinecraft().getTextureManager().bindTexture(((PlatformImpl.Texture) image.texture()).location);
+        // x, y, z はカメラから見た位置なので、そのまま看板までの距離になる
+        final double distance = Math.sqrt(x * x + y * y + z * z);
+        Minecraft.getMinecraft().getTextureManager().bindTexture(((PlatformImpl.Texture) image.texture(distance)).location);
 
         // 変更した状態は glPopAttrib で元に戻す
         GL11.glPushAttrib(GL11.GL_ENABLE_BIT | GL11.GL_COLOR_BUFFER_BIT | GL11.GL_CURRENT_BIT | GL11.GL_LIGHTING_BIT

@@ -54,9 +54,42 @@ ERAS = {
 # Forge / NeoForge が None のバージョンは、そのローダーが存在しないか、まだ対応していない。
 FABRIC_LOADER = "0.19.5"
 MODERN = [
+    ("1.15.2", "v1_15", "mojmap", {
+        "1.15": ("29.0.4", None),
+        "1.15.1": ("30.0.51", None),
+        "1.15.2": ("31.2.57", None),
+    }),
+    ("1.16.1", "v1_16", "mojmap", {
+        "1.16": (None, None),
+        "1.16.1": ("32.0.108", None),
+    }),
+    ("1.16.5", "v1_16_2", "mojmap", {
+        "1.16.2": ("33.0.61", None),
+        "1.16.3": ("34.1.42", None),
+        "1.16.4": ("35.1.37", None),
+        "1.16.5": ("36.2.42", None),
+    }),
+    ("1.17.1", "v1_17", "mojmap", {
+        "1.17": (None, None),
+        "1.17.1": ("37.1.1", None),
+    }),
+    ("1.18.2", "v1_17", "mojmap", {
+        "1.18": ("38.0.17", None),
+        "1.18.1": ("39.1.2", None),
+        "1.18.2": ("40.3.12", None),
+    }),
+    ("1.19.2", "v1_19", "mojmap", {
+        "1.19": ("41.1.0", None),
+        "1.19.1": ("42.0.9", None),
+        "1.19.2": ("43.5.2", None),
+    }),
+    ("1.19.4", "v1_19_3", "mojmap", {
+        "1.19.3": ("44.1.23", None),
+        "1.19.4": ("45.4.5", None),
+    }),
     ("1.20.1", "v1_20", "mojmap", {
         "1.20": ("46.0.14", None),
-        "1.20.1": ("47.4.26", None),
+        "1.20.1": ("47.4.26", "1.20.1-47.1.106"),
     }),
     ("1.20.4", "v1_20", "mojmap", {
         "1.20.2": ("48.1.0", "20.2.93"),
@@ -83,6 +116,10 @@ MODERN = [
         "1.21.6": ("56.0.9", "21.6.20-beta"),
         "1.21.7": ("57.0.3", "21.7.25-beta"),
         "1.21.8": ("58.1.24", "21.8.54"),
+    }),
+    ("1.21.10", "v1_21_9", "mojmap", {
+        "1.21.9": ("59.0.5", "21.9.16-beta"),
+        "1.21.10": ("60.1.17", "21.10.64"),
     }),
     ("1.21.11", "v1_21_11", "mojmap", {
         "1.21.11": ("61.2.3", "21.11.45"),
@@ -134,7 +171,11 @@ def build():
         forge = {version: pair[0] for version, pair in served.items() if pair[0]}
         if forge:
             loaders["forge"] = {"loader": forge[minecraft], "versions": list(forge), "launch": forge}
-        neoforge = {version: pair[1] for version, pair in served.items() if pair[1]}
+        # NeoForge 1.20.1 は Forge と互換で、Forge 用の実装がそのまま動く。専用のビルドは作らず、確認だけ行う
+        compatible = {version: pair[1] for version, pair in served.items() if pair[1] and pair[1].startswith("1.20.1-")}
+        if compatible:
+            loaders["forge"]["neoforge_launch"] = compatible
+        neoforge = {version: pair[1] for version, pair in served.items() if pair[1] and version not in compatible}
         if neoforge:
             # ビルドツールにはビルド番号だけを、ランチャーには完全なバージョンを渡す
             loaders["neoforge"] = {"loader": neoforge[minecraft].rsplit(".", 1)[1], "versions": list(neoforge),

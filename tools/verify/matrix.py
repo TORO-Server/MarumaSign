@@ -42,6 +42,9 @@ def combinations(libs):
                 launch = spec.get("launch")
                 loader_version = launch[minecraft] if isinstance(launch, dict) else spec["loader"]
                 yield loader, minecraft, loader_version, universal
+            # Forge 用の実装で動く、Forge 互換の NeoForge
+            for minecraft, loader_version in spec.get("neoforge_launch", {}).items():
+                yield "neoforge", minecraft, loader_version, universal
 
 
 def run_one(root, loader, minecraft, loader_version, mod, baseline, timeout):
@@ -100,7 +103,8 @@ def main():
         summary[key] = {
             "ok": bool(result.get("ok")),
             "clean": bool(result.get("clean")),
-            "detail": str(result.get("detail"))[:300] + " / " + str(result.get("image_detail", "no screenshot")),
+            "detail": " / ".join([str(result.get("detail"))[:300], str(result.get("image_detail", "no screenshot")),
+                                  str(result.get("sign_detail", "sign view not captured"))]),
             "mod": mod.name,
             "new_client_findings": result.get("new_client_findings", [])[:8],
             "new_server_findings": result.get("new_server_findings", [])[:8],

@@ -121,6 +121,14 @@ spec.loaders.each { loaderName, loaderSpec ->
                 throw new GradleException("Unknown loader: ${loaderName}")
         }
 
+        if (spec.mappings == 'mojmap' && loaderName in ['forge', 'neoforge']) {
+            // ローダーが足したメソッドと Minecraft のメソッドの名前がぶつかるバージョンがある。
+            // 名前を付け直した結果が同じになるだけで動作には影響しないため、無視して進める
+            minecraftRemapper.config {
+                ignoreConflicts(true)
+            }
+        }
+
         defaultRemapJar = true
     }
 

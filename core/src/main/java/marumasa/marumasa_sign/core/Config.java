@@ -16,6 +16,7 @@ public final class Config {
 
     private int maxThreads = 5;
     private String lastDirectory = "";
+    private int volume = 100;
 
     Config(File gameDirectory) {
         this.file = new File(new File(gameDirectory, "config"), MarumaSign.MOD_ID + ".json");
@@ -37,6 +38,16 @@ public final class Config {
         return maxThreads;
     }
 
+    // 動画や音声の音量 (0 - 100)
+    public int getVolume() {
+        return volume;
+    }
+
+    public void setVolume(int value) {
+        volume = Math.max(0, Math.min(100, value));
+        serialize();
+    }
+
     // 最後に画像を選んだフォルダ
     public String getLastDirectory() {
         return lastDirectory;
@@ -50,6 +61,7 @@ public final class Config {
     }
 
     private static final Pattern MAX_THREADS_PATTERN = Pattern.compile("\"MaxThreads\"\\s*:\\s*(-?\\d+)");
+    private static final Pattern VOLUME_PATTERN = Pattern.compile("\"Volume\"\\s*:\\s*(-?\\d+)");
     private static final Pattern LAST_DIRECTORY_PATTERN = Pattern.compile("\"LastDirectory\"\\s*:\\s*\"((?:\\\\.|[^\"\\\\])*)\"");
 
     private void deserialize() {
@@ -59,6 +71,10 @@ public final class Config {
             Matcher matcher = MAX_THREADS_PATTERN.matcher(json);
             if (matcher.find()) {
                 maxThreads = Math.max(MIN_THREADS, Math.min(MAX_THREADS, Integer.parseInt(matcher.group(1))));
+            }
+            matcher = VOLUME_PATTERN.matcher(json);
+            if (matcher.find()) {
+                volume = Math.max(0, Math.min(100, Integer.parseInt(matcher.group(1))));
             }
             matcher = LAST_DIRECTORY_PATTERN.matcher(json);
             if (matcher.find()) {
@@ -76,6 +92,7 @@ public final class Config {
                 throw new IOException("Cannot create directory: " + parent);
             }
             final String json = "{\"MaxThreads\":" + maxThreads
+                    + ",\"Volume\":" + volume
                     + ",\"LastDirectory\":\"" + lastDirectory.replace("\\", "\\\\").replace("\"", "\\\"") + "\"}";
             Files.write(file.toPath(), json.getBytes(StandardCharsets.UTF_8));
         } catch (IOException | RuntimeException e) {

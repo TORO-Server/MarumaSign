@@ -26,7 +26,7 @@ abstract class UiScreenBase extends Screen {
 
     @Override
     protected void init() {
-        final Window window = minecraft.getWindow();
+        final Window window = Mc.window(minecraft);
         ui.layout(window.getWidth(), window.getHeight());
     }
 
@@ -42,7 +42,7 @@ abstract class UiScreenBase extends Screen {
 
     // 描画の直前に呼ぶ。画面に貼るテクスチャを返す (なければ null)
     protected final Tex prepare() {
-        final Window window = minecraft.getWindow();
+        final Window window = Mc.window(minecraft);
         ui.layout(window.getWidth(), window.getHeight());
         ui.mouseMoved(mouseX(), mouseY());
         return (Tex) ui.texture();
@@ -50,17 +50,17 @@ abstract class UiScreenBase extends Screen {
 
     // GUI の拡大率を打ち消して、ピクセル単位で描くための倍率
     protected final float unscale() {
-        return (float) (1.0 / minecraft.getWindow().getGuiScale());
+        return (float) (1.0 / Mc.window(minecraft).getGuiScale());
     }
 
     // マウスの座標 (ウィンドウ上の位置) をフレームバッファのピクセル単位にする
     private double mouseX() {
-        final Window window = minecraft.getWindow();
+        final Window window = Mc.window(minecraft);
         return minecraft.mouseHandler.xpos() * window.getWidth() / Math.max(1, window.getScreenWidth());
     }
 
     private double mouseY() {
-        final Window window = minecraft.getWindow();
+        final Window window = Mc.window(minecraft);
         return minecraft.mouseHandler.ypos() * window.getHeight() / Math.max(1, window.getScreenHeight());
     }
 
@@ -101,7 +101,7 @@ abstract class UiScreenBase extends Screen {
         return true;
     }
 
-    @Override
+    // ファイルのドロップは 1.15 以降にしかないため、@Override は付けない
     public void onFilesDrop(List<Path> paths) {
         final List<File> files = new ArrayList<File>();
         for (Path path : paths) {
