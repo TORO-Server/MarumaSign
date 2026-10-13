@@ -64,6 +64,7 @@ public final class Adapter {
         if (!active) return;
 
         SignRendererBase.install(mc);
+        SignItems.install(mc);
         MarumaSign.tick();
 
         while (openMenu.consumeClick()) {
