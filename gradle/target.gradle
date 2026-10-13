@@ -1,0 +1,133 @@
+// targets.json の 1 項目 (Minecraft のバージョン 1 つ) をビルドするための共通設定。
+// ソースは adapters/<era>/ にあり、複数の項目で共有できる。
+
+apply plugin: 'java'
+apply plugin: 'xyz.wagyourtail.unimined'
+
+def spec = project.ext.spec
+def eraDir = rootProject.file("adapters/${spec.era}")
+
+sourceSets {
+    main {
+        java.srcDirs = [new File(eraDir, 'main/java')]
+        resources.srcDirs = [new File(eraDir, 'main/resources')]
+    }
+}
+spec.loaders.each { loaderName, loaderSpec ->
+    sourceSets.create(loaderName) {
+        java.srcDirs = [new File(eraDir, "${loaderName}/java")]
+        resources.srcDirs = [new File(eraDir, "${loaderName}/resources")]
+    }
+}
+
+repositories {
+    // LiteLoader のスナップショットは公式のリダイレクタが停止しているため、配布元を直接指定する
+    exclusiveContent {
+        forRepository {
+            maven {
+                name = 'LiteLoader snapshots'
+                url = 'https://repo.mumfrey.com/content/repositories/snapshots/'
+            }
+        }
+        filter {
+            includeVersionByRegex('com\\.mumfrey', 'liteloader', '.*-SNAPSHOT')
+        }
+    }
+    mavenCentral()
+}
+
+tasks.withType(JavaCompile).configureEach {
+    sourceCompatibility = '8'
+    targetCompatibility = '8'
+}
+
+// ソースに埋め込むバージョン情報
+def generatedDir = layout.buildDirectory.dir('generated/buildinfo')
+def packageName = "marumasa.marumasa_sign.${spec.era}"
+def generateBuildInfo = tasks.register('generateBuildInfo') {
+    def modVersion = project.version.toString()
+    def outputDir = generatedDir
+    inputs.property('version', modVersion)
+    inputs.property('package', packageName)
+    outputs.dir(outputDir)
+    doLast {
+        def file = new File(outputDir.get().asFile, packageName.replace('.', '/') + '/BuildInfo.java')
+        file.parentFile.mkdirs()
+        file.setText("package ${packageName};\n\npublic final class BuildInfo {\n" +
+                "    public static final String VERSION = \"${modVersion}\";\n\n" +
+                "    private BuildInfo() {\n    }\n}\n", 'UTF-8')
+    }
+}
+sourceSets.main.java.srcDir(generateBuildInfo)
+
+def applyMappings = { mappingsConfig ->
+    def parts = spec.mappings.split(':')
+    switch (parts[0]) {
+        case 'mcp':
+            mappingsConfig.searge()
+            mappingsConfig.mcp(parts[1], parts[2])
+            break
+        case 'mojmap':
+            mappingsConfig.mojmap()
+            break
+        case 'none':
+            // 26.1 以降は難読化されていないため不要
+            break
+        default:
+            throw new GradleException("Unknown mappings: ${spec.mappings}")
+    }
+}
+
+unimined.minecraft {
+    version spec.minecraft
+
+    mappings {
+        applyMappings(delegate)
+    }
+
+    defaultRemapJar = false
+}
+
+spec.loaders.each { loaderName, loaderSpec ->
+    unimined.minecraft(sourceSets[loaderName]) {
+        combineWith(sourceSets.main)
+
+        switch (loaderName) {
+            case 'forge':
+                minecraftForge {
+                    loader loaderSpec.loader
+                }
+                break
+            case 'neoforge':
+                neoForge {
+                    loader loaderSpec.loader
+                }
+                break
+            case 'fabric':
+                fabric {
+                    loader loaderSpec.loader
+                }
+                break
+            case 'liteloader':
+                side 'client'
+                liteloader {
+                    loader loaderSpec.loader
+                }
+                break
+            default:
+                throw new GradleException("Unknown loader: ${loaderName}")
+        }
+
+        defaultRemapJar = true
+    }
+
+    dependencies.add("${loaderName}Implementation", project(':core'))
+}
+
+dependencies {
+    implementation project(':core')
+}
+
+jar {
+    enabled = false
+}

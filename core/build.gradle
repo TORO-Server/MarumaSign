@@ -1,0 +1,29 @@
+plugins {
+    id 'java-library'
+}
+
+repositories {
+    mavenCentral()
+}
+
+dependencies {
+    // 1.7.10 に同梱されている版。これより新しい API は使わない
+    compileOnly 'org.apache.logging.log4j:log4j-api:2.0-beta9'
+    testImplementation 'org.apache.logging.log4j:log4j-api:2.0-beta9'
+}
+
+// Minecraft を起動せずに画面の見た目を PNG に書き出す
+tasks.register('uiPreview', JavaExec) {
+    classpath = sourceSets.test.runtimeClasspath
+    mainClass = 'marumasa.marumasa_sign.core.UiPreview'
+    javaLauncher = javaToolchains.launcherFor(java.toolchain)
+    args = [layout.buildDirectory.dir('ui-preview').get().asFile.path,
+            providers.gradleProperty('previewLang').getOrElse('ja_jp'),
+            providers.gradleProperty('previewScale').getOrElse('2')] +
+            (providers.gradleProperty('previewImage').isPresent() ? [providers.gradleProperty('previewImage').get()] : [])
+}
+
+tasks.withType(JavaCompile).configureEach {
+    // Minecraft に依存しないので JDK 8 の API だけに制限する
+    options.release = 8
+}

@@ -1,0 +1,86 @@
+package marumasa.marumasa_sign.v1_12;
+
+import marumasa.marumasa_sign.core.MarumaSign;
+import marumasa.marumasa_sign.core.util.Reflect;
+import net.minecraft.client.Minecraft;
+import net.minecraft.client.gui.inventory.GuiEditSign;
+import net.minecraft.client.renderer.tileentity.TileEntityRendererDispatcher;
+import net.minecraft.client.settings.KeyBinding;
+import net.minecraft.tileentity.TileEntitySign;
+import net.minecraft.util.text.TextComponentString;
+import org.apache.commons.lang3.ArrayUtils;
+
+import java.lang.reflect.Field;
+import java.util.Map;
+
+/**
+ * Minecraft 1.12.2 向けの実装の入口。ローダーごとの処理から init と tick が呼ばれる。
+ */
+public final class Adapter {
+
+    private static final Minecraft mc = Minecraft.getMinecraft();
+
+    // この実装が core を初期化したかどうか (他の経路で既に起動していれば false のまま)
+    private static boolean active;
+    private static KeyBinding openMenu;
+    private static boolean rendererInstalled;
+    private static Field editSignTile;
+
+    private Adapter() {
+    }
+
+    // loaderName: 起動したローダーの名前。初期化した場合は true を返す
+    public static synchronized boolean init(String loaderName) {
+        if (MarumaSign.isInitialized()) return false;
+        MarumaSign.init(new PlatformImpl(loaderName));
+        active = true;
+
+        // キーバインド登録
+        openMenu = new KeyBinding("key." + MarumaSign.MOD_ID + ".open_menu", 48, "key.categories.misc");
+        mc.gameSettings.keyBindings = ArrayUtils.add(mc.gameSettings.keyBindings, openMenu);
+        // 保存されているキーの割り当てを読み直す
+        mc.gameSettings.loadOptions();
+        return true;
+    }
+
+    // クライアントの tick の最後に呼ばれる
+    public static void tick() {
+        if (!active) return;
+        if (!rendererInstalled) installRenderer();
+
+        MarumaSign.tick();
+
+        while (openMenu.isPressed()) {
+            if (mc.player != null && mc.currentScreen == null) MarumaSign.openMenu();
+        }
+
+        // 看板の編集画面が開かれたら、予約されている文字列を書き込んで閉じる
+        if (MarumaSign.hasPendingWrite() && mc.currentScreen instanceof GuiEditSign) {
+            writeSign((GuiEditSign) mc.currentScreen);
+        }
+    }
+
+    // 看板のレンダラーを置き換える
+    private static void installRenderer() {
+        final TileEntityRendererDispatcher dispatcher = TileEntityRendererDispatcher.instance;
+        final Map<Class<?>, Object> renderers = Reflect.get(Reflect.fieldOfType(TileEntityRendererDispatcher.class, Map.class), dispatcher);
+        final SignRenderer renderer = new SignRenderer();
+        renderer.setRendererDispatcher(dispatcher);
+        renderers.put(TileEntitySign.class, renderer);
+        rendererInstalled = true;
+    }
+
+    private static void writeSign(GuiEditSign screen) {
+        if (editSignTile == null) editSignTile = Reflect.fieldOfType(GuiEditSign.class, TileEntitySign.class);
+        final TileEntitySign sign = Reflect.get(editSignTile, screen);
+        final String[] lines = MarumaSign.takePendingWrite();
+        if (sign != null && lines != null) {
+            for (int i = 0; i < 4; i++) {
+                sign.signText[i] = new TextComponentString(lines[i]);
+            }
+            sign.markDirty();
+        }
+        // 画面を閉じると、看板の内容がサーバーへ送信される
+        mc.displayGuiScreen(null);
+    }
+}

@@ -1,10 +1,34 @@
 pluginManagement {
     repositories {
         maven {
+            name = 'wagyourtail releases'
+            url = 'https://maven.wagyourtail.xyz/releases'
+        }
+        maven {
+            name = 'wagyourtail snapshots'
+            url = 'https://maven.wagyourtail.xyz/snapshots'
+        }
+        maven {
+            name = 'NeoForged'
+            url = 'https://maven.neoforged.net/releases'
+        }
+        maven {
+            name = 'MinecraftForge'
+            url = 'https://maven.minecraftforge.net/'
+        }
+        maven {
             name = 'Fabric'
             url = 'https://maven.fabricmc.net/'
         }
-        gradlePluginPortal()
+        mavenCentral()
+        gradlePluginPortal {
+            content {
+                excludeGroup('org.apache.logging.log4j')
+            }
+        }
+    }
+    plugins {
+        id 'xyz.wagyourtail.unimined' version "${unimined_version}"
     }
 }
 
@@ -13,3 +37,15 @@ plugins {
 }
 
 rootProject.name = 'MarumaSign'
+
+include 'core'
+include 'bootstrap'
+include 'dist'
+
+// targets.json の各項目が、Minecraft のバージョン 1 つ分のビルド対象
+new groovy.json.JsonSlurper().parse(file('targets.json')).each { target ->
+    include "targets:${target.name}"
+    def dir = file("targets/${target.name}")
+    dir.mkdirs()
+    project(":targets:${target.name}").projectDir = dir
+}
