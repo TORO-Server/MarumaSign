@@ -47,6 +47,8 @@ final class SignItems {
 
     // 看板アイテムのモデルがまだ包まれていなければ包む。リソースの再読み込みで元に戻るため、毎 tick 確認する
     static void install(Minecraft mc) {
+        // アイテムの情報は、ワールドに入るまで読めないバージョンがある
+        if (mc.level == null) return;
         final ModelManager manager = mc.getModelManager();
         if (manager == null) return;
 

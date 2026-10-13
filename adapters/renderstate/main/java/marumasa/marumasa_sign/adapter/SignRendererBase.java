@@ -54,6 +54,7 @@ abstract class SignRendererBase implements BlockEntityRenderer<SignBlockEntity, 
     // 看板のレンダラーがまだ包まれていなければ包む。リソースの再読み込みで元に戻るため、毎 tick 確認する
     @SuppressWarnings("unchecked")
     static void install(Minecraft mc) {
+        SignBoards.install(mc);
         final BlockEntityRenderDispatcher dispatcher = mc.getBlockEntityRenderDispatcher();
         if (dispatcher == null) return;
         if (renderersField == null) renderersField = Reflect.fieldOfType(BlockEntityRenderDispatcher.class, Map.class);
@@ -82,8 +83,10 @@ abstract class SignRendererBase implements BlockEntityRenderer<SignBlockEntity, 
         BlockEntityRenderState.extractBase(sign, state, breakProgress);
 
         state.image = MarumaSign.sign(Mc.signText(sign));
-        if (state.image == null) return;
         state.spectator = mc.player != null && mc.player.isSpectator();
+        // スペクテイターには看板そのものも見せる
+        SignBoards.track(sign, state.image != null && !state.spectator);
+        if (state.image == null) return;
         state.distance = Math.sqrt(sign.getBlockPos().distToCenterSqr(cameraPosition));
 
         final BlockState blockState = sign.getBlockState();
