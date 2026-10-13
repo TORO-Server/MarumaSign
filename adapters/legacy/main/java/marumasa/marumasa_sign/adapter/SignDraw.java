@@ -58,6 +58,8 @@ final class SignDraw {
         GL11.glEnable(GL11.GL_BLEND);
         GL11.glBlendFunc(GL11.GL_SRC_ALPHA, GL11.GL_ONE_MINUS_SRC_ALPHA);
         GL11.glColor4f(1f, 1f, 1f, 1f);
+        // 影 Mod は面の向きを使って光を計算するので、どの向きの絵も同じ明るさになるように上向きにしておく
+        GL11.glNormal3f(0f, 1f, 0f);
 
         for (SignImage.Batch batch : batches) {
             Minecraft.getMinecraft().getTextureManager().bindTexture(((PlatformImpl.Texture) batch.texture).location);

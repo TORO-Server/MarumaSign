@@ -10,3 +10,6 @@ Author: Paul Lamb, www\.paulscode\.com
 lost connection: .*Internal Exception: java\.io\.IOException
 # 確認の途中で、スクリプトがプレイヤーを離れた場所へ移動させるために出る
 moved too quickly
+
+# シェーダーパックを読み込むときに影 Mod が出す、パックの内容についての知らせ (毎回違う関数の名前が出る)
+Removing unused function \w+ and omitting further such messages
