@@ -97,4 +97,8 @@ final class Mc {
             }
         }
     }
+
+    // このバージョンでは、カメラの向きによって看板が描かれなくなる問題はない
+    static void avoidExactAngles(Minecraft mc) {
+    }
 }

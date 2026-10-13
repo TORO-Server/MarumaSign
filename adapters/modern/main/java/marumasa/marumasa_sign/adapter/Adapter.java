@@ -66,6 +66,7 @@ public final class Adapter {
         SignRendererBase.install(mc);
         SignItems.install(mc);
         MarumaSign.tick();
+        if (mc.player != null && "forge".equals(loaderName)) Mc.avoidExactAngles(mc);
 
         while (openMenu.consumeClick()) {
             if (mc.player != null && Mc.screen(mc) == null) MarumaSign.openMenu();

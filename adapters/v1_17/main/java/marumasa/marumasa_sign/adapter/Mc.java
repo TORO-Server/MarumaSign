@@ -112,4 +112,10 @@ final class Mc {
             }
         }
     }
+
+    // Forge は、カメラの向きが軸にぴったり沿っていると看板を描かないことがあるので、見た目に分からない程度だけずらす
+    static void avoidExactAngles(Minecraft mc) {
+        if (mc.player.getXRot() == 0f) mc.player.setXRot(0.01f);
+        if (mc.player.getYRot() % 90f == 0f) mc.player.setYRot(mc.player.getYRot() + 0.01f);
+    }
 }
