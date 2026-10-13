@@ -36,7 +36,8 @@ final class PlatformImpl implements Platform {
         Texture(Identifier id, DynamicTexture texture) {
             this.id = id;
             this.texture = texture;
-            this.renderType = RenderTypes.entityTranslucent(id);
+            // 文字用の描画設定を使う。半透明に対応し、周囲の明るさは反映するが、面の向きによる陰影は付かない
+            this.renderType = RenderTypes.text(id);
         }
     }
 

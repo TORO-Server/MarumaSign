@@ -324,8 +324,8 @@ def install_liteloader(main_dir, minecraft, base_command):
     if minecraft not in versions:
         raise RuntimeError(f"LiteLoader does not support Minecraft {minecraft}")
     entry = versions[minecraft]
-    # スナップショットしかないバージョンと、リリース版があるバージョンがある
-    snapshot = "artefacts" not in entry
+    # リリース版の配布サーバーは一部が停止しているため、スナップショットがあればそちらを使う
+    snapshot = "snapshots" in entry
     stream = entry["snapshots"] if snapshot else entry["artefacts"]
     build = stream["com.mumfrey:liteloader"]["latest"]
     repository = entry["repo"]["url"].replace("http://", "https://")
@@ -363,15 +363,22 @@ def install_liteloader(main_dir, minecraft, base_command):
                     candidates += [base + f"liteloader-{name}-release.jar", base + f"liteloader-{name}.jar"]
                 # 古いリリース版は Minecraft のバージョンごとのフォルダに置かれている
                 candidates.append(f"{repository.rstrip('/')}/com/mumfrey/liteloader/{minecraft}/{build['file']}")
+                downloaded = []
                 for url in candidates:
                     try:
                         download(url, target)
                     except OSError:
                         continue
+                    downloaded.append(url)
                     if file_md5(target) == build["md5"]:
                         break
                 else:
-                    raise RuntimeError(f"No LiteLoader download matches the official checksum for {minecraft}")
+                    # 公式の一覧より新しいビルドが公開されているとチェックサムは合わない。
+                    # その場合は最新の実環境用の jar を使い、そのことを記録に残す
+                    if not downloaded:
+                        raise RuntimeError(f"LiteLoader for {minecraft} could not be downloaded")
+                    download(downloaded[0], target)
+                    log(f"note: LiteLoader {minecraft} does not match the listed checksum; using {downloaded[0]}")
         else:
             fetch_library(main_dir, library["name"], [
                 "https://libraries.minecraft.net/", library.get("url", MAVEN_CENTRAL), MAVEN_CENTRAL,
@@ -392,6 +399,36 @@ def install_liteloader(main_dir, minecraft, base_command):
     directory = main_dir / "versions" / version_id
     directory.mkdir(parents=True, exist_ok=True)
     (directory / f"{version_id}.json").write_text(json.dumps(profile, indent=2), encoding="utf-8")
+    return version_id
+
+
+# ---------- NeoForge ----------
+# ランチャーは新しい NeoForge のインストーラーに対応していないため、公式のインストーラーを直接実行する
+
+NEOFORGE_MAVEN = "https://maven.neoforged.net/releases/net/neoforged/neoforge"
+
+
+def install_neoforge(main_dir, minecraft, version, base_command):
+    """NeoForge をインストールし、そのバージョン ID を返す。"""
+    version_id = f"neoforge-{version}"
+    if (main_dir / "versions" / version_id / f"{version_id}.json").is_file():
+        return version_id
+
+    # バニラのファイルと Java を先に用意する
+    subprocess.run(base_command + ["start", "--dry", minecraft, "-u", PLAYER], capture_output=True, timeout=1500)
+    installer = main_dir / "installers" / f"neoforge-{version}-installer.jar"
+    if not installer.is_file():
+        download(f"{NEOFORGE_MAVEN}/{version}/neoforge-{version}-installer.jar", installer)
+    profiles = main_dir / "launcher_profiles.json"
+    if not profiles.is_file():
+        # インストーラーは公式ランチャーのプロファイルがあることを前提にしている
+        profiles.write_text('{"profiles": {}}', encoding="utf-8")
+
+    java = find_java(java_major_for(minecraft), main_dir)
+    result = subprocess.run([str(java), "-jar", str(installer), "--install-client", str(main_dir)],
+                            capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=1500)
+    if result.returncode != 0:
+        raise RuntimeError("NeoForge installer failed: " + (result.stdout + result.stderr)[-1500:])
     return version_id
 
 
@@ -493,14 +530,29 @@ def analyze_screenshot(path):
     sums = {name: [0, 0, 0] for name in TEST_COLORS}
     for y in range(height):
         for x in range(width):
-            r, g, b = pixels[x, y]
-            for name, (cr, cg, cb) in TEST_COLORS.items():
-                if abs(r - cr) < 45 and abs(g - cg) < 45 and abs(b - cb) < 45:
-                    entry = sums[name]
-                    entry[0] += 1
-                    entry[1] += x
-                    entry[2] += y
-                    break
+            name = classify(*pixels[x, y])
+            if name is not None:
+                entry = sums[name]
+                entry[0] += 1
+                entry[1] += x
+                entry[2] += y
+    return judge_colours(sums, width, height)
+
+
+def classify(r, g, b):
+    """ピクセルがテスト画像のどの色かを、明るさに左右されないよう色の比率で判定する。"""
+    if r > 80 and r > 2.5 * g and r > 2.5 * b:
+        return "red"
+    if g > 80 and g > 2.0 * r and g > 1.8 * b:
+        return "green"
+    if b > 80 and b > 1.6 * g and b > 2.5 * r:
+        return "blue"
+    if r > 100 and g < r < 1.6 * g and b < 0.35 * g:
+        return "yellow"
+    return None
+
+
+def judge_colours(sums, width, height):
     counts = {name: entry[0] for name, entry in sums.items()}
     minimum = width * height // 400
     if any(count < minimum for count in counts.values()):
@@ -584,19 +636,34 @@ def run(args):
     }
 
     host = MockHost()
-    base = ["portablemc", "--main-dir", str(main_dir), "--work-dir", str(work_dir), "--output", "human"]
+    # 通信が途中で止まっても待ち続けないように、ランチャーの通信にタイムアウトを付ける
+    base = ["portablemc", "--timeout", "60", "--main-dir", str(main_dir), "--work-dir", str(work_dir), "--output", "human"]
     if args.spec:
         spec = args.spec
     elif args.loader == "liteloader":
         spec = install_liteloader(main_dir, args.minecraft, base)
+    elif args.loader == "neoforge" and not args.loader_version.startswith("1.20.1-"):
+        spec = install_neoforge(main_dir, args.minecraft, args.loader_version, base)
     else:
         spec = launcher_spec(args.minecraft, args.loader, args.loader_version)
 
     # 先にクライアントのファイルを揃える (サーバー用の Java もここで手に入る)
     log(f"installing {spec}")
-    install = subprocess.run(base + ["start", "--dry", spec, "-u", PLAYER], capture_output=True, text=True, encoding="utf-8", errors="replace")
-    if install.returncode != 0:
-        result["detail"] = "Launcher install failed: " + (install.stdout + install.stderr)[-1500:]
+    failure = ""
+    for attempt in range(3):
+        # ダウンロードの失敗は一時的なことが多いので、何度か試す
+        try:
+            install = subprocess.run(base + ["start", "--dry", spec, "-u", PLAYER], capture_output=True, text=True,
+                                     encoding="utf-8", errors="replace", timeout=1500)
+        except subprocess.TimeoutExpired:
+            failure = "timed out"
+            continue
+        if install.returncode == 0:
+            failure = ""
+            break
+        failure = (install.stdout + install.stderr)[-1500:]
+    if failure:
+        result["detail"] = "Launcher install failed: " + failure
         host.close()
         return result
 

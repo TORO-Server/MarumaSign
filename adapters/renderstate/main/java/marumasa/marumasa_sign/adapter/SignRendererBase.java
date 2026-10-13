@@ -11,7 +11,6 @@ import net.minecraft.client.renderer.blockentity.BlockEntityRenderer;
 import net.minecraft.client.renderer.blockentity.state.BlockEntityRenderState;
 import net.minecraft.client.renderer.culling.Frustum;
 import net.minecraft.client.renderer.feature.ModelFeatureRenderer;
-import net.minecraft.client.renderer.texture.OverlayTexture;
 import net.minecraft.core.BlockPos;
 import net.minecraft.world.level.block.StandingSignBlock;
 import net.minecraft.world.level.block.WallSignBlock;
@@ -119,9 +118,7 @@ abstract class SignRendererBase implements BlockEntityRenderer<SignBlockEntity, 
                 vertices.addVertex(pose, mesh[o], mesh[o + 1], mesh[o + 2])
                         .setColor(255, 255, 255, 255)
                         .setUv(mesh[o + 3], mesh[o + 4])
-                        .setOverlay(OverlayTexture.NO_OVERLAY)
-                        .setLight(light)
-                        .setNormal(pose, mesh[o + 5], mesh[o + 6], mesh[o + 7]);
+                        .setLight(light);
             }
         });
         MarumaSign.drawn(image);
