@@ -790,7 +790,11 @@ def run(args):
         args.mod = None
     # 影 Mod を入れて確認する場合は、結果も基準も別に持つ
     shaders = bool(getattr(args, "shaders", False))
+    shader_pack = getattr(args, "shader_pack", None) or shadermods.SHADER_PACK
     variant = f"{args.loader}-{args.minecraft}" + ("-shaders" if shaders else "")
+    shader_mod = getattr(args, "shader_mod", None)
+    if shaders and shadermods.variant(shader_pack, shader_mod):
+        variant += "-" + shadermods.variant(shader_pack, shader_mod)
     name = variant + ("-baseline" if args.baseline else "")
     work_dir = root / "runs" / name
     result_dir = work_dir / "selftest"
@@ -805,12 +809,14 @@ def run(args):
     }
     shader_setup = None
     if shaders:
-        shader_setup = shadermods.resolve(args.loader, args.minecraft, root / "shadermods")
+        shader_setup = shadermods.resolve(args.loader, args.minecraft, root / "shadermods", shader_pack,
+                                         shader_mod)
         if shader_setup is None:
             result["detail"] = "No shader mod is available for this combination"
             return result
         shadermods.install(shader_setup, root / "shadermods", work_dir)
         result["shader_mod"] = shader_setup["name"]
+        result["shader_pack"] = shader_pack
         log(f"shader mod: {shader_setup['name']} {[item for item, _ in shader_setup['mods']]} + {shader_setup['pack'][0]}")
 
     host = MockHost()
