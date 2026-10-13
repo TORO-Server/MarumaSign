@@ -6,7 +6,8 @@
 - Fabric: Iris (と Sodium)
 - NeoForge: Iris (と Sodium)
 - Forge 1.16.5 以降: Oculus (と Rubidium / Embeddium)
-- Forge 1.7.10 - 1.12.2: OptiFine
+- Forge 1.7.10 - 1.15.2: OptiFine
+- LiteLoader: OptiFine (Mod としてではなく、起動用のプロファイルに組み込む)
 """
 
 import json
@@ -209,8 +210,9 @@ def resolve(loader, minecraft, cache_dir, pack_slug=SHADER_PACK, shader_mod=None
 
     戻り値: {"name": 影 Mod の名前, "mods": [(ファイル名, URL)], "config": 設定ファイルの名前, "pack": (ファイル名, URL)}
     """
+    library = None
     try:
-        if shader_mod == "optifine" and loader != "forge":
+        if shader_mod == "optifine" and loader not in ("forge", "liteloader"):
             return None
         if loader in ("fabric", "neoforge"):
             mods = modrinth_files("iris", loader, minecraft, {"iris"}, cache_dir)
@@ -222,14 +224,22 @@ def resolve(loader, minecraft, cache_dir, pack_slug=SHADER_PACK, shader_mod=None
             optifine = optifine_file(minecraft)
             mods = [optifine] if optifine else None
             name, config = "OptiFine", "optionsshaders.txt"
+        elif loader == "liteloader":
+            # LiteLoader には OptiFine を Mod として読み込む仕組みがないので、起動用のプロファイルに組み込む
+            optifine = optifine_file(minecraft)
+            if optifine is None:
+                return None
+            download(optifine[1], cache_dir / optifine[0])
+            mods, library = [], cache_dir / optifine[0]
+            name, config = "OptiFine", "optionsshaders.txt"
         else:
             return None
-        if not mods:
+        if not mods and library is None:
             return None
         pack = pack_version(pack_slug, "optifine" if name == "OptiFine" else "iris", minecraft)
         if pack is None:
             return None
-        return {"name": name, "mods": mods, "config": config, "pack_slug": pack_slug,
+        return {"name": name, "mods": mods, "config": config, "pack_slug": pack_slug, "library": library,
                 "pack": (pack["files"][0]["filename"], pack["files"][0]["url"])}
     except OSError:
         return None
@@ -270,4 +280,5 @@ if __name__ == "__main__":
         if result is None:
             print(f"{item}: no shader mod")
         else:
-            print(f"{item}: {result['name']} {[name for name, _ in result['mods']]} + {result['pack'][0]}")
+            print(f"{item}: {result['name']} {[name for name, _ in result['mods']] or result['library'].name}"
+                  f" + {result['pack'][0]}")

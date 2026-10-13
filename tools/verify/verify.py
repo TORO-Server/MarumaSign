@@ -389,8 +389,29 @@ def fetch_library(main_dir, name, repositories):
     raise RuntimeError(f"Could not download {name}:\n" + "\n".join(errors))
 
 
-def install_liteloader(main_dir, minecraft, base_command):
-    """LiteLoader の起動用プロファイルを作り、そのバージョン ID を返す。"""
+def patch_optifine(main_dir, minecraft, installer):
+    """OptiFine を Minecraft 本体に当てて、ライブラリとして置く。ライブラリの名前を返す。"""
+    version = installer.stem.replace("OptiFine_", "")
+    name = f"optifine:OptiFine:{version}"
+    target = main_dir / "libraries" / maven_path(name)
+    if not target.is_file():
+        target.parent.mkdir(parents=True, exist_ok=True)
+        java = find_java(8, main_dir)
+        client = main_dir / "versions" / minecraft / f"{minecraft}.jar"
+        # OptiFine の配布ファイルに入っている、インストーラーと同じ処理
+        patched = subprocess.run([str(java), "-cp", str(installer), "optifine.Patcher",
+                                  str(client), str(installer), str(target)],
+                                 capture_output=True, text=True, timeout=600)
+        if patched.returncode != 0 or not target.is_file():
+            raise RuntimeError(f"OptiFine could not be patched: {(patched.stderr or patched.stdout)[-300:]}")
+    return name
+
+
+def install_liteloader(main_dir, minecraft, base_command, optifine=None):
+    """LiteLoader の起動用プロファイルを作り、そのバージョン ID を返す。
+
+    optifine に OptiFine の配布ファイルを指定すると、OptiFine も一緒に読み込むプロファイルにする。
+    """
     versions = fetch_json(LITELOADER_VERSIONS_URL)["versions"]
     if minecraft not in versions:
         raise RuntimeError(f"LiteLoader does not support Minecraft {minecraft}")
@@ -457,6 +478,12 @@ def install_liteloader(main_dir, minecraft, base_command):
             ])
 
     version_id = f"{minecraft}-LiteLoader"
+    tweaks = " --tweakClass " + build["tweakClass"]
+    if optifine is not None:
+        # 公式のインストーラーで OptiFine のプロファイルを土台にしたときと同じ並びにする
+        unique.append({"name": patch_optifine(main_dir, minecraft, optifine)})
+        version_id += "-OptiFine"
+        tweaks = " --tweakClass optifine.OptiFineTweaker" + tweaks
     profile = {
         "id": version_id,
         "inheritsFrom": minecraft,
@@ -464,7 +491,7 @@ def install_liteloader(main_dir, minecraft, base_command):
         "time": vanilla.get("time", ""),
         "releaseTime": vanilla.get("releaseTime", ""),
         "mainClass": "net.minecraft.launchwrapper.Launch",
-        "minecraftArguments": vanilla["minecraftArguments"] + " --tweakClass " + build["tweakClass"],
+        "minecraftArguments": vanilla["minecraftArguments"] + tweaks,
         "libraries": unique,
     }
     directory = main_dir / "versions" / version_id
@@ -817,7 +844,8 @@ def run(args):
         shadermods.install(shader_setup, root / "shadermods", work_dir)
         result["shader_mod"] = shader_setup["name"]
         result["shader_pack"] = shader_pack
-        log(f"shader mod: {shader_setup['name']} {[item for item, _ in shader_setup['mods']]} + {shader_setup['pack'][0]}")
+        log(f"shader mod: {shader_setup['name']} "
+            f"{[item for item, _ in shader_setup['mods']] or shader_setup['library'].name} + {shader_setup['pack'][0]}")
 
     host = MockHost()
     # 通信が途中で止まっても待ち続けないように、ランチャーの通信にタイムアウトを付ける
@@ -825,7 +853,8 @@ def run(args):
     if args.spec:
         spec = args.spec
     elif args.loader == "liteloader":
-        spec = install_liteloader(main_dir, args.minecraft, base)
+        spec = install_liteloader(main_dir, args.minecraft, base,
+                                  shader_setup.get("library") if shader_setup else None)
     elif args.loader == "neoforge" and not args.loader_version.startswith("1.20.1-"):
         spec = install_neoforge(main_dir, args.minecraft, args.loader_version, base)
     else:
