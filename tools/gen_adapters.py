@@ -1577,26 +1577,6 @@ for era, files in ERAS.items():
 
 # ---------------------------------------------------------------- 看板アイテムの見た目
 
-# まだ対応していない世代用。何もしない
-write("item_none", "SignItems.java", """
-package marumasa.marumasa_sign.adapter;
-
-import net.minecraft.client.Minecraft;
-
-/**
- * 看板アイテムの見た目の差し替え。この世代では、まだ対応していない。
- */
-final class SignItems {
-
-    private SignItems() {
-    }
-
-    static void install(Minecraft mc) {
-    }
-}
-""")
-
-
 def item_model_source(title, read_lines, replace_layers, extra_fields, animated, extents):
     """1.21.4 - 1.21.8: アイテムのモデルの表にある看板アイテムのモデルを包む。"""
     return f"""
@@ -2112,6 +2092,180 @@ final class SignItemData {
 }
 """)
 
+
+def item_static_source(title, renderer_class, renderer_import, render_signature, render_delegate, draw, extra_imports, built_in):
+    """1.14 - 1.16.5: 専用の描画を行う部分が、ゲーム全体で 1 つの static なフィールドになっているバージョン。"""
+    source = f"""
+package marumasa.marumasa_sign.adapter;
+
+import marumasa.marumasa_sign.core.MarumaSign;
+import marumasa.marumasa_sign.core.sign.SignImage;
+import marumasa.marumasa_sign.core.util.Reflect;
+import net.minecraft.client.Minecraft;
+import net.minecraft.client.renderer.ItemModelShaper;
+{renderer_import}
+{extra_imports}import net.minecraft.client.renderer.block.model.ItemOverrides;
+import net.minecraft.client.renderer.entity.ItemRenderer;
+import net.minecraft.client.resources.model.BakedModel;
+import net.minecraft.client.resources.model.BuiltInModel;
+import net.minecraft.client.resources.model.ModelManager;
+import net.minecraft.client.resources.model.ModelResourceLocation;
+import net.minecraft.nbt.CompoundTag;
+import net.minecraft.world.item.BlockItem;
+import net.minecraft.world.item.Item;
+import net.minecraft.world.item.ItemStack;
+import net.minecraft.world.level.block.StandingSignBlock;
+
+import java.lang.reflect.Field;
+import java.util.IdentityHashMap;
+import java.util.Map;
+
+/**
+ * 看板の文字を持っている看板アイテムを、その看板と同じ内容 (画像・動画・3D モデル) で描く。({title})
+ * アイテムのモデルを選ぶ部分を包んで、MarumaSign の看板のデータを持つアイテムには「専用の描画を行うモデル」を返し、
+ * 専用の描画を行う部分を包んで、そのアイテムのときに画像を描く。
+ */
+final class SignItems {{
+
+    private static Field shaperField;
+    private static Field rendererField;
+
+    private SignItems() {{
+    }}
+
+    // まだ包まれていなければ包む。毎 tick 確認する
+    static void install(Minecraft mc) {{
+        final ItemRenderer itemRenderer = mc.getItemRenderer();
+        if (itemRenderer == null) return;
+
+        // 専用の描画を行う部分は、ゲーム全体で 1 つだけあり、書き換えられないフィールドに入っている
+        if (rendererField == null) {{
+            rendererField = Reflect.fieldOfType({renderer_class}.class, {renderer_class}.class);
+            shaperField = Reflect.fieldOfType(ItemRenderer.class, ItemModelShaper.class);
+        }}
+        final {renderer_class} renderer = Reflect.get(rendererField, null);
+        if (renderer != null && !(renderer instanceof Renderer)) {{
+            Reflect.setStaticFinal(rendererField, new Renderer(renderer));
+        }}
+        final ItemModelShaper shaper = Reflect.get(shaperField, itemRenderer);
+        if (shaper != null && !(shaper instanceof Shaper)) {{
+            Reflect.set(shaperField, itemRenderer, new Shaper(shaper, mc));
+        }}
+    }}
+
+    // アイテムが持っている看板のデータから、表示する内容を探す。MarumaSign の看板でなければ null
+    static SignImage find(ItemStack stack) {{
+        // 立て看板になるアイテムだけを対象にする
+        final Item item = stack.getItem();
+        if (!(item instanceof BlockItem) || !(((BlockItem) item).getBlock() instanceof StandingSignBlock)) return null;
+        final CompoundTag tag = SignItemData.blockEntityTag(stack);
+        if (tag == null) return null;
+
+        final String[] lines = new String[4];
+        for (int i = 0; i < 4; i++) {{
+            lines[i] = tag.getString("Text" + (i + 1));
+        }}
+        return MarumaSign.itemSign(lines);
+    }}
+
+    /**
+     * アイテムのモデルを選ぶ部分。MarumaSign の看板のデータを持つアイテムには、専用の描画を行うモデルを返す。
+     */
+    private static final class Shaper extends ItemModelShaper {{
+
+        private final ItemModelShaper delegate;
+        // 元のモデルごとの、専用の描画を行うモデル。位置と向きは元のモデルと同じ
+        private final Map<BakedModel, BakedModel> builtIn = new IdentityHashMap<BakedModel, BakedModel>();
+
+        Shaper(ItemModelShaper delegate, Minecraft mc) {{
+            super(mc.getModelManager());
+            this.delegate = delegate;
+        }}
+
+        @Override
+        public BakedModel getItemModel(ItemStack stack) {{
+            final BakedModel model = delegate.getItemModel(stack);
+            if (model == null || find(stack) == null) return model;
+            BakedModel replaced = builtIn.get(model);
+            if (replaced == null) {{
+                replaced = {built_in};
+                builtIn.put(model, replaced);
+            }}
+            return replaced;
+        }}
+
+        @Override
+        public BakedModel getItemModel(Item item) {{
+            return delegate.getItemModel(item);
+        }}
+
+        @Override
+        public ModelManager getModelManager() {{
+            return delegate.getModelManager();
+        }}
+
+        @Override
+        public void register(Item item, ModelResourceLocation location) {{
+            delegate.register(item, location);
+        }}
+
+        @Override
+        public void rebuildCache() {{
+            delegate.rebuildCache();
+            builtIn.clear();
+        }}
+    }}
+
+    /**
+     * 専用の描画を行う部分。MarumaSign の看板アイテムのときだけ画像を描き、それ以外は元の処理に任せる。
+     */
+    private static final class Renderer extends {renderer_class} {{
+
+        private final {renderer_class} delegate;
+
+        Renderer({renderer_class} delegate) {{
+            this.delegate = delegate;
+        }}
+
+        @Override
+        public void renderByItem({render_signature}) {{
+            final SignImage image = find(stack);
+            if (image == null) {{
+                delegate.renderByItem({render_delegate});
+                return;
+            }}
+            // 距離は分からないので、手元にあるものとして扱う
+{draw}
+            MarumaSign.drawn(image);
+        }}
+    }}
+}}
+"""
+    lines = source.split("\n")
+    first = next(i for i, line in enumerate(lines) if line.startswith("import marumasa.marumasa_sign.core.MarumaSign"))
+    last = next(i for i, line in enumerate(lines) if line.startswith("import net.minecraft.world.level.block.StandingSignBlock"))
+    block = sorted(line for line in lines[first:last + 1] if line)
+    return "\n".join(lines[:first] + block + lines[last + 1:])
+
+
+ITEM_DRAW_BUFFERS = """            for (SignImage.Batch batch : image.itemBatches(1.0)) {
+                Mc.quads(buffers.getBuffer(((Tex) batch.texture).renderType), poseStack, batch, light);
+            }"""
+ITEM_BUFFER_IMPORTS = "import com.mojang.blaze3d.vertex.PoseStack;\nimport net.minecraft.client.renderer.MultiBufferSource;\n"
+BUILT_IN_114 = "new BuiltInModel(model.getTransforms(), ItemOverrides.EMPTY, model.getParticleIcon())"
+
+write("item_static_1", "SignItems.java", item_static_source(
+    "Minecraft 1.14 - 1.14.4", "EntityBlockRenderer", "import net.minecraft.client.renderer.EntityBlockRenderer;",
+    "ItemStack stack", "stack", "            SignRendererBase.drawBatches(image.itemBatches(1.0));", "", BUILT_IN_114))
+write("item_static_2", "SignItems.java", item_static_source(
+    "Minecraft 1.15 - 1.15.2", "BlockEntityWithoutLevelRenderer", "import net.minecraft.client.renderer.BlockEntityWithoutLevelRenderer;",
+    "ItemStack stack, PoseStack poseStack, MultiBufferSource buffers, int light, int overlay",
+    "stack, poseStack, buffers, light, overlay", ITEM_DRAW_BUFFERS, ITEM_BUFFER_IMPORTS, BUILT_IN_OLD))
+write("item_static_3", "SignItems.java", item_static_source(
+    "Minecraft 1.16 - 1.16.5", "BlockEntityWithoutLevelRenderer", "import net.minecraft.client.renderer.BlockEntityWithoutLevelRenderer;",
+    "ItemStack stack, ItemTransforms.TransformType context, PoseStack poseStack, MultiBufferSource buffers, int light, int overlay",
+    "stack, context, poseStack, buffers, light, overlay", ITEM_DRAW_BUFFERS,
+    ITEM_BUFFER_IMPORTS + "import net.minecraft.client.renderer.block.model.ItemTransforms;\n", BUILT_IN_OLD))
 # 26.x 共通の画面とレンダラーの受け口
 write("v26", "UiScreen.java", SCREEN_EXTRACTOR)
 write("v26", "SignRendererWrapper.java", WRAPPER_RS_26)
