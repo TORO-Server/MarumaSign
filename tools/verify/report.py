@@ -83,6 +83,33 @@ def main():
         lines.append(f"| {minecraft} | " + " | ".join(cells) + " |")
     lines += ["", "合計: " + "、".join(f"{name} {count}" for name, count in counts.items() if count), ""]
 
+    # 影 Mod を入れた状態での確認
+    shader_rows = []
+    for minecraft in sorted((key for key in supported if isinstance(key, str)), key=version_key, reverse=True):
+        cells = []
+        for loader in LOADERS:
+            entry = summary.get(f"{loader}:{minecraft}+shaders")
+            text = cell(entry, supported.get((minecraft, loader))) if loader in supported[minecraft] else ""
+            if text and entry.get("detail"):
+                # どの影 Mod で確認したかを添える
+                name = re.search(r"shaders \(([^)]*)\)", entry["detail"])
+                text += f" ({name.group(1)})" if name else ""
+            cells.append(text)
+        if any(cells):
+            shader_rows.append(f"| {minecraft} | " + " | ".join(cells) + " |")
+    if shader_rows:
+        lines += [
+            "## 影 Mod を入れた状態",
+            "",
+            "影 Mod (シェーダーを使えるようにする Mod) とシェーダーパック (BSL Shaders) を入れて、同じ確認を行った結果です。",
+            "影 Mod は、Fabric と NeoForge では Iris (と Sodium)、Forge 1.16.5 以降では Oculus (と Rubidium / Embeddium)、",
+            "Forge 1.12.2 以前では OptiFine を使っています。空欄は、確認していない組み合わせです。",
+            "シェーダーは絵にも影や空の色を付けるので、色そのものではなく、絵が正しい場所に正しい向きで写っていることを確認しています。",
+            "",
+            "| Minecraft | " + " | ".join(LOADER_NAMES[loader] for loader in LOADERS) + " |",
+            "| --- | " + " | ".join("---" for _ in LOADERS) + " |",
+        ] + shader_rows + [""]
+
     output = REPO / "docs" / "verification.md"
     output.parent.mkdir(parents=True, exist_ok=True)
     output.write_text("\n".join(lines), encoding="utf-8", newline="\n")
