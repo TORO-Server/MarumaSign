@@ -43,7 +43,11 @@ include 'bootstrap'
 include 'dist'
 
 // targets.json の各項目が、Minecraft のバージョン 1 つ分のビルド対象
-new groovy.json.JsonSlurper().parse(file('targets.json')).targets.each { target ->
+// 開発中は -PmarumaOnly=mc1_21_8,mc26_2 のように対象を絞ると、設定にかかる時間を短くできる
+def marumaOnly = (providers.gradleProperty('marumaOnly').orNull ?: '').tokenize(',')
+new groovy.json.JsonSlurper().parse(file('targets.json')).targets.findAll {
+    marumaOnly.isEmpty() || it.name in marumaOnly
+}.each { target ->
     include "targets:${target.name}"
     def dir = file("targets/${target.name}")
     dir.mkdirs()

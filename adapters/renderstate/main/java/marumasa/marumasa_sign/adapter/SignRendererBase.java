@@ -17,7 +17,6 @@ import net.minecraft.world.level.block.WallSignBlock;
 import net.minecraft.world.level.block.entity.BlockEntityType;
 import net.minecraft.world.level.block.entity.SignBlockEntity;
 import net.minecraft.world.level.block.state.BlockState;
-import net.minecraft.world.level.block.state.properties.RotationSegment;
 import net.minecraft.world.phys.AABB;
 import net.minecraft.world.phys.Vec3;
 
@@ -90,7 +89,7 @@ abstract class SignRendererBase implements BlockEntityRenderer<SignBlockEntity, 
             state.yaw = blockState.getValue(WallSignBlock.FACING).toYRot();
         } else if (blockState.getBlock() instanceof StandingSignBlock) {
             state.wall = false;
-            state.yaw = RotationSegment.convertToDegrees(blockState.getValue(StandingSignBlock.ROTATION));
+            state.yaw = blockState.getValue(StandingSignBlock.ROTATION) * 22.5f;
         } else {
             state.image = null;
         }
@@ -112,7 +111,7 @@ abstract class SignRendererBase implements BlockEntityRenderer<SignBlockEntity, 
 
         final float[] mesh = image.mesh(state.yaw, state.wall);
         final int light = state.lightCoords;
-        collector.submitCustomGeometry(poseStack, ((PlatformImpl.Texture) image.texture()).renderType, (pose, vertices) -> {
+        collector.submitCustomGeometry(poseStack, ((Tex) image.texture()).renderType, (pose, vertices) -> {
             for (int i = 0; i < SignImage.VERTEX_COUNT; i++) {
                 final int o = i * SignImage.STRIDE;
                 vertices.addVertex(pose, mesh[o], mesh[o + 1], mesh[o + 2])
