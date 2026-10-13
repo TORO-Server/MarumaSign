@@ -480,10 +480,10 @@ def install_liteloader(main_dir, minecraft, base_command, optifine=None):
     version_id = f"{minecraft}-LiteLoader"
     tweaks = " --tweakClass " + build["tweakClass"]
     if optifine is not None:
-        # 公式のインストーラーで OptiFine のプロファイルを土台にしたときと同じ並びにする
+        # OptiFine は、他のローダーと一緒に使うための入口 (起動の引数を自分では渡さないもの) から読み込む
         unique.append({"name": patch_optifine(main_dir, minecraft, optifine)})
         version_id += "-OptiFine"
-        tweaks = " --tweakClass optifine.OptiFineTweaker" + tweaks
+        tweaks += " --tweakClass optifine.OptiFineForgeTweaker"
     profile = {
         "id": version_id,
         "inheritsFrom": minecraft,
