@@ -15,6 +15,7 @@ import json
 import os
 import re
 import shutil
+import socket
 import subprocess
 import sys
 import threading
@@ -160,12 +161,12 @@ def java_major_for(minecraft):
     return 8
 
 
-def find_java(major, main_dir):
-    """サーバーの起動に使う java を探す。"""
+def find_java(major, main_dir, bundled=True):
+    """サーバーの起動に使う java を探す。bundled が False なら、ランチャーがダウンロードしたものは使わない。"""
     candidates = []
     # クライアント用にランチャーがダウンロードした Mojang 配布の Java
     component = {8: "jre-legacy", 17: "java-runtime-gamma", 21: "java-runtime-delta", 25: "java-runtime-epsilon"}.get(major)
-    if component:
+    if component and bundled:
         candidates += list((main_dir / "jvm").glob(f"{component}/bin/java.exe"))
     for base in (Path.home() / ".jdks", Path.home() / ".gradle" / "jdks", Path("C:/Program Files/Java")):
         if base.is_dir():
@@ -188,6 +189,74 @@ def find_java(major, main_dir):
 
 def sign_item(minecraft):
     return "minecraft:oak_sign" if version_key(minecraft) >= (1, 14, 0) else "minecraft:sign"
+
+
+# 起動してすぐにサーバーへ接続すると、リソースの読み込みが終わる前にワールドが表示されて落ちるバージョン
+# (Mod を入れていなくても起きる Minecraft の不具合。1.14.1 で直っている)。接続を待たせる秒数
+SLOW_JOIN = {"1.14": 15}
+
+
+# ランチャーだけでは Forge をインストールできないバージョン (forge_install_fix.py を参照)
+FORGE_INSTALL_FIX = {"1.14.2", "1.14.3"}
+
+
+class DelayedRelay:
+    """クライアントからの接続を、少し待たせてからサーバーへ中継する。"""
+
+    def __init__(self, target_port, delay):
+        self.target_port = target_port
+        self.delay = delay
+        self.listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        self.listener.bind(("127.0.0.1", 0))
+        self.listener.listen(4)
+        self.port = self.listener.getsockname()[1]
+        self.sockets = []
+        threading.Thread(target=self._accept, daemon=True).start()
+
+    def _accept(self):
+        while True:
+            try:
+                client, _ = self.listener.accept()
+            except OSError:
+                return
+            self.sockets.append(client)
+            threading.Thread(target=self._serve, args=(client,), daemon=True).start()
+
+    def _serve(self, client):
+        time.sleep(self.delay)
+        try:
+            upstream = socket.create_connection(("127.0.0.1", self.target_port), timeout=30)
+        except OSError:
+            client.close()
+            return
+        upstream.settimeout(None)
+        self.sockets.append(upstream)
+        threading.Thread(target=self._pump, args=(upstream, client), daemon=True).start()
+        self._pump(client, upstream)
+
+    @staticmethod
+    def _pump(source, target):
+        try:
+            while True:
+                data = source.recv(65536)
+                if not data:
+                    break
+                target.sendall(data)
+        except OSError:
+            pass
+        finally:
+            for item in (source, target):
+                try:
+                    item.close()
+                except OSError:
+                    pass
+
+    def close(self):
+        for item in [self.listener] + self.sockets:
+            try:
+                item.close()
+            except OSError:
+                pass
 
 
 class Server:
@@ -862,11 +931,20 @@ def run(args):
 
     # 先にクライアントのファイルを揃える (サーバー用の Java もここで手に入る)
     log(f"installing {spec}")
+    install_command = base
+    if args.loader == "forge" and args.minecraft in FORGE_INSTALL_FIX:
+        # このバージョンの Forge は、ランチャーだけではインストールの後処理が通らない
+        install_command = [sys.executable, str(Path(__file__).with_name("forge_install_fix.py")),
+                           str(find_java(8, main_dir, bundled=False))] + base[1:]
+        if not (main_dir / "versions" / spec.replace(":", "-") / (spec.replace(":", "-") + ".json")).is_file():
+            # 途中で失敗したときの出力が残っていると、やり直しても同じ失敗になる
+            for leftover in (main_dir / "libraries" / "net" / "minecraft" / "client").glob(args.minecraft + "*"):
+                shutil.rmtree(leftover, ignore_errors=True)
     failure = ""
     for attempt in range(3):
         # ダウンロードの失敗は一時的なことが多いので、何度か試す
         try:
-            install = subprocess.run(base + ["start", "--dry", spec, "-u", PLAYER], capture_output=True, text=True,
+            install = subprocess.run(install_command + ["start", "--dry", spec, "-u", PLAYER], capture_output=True, text=True,
                                      encoding="utf-8", errors="replace", timeout=1500)
         except subprocess.TimeoutExpired:
             failure = "timed out"
@@ -882,6 +960,7 @@ def run(args):
 
     server = Server(args.minecraft, root, main_dir, args.port)
     client = None
+    relay = None
     try:
         server.prepare()
         server.start()
@@ -894,7 +973,11 @@ def run(args):
             f"-Dmarumasign.uploadUrl=http://127.0.0.1:{host.port}/upload",
             f"-Dmarumasign.shortenUrl=http://127.0.0.1:{host.port}/shorten",
         ])
-        command = base + ["start", spec, "-u", PLAYER, "-s", "127.0.0.1", "-p", str(args.port),
+        connect_port = args.port
+        if args.minecraft in SLOW_JOIN:
+            relay = DelayedRelay(args.port, SLOW_JOIN[args.minecraft])
+            connect_port = relay.port
+        command = base + ["start", spec, "-u", PLAYER, "-s", "127.0.0.1", "-p", str(connect_port),
                           "--resolution", "1280x720", f"--jvm-args={jvm_args}"]
         log("starting client")
         client_log = open(work_dir / "launcher-output.log", "w", encoding="utf-8", errors="replace")
@@ -984,6 +1067,8 @@ def run(args):
     finally:
         server.stop()
         host.close()
+        if relay is not None:
+            relay.close()
 
     if not args.baseline:
         result["media"] = media
