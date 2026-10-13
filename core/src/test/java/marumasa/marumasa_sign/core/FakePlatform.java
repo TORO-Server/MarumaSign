@@ -16,6 +16,18 @@ final class FakePlatform implements Platform {
     int[] pixels;
     int width, height;
     int textureCount;
+
+    // 作成したテクスチャの内容
+    public static final class Texture {
+        public final int width, height;
+        public int[] pixels;
+
+        Texture(int width, int height, int[] pixels) {
+            this.width = width;
+            this.height = height;
+            this.pixels = pixels;
+        }
+    }
     int updateCount;
 
     FakePlatform(String language) {
@@ -76,12 +88,13 @@ final class FakePlatform implements Platform {
         this.width = width;
         this.height = height;
         textureCount++;
-        return new Object();
+        return new Texture(width, height, this.pixels);
     }
 
     @Override
     public void updateTexture(Object texture, int width, int height, int[] argb) {
         this.pixels = argb.clone();
+        ((Texture) texture).pixels = this.pixels;
         this.width = width;
         this.height = height;
         updateCount++;

@@ -73,7 +73,9 @@ abstract class SignRendererBase implements BlockEntityRenderer<SignBlockEntity> 
             return true;
         }
 
-        Mc.quads(buffers.getBuffer(((Tex) image.texture(distance(sign))).renderType), poseStack, image.mesh(yaw, wall), light);
+        for (SignImage.Batch batch : image.batches(yaw, wall, distance(sign))) {
+            Mc.quads(buffers.getBuffer(((Tex) batch.texture).renderType), poseStack, batch, light);
+        }
         MarumaSign.drawn(image);
         return mc.player != null && mc.player.isSpectator();
     }

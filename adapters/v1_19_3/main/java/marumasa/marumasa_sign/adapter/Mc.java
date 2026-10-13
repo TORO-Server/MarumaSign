@@ -82,12 +82,15 @@ final class Mc {
     }
 
     // 頂点を描画用のバッファに書き込む
-    static void quads(VertexConsumer vertices, PoseStack poseStack, float[] mesh, int light) {
+    static void quads(VertexConsumer vertices, PoseStack poseStack, SignImage.Batch batch, int light) {
         final Matrix4f matrix = poseStack.last().pose();
-        for (int i = 0; i < SignImage.VERTEX_COUNT; i++) {
-            final int o = i * SignImage.STRIDE;
+        final float[] mesh = batch.vertices;
+        final int[] colors = batch.colors;
+        for (int i = 0; i < batch.vertexCount; i++) {
+            final int o = i * SignImage.Batch.STRIDE;
+            final int color = colors == null ? 0xFFFFFFFF : colors[i];
             vertices.vertex(matrix, mesh[o], mesh[o + 1], mesh[o + 2])
-                    .color(255, 255, 255, 255)
+                    .color((color >> 16) & 0xFF, (color >> 8) & 0xFF, color & 0xFF, color >>> 24)
                     .uv(mesh[o + 3], mesh[o + 4])
                     .uv2(light)
                     .endVertex();

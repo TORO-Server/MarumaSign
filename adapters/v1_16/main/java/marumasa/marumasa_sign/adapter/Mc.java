@@ -21,15 +21,15 @@ import net.minecraft.world.level.block.entity.SignBlockEntity;
 import java.lang.reflect.Field;
 
 /**
- * Minecraft 1.16 - 1.16.1 に固有の部分。
+ * Minecraft 1.16 - 1.16.5 に固有の部分。
  */
 final class Mc {
 
     // 看板のブロックエンティティタイプ
     static final BlockEntityType<?> SIGN = BlockEntityType.SIGN;
 
-    // 編集画面が持っている看板のフィールド
     private static Field signMessages;
+    private static Field signLines;
 
     private Mc() {
     }
@@ -66,8 +66,10 @@ final class Mc {
     // 看板に書いてある文字を 1 つの文字列にする
     static String signText(SignBlockEntity sign) {
         final StringBuilder text = new StringBuilder();
-        for (int i = 0; i < 4; i++) {
-            text.append(sign.getMessage(i).getString());
+        if (signLines == null) signLines = Reflect.fieldOfType(SignBlockEntity.class, Component[].class);
+        final Component[] lines = Reflect.get(signLines, sign);
+        for (Component line : lines) {
+            if (line != null) text.append(line.getString());
         }
         return text.toString();
     }
@@ -78,20 +80,21 @@ final class Mc {
 
     // 看板の編集画面の内容を書き換える。画面を閉じるとサーバーへ送信される
     static void fillSign(Screen screen, String[] lines) {
-        if (signMessages == null) signMessages = Reflect.fieldOfType(SignEditScreen.class, SignBlockEntity.class);
-        final SignBlockEntity sign = Reflect.get(signMessages, screen);
-        for (int i = 0; i < 4; i++) {
-            sign.setMessage(i, new TextComponent(lines[i]));
-        }
+        if (signMessages == null) signMessages = Reflect.fieldOfType(SignEditScreen.class, String[].class);
+        final String[] messages = Reflect.get(signMessages, screen);
+        System.arraycopy(lines, 0, messages, 0, 4);
     }
 
     // 頂点を描画用のバッファに書き込む
-    static void quads(VertexConsumer vertices, PoseStack poseStack, float[] mesh, int light) {
+    static void quads(VertexConsumer vertices, PoseStack poseStack, SignImage.Batch batch, int light) {
         final Matrix4f matrix = poseStack.last().pose();
-        for (int i = 0; i < SignImage.VERTEX_COUNT; i++) {
-            final int o = i * SignImage.STRIDE;
+        final float[] mesh = batch.vertices;
+        final int[] colors = batch.colors;
+        for (int i = 0; i < batch.vertexCount; i++) {
+            final int o = i * SignImage.Batch.STRIDE;
+            final int color = colors == null ? 0xFFFFFFFF : colors[i];
             vertices.vertex(matrix, mesh[o], mesh[o + 1], mesh[o + 2])
-                    .color(255, 255, 255, 255)
+                    .color((color >> 16) & 0xFF, (color >> 8) & 0xFF, color & 0xFF, color >>> 24)
                     .uv(mesh[o + 3], mesh[o + 4])
                     .uv2(light)
                     .endVertex();

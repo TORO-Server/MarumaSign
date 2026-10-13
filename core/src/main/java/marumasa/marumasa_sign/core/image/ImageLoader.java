@@ -5,14 +5,20 @@ import marumasa.marumasa_sign.core.anim.AnimationFrame;
 import marumasa.marumasa_sign.core.anim.ApngDecoder;
 import marumasa.marumasa_sign.core.anim.DecodedAnimation;
 import marumasa.marumasa_sign.core.anim.GifDecoder;
+import marumasa.marumasa_sign.core.gltf.GltfLoader;
+import marumasa.marumasa_sign.core.gltf.GltfScene;
 import marumasa.marumasa_sign.core.media.Ffmpeg;
 import marumasa.marumasa_sign.core.net.Http;
 
 import javax.imageio.ImageIO;
 import java.awt.image.BufferedImage;
 import java.io.ByteArrayInputStream;
+import java.io.File;
 import java.io.IOException;
 import java.io.InputStream;
+import java.net.URL;
+import java.net.URLDecoder;
+import java.nio.file.Files;
 import java.nio.charset.StandardCharsets;
 import java.util.List;
 import java.util.Queue;
@@ -30,7 +36,10 @@ public final class ImageLoader {
     public interface Callback {
         void onLoaded(DecodedImage image);
 
-        // 画像ではなかったとき。動画や音声として再生できるかもしれない
+        // 3D モデルだったとき
+        void onModel(GltfScene scene);
+
+        // 画像でも 3D モデルでもなかったとき。動画や音声として再生できるかもしれない
         void onMedia();
 
         void onFailed();
@@ -41,6 +50,8 @@ public final class ImageLoader {
     // アニメーションの大きさとフレーム数の上限
     private static final int MAX_ANIMATION_SIZE = 2048;
     private static final int MAX_ANIMATION_FRAMES = 512;
+    // 3D モデルの大きさの上限 (外部ファイルを含む)
+    public static final int MAX_MODEL_SIZE = 64 * 1024 * 1024;
 
     private static final class Request {
         final String url;
@@ -95,20 +106,29 @@ public final class ImageLoader {
         final String url = request.url;
         MarumaSign.LOGGER.info("Start: " + url);
         try {
-            // 先頭だけを読んで、画像でなければ残りは読まない
+            // 先頭だけを読んで、画像でも 3D モデルでもなければ残りは読まない
+            final boolean[] image = new boolean[1];
             final byte[] content = Http.download(url, new Http.HeadCheck() {
                 @Override
                 public boolean accept(byte[] head, int length) {
-                    return isSupportedImage(head, length);
+                    image[0] = isSupportedImage(head, length);
+                    return image[0] || GltfLoader.isGlb(head, length) || GltfLoader.looksLikeJson(head, length);
                 }
-            });
+            }, MAX_MODEL_SIZE);
             if (content == null) {
                 // FFmpeg を探すのには時間がかかることがあるので、メインスレッドに渡す前にここで済ませておく
                 Ffmpeg.isAvailable();
                 request.callback.onMedia();
                 return;
             }
-            request.callback.onLoaded(decode(content));
+            if (image[0]) {
+                if (content.length > Http.MAX_SIZE) {
+                    throw new IOException("Content size exceeds the limit of " + Http.MAX_SIZE + " bytes.");
+                }
+                request.callback.onLoaded(decode(content));
+                return;
+            }
+            request.callback.onModel(model(url, content));
         } catch (Exception e) {
             MarumaSign.LOGGER.info("Failure: " + url + " (" + e + ")");
             request.callback.onFailed();
@@ -116,6 +136,70 @@ public final class ImageLoader {
             // 画像の内容が原因ではない、想定外の失敗。握りつぶさずに記録する
             MarumaSign.LOGGER.error("Unexpected error while loading " + url, e);
             request.callback.onFailed();
+        }
+    }
+
+    // 先頭のバイト列が 3D モデル (.glb / .gltf) らしいかどうか
+    public static boolean isModel(byte[] head, int length) {
+        return GltfLoader.isGlb(head, length) || GltfLoader.looksLikeJson(head, length);
+    }
+
+    // URL からダウンロードした内容を 3D モデルとして読み込む
+    public static GltfScene model(String url, byte[] content) throws IOException {
+        return scene(content, new ModelResources(url, content.length));
+    }
+
+    // ファイルを 3D モデルとして読み込む
+    public static GltfScene model(File file) throws IOException {
+        if (file.length() > MAX_MODEL_SIZE) throw new IOException("Content size exceeds the limit of " + MAX_MODEL_SIZE + " bytes.");
+        return scene(Files.readAllBytes(file.toPath()), fileResources(file));
+    }
+
+    private static GltfScene scene(byte[] content, GltfLoader.Resources resources) throws IOException {
+        final GltfScene scene = new GltfScene(GltfLoader.load(content, resources));
+        // 大きさの計算には時間がかかることがあるので、描画するスレッドに渡す前にここで済ませておく
+        scene.restBounds();
+        return scene;
+    }
+
+    // 3D モデルが参照している外部ファイルを、モデルのファイルと同じフォルダから読み込む
+    public static GltfLoader.Resources fileResources(final File file) {
+        return new GltfLoader.Resources() {
+            private long total = file.length();
+
+            @Override
+            public byte[] load(String uri) throws IOException {
+                final File target = new File(file.getAbsoluteFile().getParentFile(), URLDecoder.decode(uri, "UTF-8"));
+                total += target.length();
+                if (total > MAX_MODEL_SIZE) throw new IOException("Content size exceeds the limit of " + MAX_MODEL_SIZE + " bytes.");
+                return Files.readAllBytes(target.toPath());
+            }
+        };
+    }
+
+    // 3D モデルが参照している外部ファイル (バッファや画像) を、モデルの URL からの相対位置で読み込む
+    private static final class ModelResources implements GltfLoader.Resources {
+        private final URL base;
+        private long total;
+
+        ModelResources(String url, long loaded) throws IOException {
+            this.base = new URL(url);
+            this.total = loaded;
+        }
+
+        @Override
+        public byte[] load(String uri) throws IOException {
+            final URL resolved = new URL(base, uri);
+            final String protocol = resolved.getProtocol();
+            if (!"http".equals(protocol) && !"https".equals(protocol)) {
+                throw new IOException("Unsupported resource location: " + uri);
+            }
+            // 全体の大きさを、モデル 1 つ分の上限に収める
+            final long remaining = MAX_MODEL_SIZE - total;
+            if (remaining <= 0) throw new IOException("Content size exceeds the limit of " + MAX_MODEL_SIZE + " bytes.");
+            final byte[] content = Http.download(resolved.toString(), null, (int) remaining);
+            total += content.length;
+            return content;
         }
     }
 

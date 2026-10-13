@@ -1,0 +1,1538 @@
+"""Minecraft 1.14 以降向けの実装 (adapters/ 以下) のうち、バージョンによって細部が違うファイルを書き出す。
+
+    python tools/gen_adapters.py
+
+API の細かい違いごとに同じ内容のファイルを手で保つのは間違いのもとなので、違う部分だけを差し替えて生成している。
+生成したファイルもリポジトリに入れてあるので、ビルドにこのスクリプトは必要ない。
+対象のファイルを変更するときは、このスクリプトを直して実行し直すこと (直接編集すると、次の実行で上書きされる)。
+1.7.10 - 1.12.2 向け (adapters/legacy, v1_7 - v1_12) と、adapters/common, adapters/renderstate は手書きで、対象外。
+
+層の構成:
+  modern/       どのバージョンでも共通 (Adapter, PlatformImpl)
+  classic/      1.21.8 以前: 従来の看板レンダラーと画面入力
+  renderstate/  1.21.9 以降: レンダー状態を使う看板レンダラーとイベント形式の画面入力
+  tex_*/        テクスチャの作り方の違い
+  v*/           バージョンごとの差分 (Mc, UiScreen, SignRendererWrapper)
+"""
+from pathlib import Path
+
+REPO = Path(__file__).resolve().parents[1]
+PK = "java/marumasa/marumasa_sign/adapter"
+
+
+def write(layer, name, text):
+    path = REPO / "adapters" / layer / "main" / PK / name
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(text.lstrip("\n"), encoding="utf-8", newline="\n")
+
+
+# ---------------------------------------------------------------- modern
+
+write("modern", "Adapter.java", r'''
+package marumasa.marumasa_sign.adapter;
+
+import com.mojang.blaze3d.platform.InputConstants;
+import marumasa.marumasa_sign.core.MarumaSign;
+import marumasa.marumasa_sign.core.util.OptionsFile;
+import marumasa.marumasa_sign.core.util.Reflect;
+import net.minecraft.client.KeyMapping;
+import net.minecraft.client.Minecraft;
+
+import java.util.Timer;
+import java.util.TimerTask;
+import java.util.concurrent.atomic.AtomicBoolean;
+
+/**
+ * Minecraft 1.14 以降向けの実装の入口。バージョンによって違う部分は Mc クラスなどにまとめてある。
+ * ローダーの API を使わずに済むよう、タイマーから定期的にメインスレッドへ処理を渡している。
+ */
+public final class Adapter {
+
+    // 処理を呼ぶ間隔 (ミリ秒)。ゲームの 1 tick と同じ
+    private static final long INTERVAL = 50;
+    // GLFW の B キー
+    private static final int KEY_B = 66;
+
+    private static final AtomicBoolean started = new AtomicBoolean();
+    // メインスレッドに渡した処理がまだ実行されていないかどうか
+    private static final AtomicBoolean pending = new AtomicBoolean();
+
+    private static String loaderName;
+    // この実装が core を初期化したかどうか (他の経路で既に起動していれば false のまま)
+    private static boolean active;
+    private static boolean initialized;
+    private static KeyMapping openMenu;
+
+    private Adapter() {
+    }
+
+    // loader: 起動したローダーの名前
+    public static void start(String loader) {
+        if (!started.compareAndSet(false, true)) return;
+        loaderName = loader;
+        new Timer("MarumaSign-Tick", true).schedule(new TimerTask() {
+            @Override
+            public void run() {
+                final Minecraft mc = Minecraft.getInstance();
+                if (mc == null || !pending.compareAndSet(false, true)) return;
+                mc.execute(Adapter::tick);
+            }
+        }, INTERVAL, INTERVAL);
+    }
+
+    private static void tick() {
+        pending.set(false);
+        final Minecraft mc = Minecraft.getInstance();
+        if (!initialized) {
+            // 設定の読み込みが終わるまで待つ
+            if (mc.options == null) return;
+            initialized = true;
+            if (MarumaSign.isInitialized()) return;
+            MarumaSign.init(new PlatformImpl(loaderName));
+            active = true;
+            registerKey(mc);
+        }
+        if (!active) return;
+
+        SignRendererBase.install(mc);
+        MarumaSign.tick();
+
+        while (openMenu.consumeClick()) {
+            if (mc.player != null && Mc.screen(mc) == null) MarumaSign.openMenu();
+        }
+
+        // 看板の編集画面が開かれたら、予約されている文字列を書き込んで閉じる
+        if (MarumaSign.hasPendingWrite() && Mc.isSignEdit(Mc.screen(mc))) {
+            final String[] lines = MarumaSign.takePendingWrite();
+            if (lines != null) Mc.fillSign(Mc.screen(mc), lines);
+            // 画面を閉じると、看板の内容がサーバーへ送信される
+            Mc.setScreen(mc, null);
+        }
+    }
+
+    // キーバインド登録
+    private static void registerKey(Minecraft mc) {
+        openMenu = Mc.newKey("MarumaSign", KEY_B);
+        final KeyMapping[] current = mc.options.keyMappings;
+        final KeyMapping[] extended = new KeyMapping[current.length + 1];
+        System.arraycopy(current, 0, extended, 0, current.length);
+        extended[current.length] = openMenu;
+        Reflect.set(Reflect.fieldHolding(mc.options, current), mc.options, extended);
+        // 保存されているキーの割り当てを反映する
+        final String saved = OptionsFile.read(mc.gameDirectory, "key_MarumaSign");
+        if (saved != null && !saved.isEmpty()) {
+            try {
+                openMenu.setKey(InputConstants.getKey(saved));
+            } catch (RuntimeException e) {
+                // 読めない値なら既定のキーのままにする
+            }
+        }
+        KeyMapping.resetMapping();
+    }
+}
+''')
+
+write("modern", "PlatformImpl.java", r'''
+package marumasa.marumasa_sign.adapter;
+
+import marumasa.marumasa_sign.core.Platform;
+import net.minecraft.client.KeyMapping;
+import net.minecraft.client.Minecraft;
+
+import java.io.File;
+
+final class PlatformImpl implements Platform {
+
+    private final Minecraft mc = Minecraft.getInstance();
+    private final String loaderName;
+
+    PlatformImpl(String loaderName) {
+        this.loaderName = loaderName;
+    }
+
+    @Override
+    public String minecraftVersion() {
+        return Mc.version();
+    }
+
+    @Override
+    public String loaderName() {
+        return loaderName;
+    }
+
+    @Override
+    public File gameDirectory() {
+        return mc.gameDirectory;
+    }
+
+    @Override
+    public String languageCode() {
+        return mc.options.languageCode;
+    }
+
+    @Override
+    public void execute(Runnable task) {
+        mc.execute(task);
+    }
+
+    @Override
+    public void showMessage(String message) {
+        Mc.chat(mc, message);
+    }
+
+    @Override
+    public boolean isInWorld() {
+        return mc.level != null && mc.player != null;
+    }
+
+    @Override
+    public int maxSignLineLength() {
+        return 80;
+    }
+
+    @Override
+    public Object createTexture(int width, int height, int[] argb) {
+        return Tex.create(mc, width, height, argb);
+    }
+
+    @Override
+    public void updateTexture(Object handle, int width, int height, int[] argb) {
+        ((Tex) handle).update(width, height, argb);
+    }
+
+    @Override
+    public void releaseTexture(Object handle) {
+        ((Tex) handle).release(mc);
+    }
+
+    @Override
+    public void openUi() {
+        Mc.setScreen(mc, new UiScreen());
+    }
+
+    @Override
+    public void closeUi() {
+        if (Mc.screen(mc) instanceof UiScreen) Mc.setScreen(mc, null);
+    }
+
+    @Override
+    public boolean supportsFileDrop() {
+        return true;
+    }
+
+    @Override
+    public String getClipboard() {
+        return mc.keyboardHandler.getClipboard();
+    }
+
+    @Override
+    public void setClipboard(String text) {
+        mc.keyboardHandler.setClipboard(text);
+    }
+
+    @Override
+    public void selfTestLook(float pitch) {
+        if (mc.player != null) Mc.look(mc, pitch);
+    }
+
+    @Override
+    public void selfTestUseItem() {
+        if (mc.player == null) return;
+        Mc.selectSign(mc);
+        KeyMapping.click(mc.options.keyUse.getDefaultKey());
+    }
+
+    @Override
+    public void quit() {
+        mc.stop();
+    }
+}
+''')
+
+# ---------------------------------------------------------------- tex
+
+
+def tex_source(id_type, id_import, make_id, render_import, render_factory, texture_new, set_pixel, note):
+    return f'''
+package marumasa.marumasa_sign.adapter;
+
+import com.mojang.blaze3d.platform.NativeImage;
+import marumasa.marumasa_sign.core.MarumaSign;
+import net.minecraft.client.Minecraft;
+{render_import}
+import net.minecraft.client.renderer.texture.DynamicTexture;
+{id_import}
+
+import java.util.concurrent.atomic.AtomicInteger;
+
+/**
+ * テクスチャのハンドル。{note}
+ */
+final class Tex {{
+
+    private static final AtomicInteger nextId = new AtomicInteger();
+
+    final {id_type} id;
+    private final DynamicTexture texture;
+    // ワールドに描くときの描画設定。文字用のものを使う。
+    // 半透明に対応し、周囲の明るさは反映するが、面の向きによる陰影は付かない
+    final RenderType renderType;
+
+    private Tex({id_type} id, DynamicTexture texture) {{
+        this.id = id;
+        this.texture = texture;
+        this.renderType = {render_factory}(id);
+    }}
+
+    private static void copy(NativeImage image, int width, int height, int[] argb) {{
+        for (int y = 0; y < height; y++) {{
+            final int row = y * width;
+            for (int x = 0; x < width; x++) {{
+                {set_pixel}
+            }}
+        }}
+    }}
+
+    static Tex create(Minecraft mc, int width, int height, int[] argb) {{
+        final NativeImage image = new NativeImage(width, height, false);
+        copy(image, width, height, argb);
+        final {id_type} id = {make_id}(MarumaSign.MOD_ID, "dynamic/" + nextId.incrementAndGet());
+        final DynamicTexture texture = {texture_new};
+        mc.getTextureManager().register(id, texture);
+        return new Tex(id, texture);
+    }}
+
+    void update(int width, int height, int[] argb) {{
+        copy(texture.getPixels(), width, height, argb);
+        texture.upload();
+    }}
+
+    void release(Minecraft mc) {{
+        mc.getTextureManager().release(id);
+    }}
+}}
+'''
+
+
+RL = ("ResourceLocation", "import net.minecraft.resources.ResourceLocation;")
+ID = ("Identifier", "import net.minecraft.resources.Identifier;")
+RT_OLD = ("import net.minecraft.client.renderer.RenderType;", "RenderType.text")
+RT_NEW = ("import net.minecraft.client.renderer.rendertype.RenderType;\nimport net.minecraft.client.renderer.rendertype.RenderTypes;", "RenderTypes.text")
+PIXEL_ARGB = "image.setPixel(x, y, argb[row + x]);"
+# 古い API は ABGR の並びで受け取る
+PIXEL_ABGR = ("final int color = argb[row + x];\n"
+              "                image.setPixelRGBA(x, y, (color & 0xFF00FF00) | ((color & 0xFF) << 16) | ((color >> 16) & 0xFF));")
+
+write("tex_5", "Tex.java", tex_source(*ID, "Identifier.fromNamespaceAndPath", *RT_NEW,
+                                      'new DynamicTexture(() -> "marumasa_sign", image)', PIXEL_ARGB, "Minecraft 1.21.11 以降の作り方。"))
+write("tex_4", "Tex.java", tex_source(*RL, "ResourceLocation.fromNamespaceAndPath", *RT_OLD,
+                                      'new DynamicTexture(() -> "marumasa_sign", image)', PIXEL_ARGB, "Minecraft 1.21.5 - 1.21.10 の作り方。"))
+write("tex_3", "Tex.java", tex_source(*RL, "ResourceLocation.fromNamespaceAndPath", *RT_OLD,
+                                      "new DynamicTexture(image)", PIXEL_ARGB, "Minecraft 1.21.2 - 1.21.4 の作り方。"))
+write("tex_2", "Tex.java", tex_source(*RL, "ResourceLocation.fromNamespaceAndPath", *RT_OLD,
+                                      "new DynamicTexture(image)", PIXEL_ABGR, "Minecraft 1.21 - 1.21.1 の作り方。"))
+write("tex_1", "Tex.java", tex_source(*RL, "new ResourceLocation", *RT_OLD,
+                                      "new DynamicTexture(image)", PIXEL_ABGR, "Minecraft 1.20.6 以前の作り方。"))
+
+# ---------------------------------------------------------------- classic
+
+write("classic", "UiScreenBase.java", r'''
+package marumasa.marumasa_sign.adapter;
+
+import com.mojang.blaze3d.platform.Window;
+import marumasa.marumasa_sign.core.MarumaSign;
+import marumasa.marumasa_sign.core.ui.Key;
+import marumasa.marumasa_sign.core.ui.UiRoot;
+import net.minecraft.client.gui.screens.Screen;
+
+import java.io.File;
+import java.nio.file.Path;
+import java.util.ArrayList;
+import java.util.List;
+
+/**
+ * MarumaSign の画面。入力を core の UiRoot に橋渡しする。
+ * 描画のメソッドはバージョンによって引数が違うため、UiScreen 側で実装する。
+ */
+abstract class UiScreenBase extends Screen {
+
+    protected final UiRoot ui = MarumaSign.ui();
+
+    protected UiScreenBase() {
+        super(Mc.text("MarumaSign"));
+        ui.opened();
+    }
+
+    @Override
+    protected void init() {
+        final Window window = Mc.window(minecraft);
+        ui.layout(window.getWidth(), window.getHeight());
+    }
+
+    @Override
+    public void removed() {
+        ui.closed();
+    }
+
+    @Override
+    public boolean isPauseScreen() {
+        return false;
+    }
+
+    // 描画の直前に呼ぶ。画面に貼るテクスチャを返す (なければ null)
+    protected final Tex prepare() {
+        final Window window = Mc.window(minecraft);
+        ui.layout(window.getWidth(), window.getHeight());
+        ui.mouseMoved(mouseX(), mouseY());
+        return (Tex) ui.texture();
+    }
+
+    // GUI の拡大率を打ち消して、ピクセル単位で描くための倍率
+    protected final float unscale() {
+        return (float) (1.0 / Mc.window(minecraft).getGuiScale());
+    }
+
+    // マウスの座標 (ウィンドウ上の位置) をフレームバッファのピクセル単位にする
+    private double mouseX() {
+        final Window window = Mc.window(minecraft);
+        return minecraft.mouseHandler.xpos() * window.getWidth() / Math.max(1, window.getScreenWidth());
+    }
+
+    private double mouseY() {
+        final Window window = Mc.window(minecraft);
+        return minecraft.mouseHandler.ypos() * window.getHeight() / Math.max(1, window.getScreenHeight());
+    }
+
+    @Override
+    public boolean mouseClicked(double x, double y, int button) {
+        if (button == 0) ui.mousePressed(mouseX(), mouseY());
+        return true;
+    }
+
+    @Override
+    public boolean mouseReleased(double x, double y, int button) {
+        if (button == 0) ui.mouseReleased(mouseX(), mouseY());
+        return true;
+    }
+
+    // スクロールのメソッドはバージョンによって引数の数が違う。
+    // 両方を用意しておき、そのバージョンにあるほうが呼ばれる (そのため @Override は付けない)
+    public boolean mouseScrolled(double x, double y, double amount) {
+        ui.mouseScrolled(mouseX(), mouseY(), amount);
+        return true;
+    }
+
+    public boolean mouseScrolled(double x, double y, double scrollX, double scrollY) {
+        ui.mouseScrolled(mouseX(), mouseY(), scrollY);
+        return true;
+    }
+
+    @Override
+    public boolean keyPressed(int keyCode, int scanCode, int modifiers) {
+        final int key = Key.fromGlfw(keyCode);
+        if (key != Key.UNKNOWN) ui.keyPressed(key, Key.modifiersFromGlfw(modifiers));
+        return true;
+    }
+
+    @Override
+    public boolean charTyped(char character, int modifiers) {
+        ui.charTyped(character);
+        return true;
+    }
+
+    // ファイルのドロップは 1.15 以降にしかないため、@Override は付けない
+    public void onFilesDrop(List<Path> paths) {
+        final List<File> files = new ArrayList<File>();
+        for (Path path : paths) {
+            files.add(path.toFile());
+        }
+        ui.filesDropped(files);
+    }
+}
+''')
+
+write("classic_ber", "SignRendererBase.java", r'''
+package marumasa.marumasa_sign.adapter;
+
+import com.mojang.blaze3d.vertex.PoseStack;
+import marumasa.marumasa_sign.core.MarumaSign;
+import marumasa.marumasa_sign.core.sign.SignImage;
+import marumasa.marumasa_sign.core.util.Reflect;
+import net.minecraft.client.Minecraft;
+import net.minecraft.client.renderer.MultiBufferSource;
+import net.minecraft.client.renderer.blockentity.BlockEntityRenderDispatcher;
+import net.minecraft.client.renderer.blockentity.BlockEntityRenderer;
+import net.minecraft.world.level.block.StandingSignBlock;
+import net.minecraft.world.level.block.WallSignBlock;
+import net.minecraft.world.level.block.entity.BlockEntityType;
+import net.minecraft.world.level.block.entity.SignBlockEntity;
+import net.minecraft.world.level.block.state.BlockState;
+import net.minecraft.world.phys.Vec3;
+
+import java.lang.reflect.Field;
+import java.util.HashMap;
+import java.util.Map;
+
+/**
+ * 看板のレンダラーを包んで、MarumaSign の看板なら看板の代わりに画像を描く。
+ * 元のレンダラーをそのまま使うので、他の Mod が差し替えたレンダラーとも共存できる。
+ * render の引数はバージョンによって違うため、SignRendererWrapper 側で実装する。
+ */
+abstract class SignRendererBase implements BlockEntityRenderer<SignBlockEntity> {
+
+    private static Field renderersField;
+
+    protected final BlockEntityRenderer<SignBlockEntity> delegate;
+    private final Minecraft mc = Minecraft.getInstance();
+
+    protected SignRendererBase(BlockEntityRenderer<SignBlockEntity> delegate) {
+        this.delegate = delegate;
+    }
+
+    // 看板のレンダラーがまだ包まれていなければ包む。リソースの再読み込みで元に戻るため、毎 tick 確認する
+    @SuppressWarnings("unchecked")
+    static void install(Minecraft mc) {
+        final BlockEntityRenderDispatcher dispatcher = mc.getBlockEntityRenderDispatcher();
+        if (dispatcher == null) return;
+        if (renderersField == null) renderersField = Reflect.fieldOfType(BlockEntityRenderDispatcher.class, Map.class);
+        final Map<BlockEntityType<?>, BlockEntityRenderer<?>> renderers = Reflect.get(renderersField, dispatcher);
+        if (renderers == null) return;
+        final BlockEntityRenderer<?> current = renderers.get(Mc.SIGN);
+        if (current == null || current instanceof SignRendererBase) return;
+
+        // 元の表は変更できないことがあるので、写しを作って差し替える
+        final Map<BlockEntityType<?>, BlockEntityRenderer<?>> replaced = new HashMap<BlockEntityType<?>, BlockEntityRenderer<?>>(renderers);
+        replaced.put(Mc.SIGN, new SignRendererWrapper((BlockEntityRenderer<SignBlockEntity>) current));
+        Reflect.set(renderersField, dispatcher, replaced);
+    }
+
+    /**
+     * MarumaSign の看板なら画像を描く。
+     * 看板そのものも描くべきなら true を返す (MarumaSign の看板でないとき、またはスペクテイターのとき)。
+     */
+    protected final boolean drawImage(SignBlockEntity sign, PoseStack poseStack, MultiBufferSource buffers, int light) {
+        final SignImage image = MarumaSign.sign(Mc.signText(sign));
+        if (image == null) return true;
+
+        final BlockState blockState = sign.getBlockState();
+        final boolean wall;
+        final float yaw;
+        if (blockState.getBlock() instanceof WallSignBlock) {
+            wall = true;
+            yaw = blockState.getValue(WallSignBlock.FACING).toYRot();
+        } else if (blockState.getBlock() instanceof StandingSignBlock) {
+            wall = false;
+            yaw = blockState.getValue(StandingSignBlock.ROTATION) * 22.5f;
+        } else {
+            return true;
+        }
+
+        for (SignImage.Batch batch : image.batches(yaw, wall, distance(sign))) {
+            Mc.quads(buffers.getBuffer(((Tex) batch.texture).renderType), poseStack, batch, light);
+        }
+        MarumaSign.drawn(image);
+        return mc.player != null && mc.player.isSpectator();
+    }
+
+    // カメラから看板までの距離 (ブロック)
+    private double distance(SignBlockEntity sign) {
+        final Vec3 camera = mc.gameRenderer.getMainCamera().getPosition();
+        final double x = sign.getBlockPos().getX() + 0.5 - camera.x;
+        final double y = sign.getBlockPos().getY() + 0.5 - camera.y;
+        final double z = sign.getBlockPos().getZ() + 0.5 - camera.z;
+        return Math.sqrt(x * x + y * y + z * z);
+    }
+
+    // 以下のメソッドはバージョンによって有無や引数が違う。
+    // 両方を用意しておき、そのバージョンにあるほうが使われる (そのため @Override は付けない)
+
+    public boolean shouldRenderOffScreen() {
+        return true;
+    }
+
+    public boolean shouldRenderOffScreen(SignBlockEntity sign) {
+        return true;
+    }
+
+    public int getViewDistance() {
+        return 512;
+    }
+
+    public boolean shouldRender(SignBlockEntity sign, Vec3 cameraPosition) {
+        final SignImage image = MarumaSign.sign(Mc.signText(sign));
+        final double distance = image == null ? 64.0 : image.viewDistance();
+        final double x = sign.getBlockPos().getX() + 0.5 - cameraPosition.x;
+        final double y = sign.getBlockPos().getY() + 0.5 - cameraPosition.y;
+        final double z = sign.getBlockPos().getZ() + 0.5 - cameraPosition.z;
+        return x * x + y * y + z * z < distance * distance;
+    }
+}
+''')
+
+# ---------------------------------------------------------------- per-era files
+
+
+def screen_source(graphics_import, graphics_type, method, body):
+    return f'''
+package marumasa.marumasa_sign.adapter;
+
+{graphics_import}
+
+/**
+ * MarumaSign の画面の描画部分。
+ */
+final class UiScreen extends UiScreenBase {{
+
+    @Override
+    public void {method}({graphics_type} graphics, int mouseX, int mouseY, float partialTicks) {{
+        final Tex texture = prepare();
+        if (texture == null) return;
+
+{body}
+    }}
+}}
+'''
+
+
+# 1.21.6 以降: 2 次元の行列スタックと、範囲を指定する blit
+BLIT_2D = '''        final float unscale = unscale();
+        graphics.pose().pushMatrix();
+        graphics.pose().scale(unscale, unscale);
+        graphics.blit(texture.id,
+                ui.originX(), ui.originY(), ui.originX() + ui.pixelWidth(), ui.originY() + ui.pixelHeight(),
+                0f, 1f, 0f, 1f);
+        graphics.pose().popMatrix();'''
+
+SCREEN_EXTRACTOR = screen_source("import net.minecraft.client.gui.GuiGraphicsExtractor;", "GuiGraphicsExtractor", "extractRenderState", BLIT_2D)
+SCREEN_GRAPHICS_2D = screen_source("import net.minecraft.client.gui.GuiGraphics;", "GuiGraphics", "render", BLIT_2D)
+
+
+def wrapper_renderstate(camera_import, frustum):
+    return f'''
+package marumasa.marumasa_sign.adapter;
+
+import com.mojang.blaze3d.vertex.PoseStack;
+import net.minecraft.client.renderer.SubmitNodeCollector;
+import net.minecraft.client.renderer.blockentity.BlockEntityRenderer;
+import net.minecraft.client.renderer.blockentity.state.BlockEntityRenderState;
+import {camera_import};
+import net.minecraft.world.level.block.entity.SignBlockEntity;
+
+/**
+ * 看板のレンダラーを包むクラスの、描画の受け口。
+ */
+final class SignRendererWrapper extends SignRendererBase {{
+
+    SignRendererWrapper(BlockEntityRenderer<SignBlockEntity, BlockEntityRenderState> delegate) {{
+        super(delegate);
+    }}
+
+    @Override
+    public void submit(State state, PoseStack poseStack, SubmitNodeCollector collector, CameraRenderState camera) {{
+        if (drawsVanilla(state)) delegate.submit(state.inner, poseStack, collector, camera);
+{frustum}
+    }}
+}}
+'''
+
+
+WRAPPER_RS_26 = wrapper_renderstate("net.minecraft.client.renderer.state.level.CameraRenderState",
+                                    "        submitImage(state, poseStack, collector, camera.cullFrustum);")
+WRAPPER_RS_121 = wrapper_renderstate("net.minecraft.client.renderer.state.CameraRenderState",
+                                     "        // このバージョンのカメラの状態は視錐台を持たないため、カリングは描画側に任せる\n"
+                                     "        submitImage(state, poseStack, collector, null);")
+
+
+def wrapper_classic(extra_param, extra_arg, extra_import):
+    return f'''
+package marumasa.marumasa_sign.adapter;
+
+import com.mojang.blaze3d.vertex.PoseStack;
+import net.minecraft.client.renderer.MultiBufferSource;
+import net.minecraft.client.renderer.blockentity.BlockEntityRenderer;
+import net.minecraft.world.level.block.entity.SignBlockEntity;
+{extra_import}
+/**
+ * 看板のレンダラーを包むクラスの、描画の受け口。
+ */
+final class SignRendererWrapper extends SignRendererBase {{
+
+    SignRendererWrapper(BlockEntityRenderer<SignBlockEntity> delegate) {{
+        super(delegate);
+    }}
+
+    @Override
+    public void render(SignBlockEntity sign, float partialTicks, PoseStack poseStack, MultiBufferSource buffers,
+                       int light, int overlay{extra_param}) {{
+        if (drawImage(sign, poseStack, buffers, light)) {{
+            delegate.render(sign, partialTicks, poseStack, buffers, light, overlay{extra_arg});
+        }}
+    }}
+}}
+'''
+
+
+WRAPPER_CLASSIC_VEC3 = wrapper_classic(", Vec3 cameraPosition", ", cameraPosition", "import net.minecraft.world.phys.Vec3;\n")
+WRAPPER_CLASSIC = wrapper_classic("", "", "")
+
+
+def mc_source(title, imports, sign_type, screen_get, screen_set, chat, text, key, version, sign_text, edit_class, look, select, quads,
+              window="mc.getWindow()"):
+    quads_block = ""
+    if quads:
+        quads_block = f'''
+    // 頂点を描画用のバッファに書き込む
+    static void quads(VertexConsumer vertices, PoseStack poseStack, SignImage.Batch batch, int light) {{
+{quads}
+    }}
+'''
+    return f'''
+package marumasa.marumasa_sign.adapter;
+
+{imports}
+
+/**
+ * {title} に固有の部分。
+ */
+final class Mc {{
+
+    // 看板のブロックエンティティタイプ
+    static final BlockEntityType<?> SIGN = {sign_type};
+
+    private static Field signMessages;
+
+    private Mc() {{
+    }}
+
+    static String version() {{
+        return {version};
+    }}
+
+    static Window window(Minecraft mc) {{
+        return {window};
+    }}
+
+    static Screen screen(Minecraft mc) {{
+        return {screen_get};
+    }}
+
+    static void setScreen(Minecraft mc, Screen screen) {{
+        {screen_set};
+    }}
+
+    static Component text(String text) {{
+        return {text};
+    }}
+
+    // チャット欄にクライアント側だけのメッセージを表示する
+    static void chat(Minecraft mc, String message) {{
+        {chat};
+    }}
+
+    static KeyMapping newKey(String name, int keyCode) {{
+        return {key};
+    }}
+
+    // 看板に書いてある文字を 1 つの文字列にする
+    static String signText(SignBlockEntity sign) {{
+        final StringBuilder text = new StringBuilder();
+{sign_text}
+        return text.toString();
+    }}
+
+    static boolean isSignEdit(Screen screen) {{
+        return screen instanceof {edit_class};
+    }}
+
+    // 看板の編集画面の内容を書き換える。画面を閉じるとサーバーへ送信される
+    static void fillSign(Screen screen, String[] lines) {{
+        if (signMessages == null) signMessages = Reflect.fieldOfType({edit_class}.class, String[].class);
+        final String[] messages = Reflect.get(signMessages, screen);
+        System.arraycopy(lines, 0, messages, 0, 4);
+    }}
+{quads_block}
+    // ---------- 動作確認用 ----------
+
+    static void look(Minecraft mc, float pitch) {{
+        {look};
+    }}
+
+    // ホットバーにある看板を手に持つ
+    static void selectSign(Minecraft mc) {{
+        for (int slot = 0; slot < 9; slot++) {{
+            if (mc.player.{select_item(select)}) {{
+                {select};
+            }}
+        }}
+    }}
+}}
+'''
+
+
+def select_item(select):
+    if ".inventory." in select:
+        return "inventory.getItem(slot).getItem() == Items.OAK_SIGN"
+    return "getInventory().getItem(slot).is(Items.OAK_SIGN)"
+
+
+BASE_IMPORTS = [
+    "com.mojang.blaze3d.platform.InputConstants",
+    "com.mojang.blaze3d.platform.Window",
+    "marumasa.marumasa_sign.core.util.Reflect",
+    "net.minecraft.SharedConstants",
+    "net.minecraft.client.KeyMapping",
+    "net.minecraft.client.Minecraft",
+    "net.minecraft.client.gui.screens.Screen",
+    "net.minecraft.client.gui.screens.inventory.AbstractSignEditScreen",
+    "net.minecraft.network.chat.Component",
+    "net.minecraft.world.item.Items",
+    "net.minecraft.world.level.block.entity.BlockEntityType",
+    "net.minecraft.world.level.block.entity.SignBlockEntity",
+]
+
+
+def imports(*extra, drop=()):
+    names = sorted(set(BASE_IMPORTS + list(extra)) - set(drop))
+    return "\n".join(f"import {name};" for name in names) + "\n\nimport java.lang.reflect.Field;"
+
+
+SIGN_TEXT_FRONT_BACK = '''        final SignText front = sign.getFrontText();
+        final SignText back = sign.getBackText();
+        for (int i = 0; i < 4; i++) {
+            text.append(front.getMessage(i, false).getString());
+        }
+        for (int i = 0; i < 4; i++) {
+            text.append(back.getMessage(i, false).getString());
+        }'''
+SIGN_TEXT_SLOTS = '''        // 表、裏の順に並んでいる
+        for (SignTextSlot slot : SignTextSlot.values()) {
+            for (Component line : sign.getText(slot).getMessages(false)) {
+                text.append(line.getString());
+            }
+        }'''
+QUADS_ADD_VERTEX = '''        final PoseStack.Pose pose = poseStack.last();
+        final float[] mesh = batch.vertices;
+        final int[] colors = batch.colors;
+        for (int i = 0; i < batch.vertexCount; i++) {
+            final int o = i * SignImage.Batch.STRIDE;
+            final int color = colors == null ? 0xFFFFFFFF : colors[i];
+            vertices.addVertex(pose, mesh[o], mesh[o + 1], mesh[o + 2])
+                    .setColor((color >> 16) & 0xFF, (color >> 8) & 0xFF, color & 0xFF, color >>> 24)
+                    .setUv(mesh[o + 3], mesh[o + 4])
+                    .setLight(light);
+        }'''
+CLASSIC_IMPORTS = ("com.mojang.blaze3d.vertex.PoseStack", "com.mojang.blaze3d.vertex.VertexConsumer",
+                   "marumasa.marumasa_sign.core.sign.SignImage")
+KEY_STRING_CATEGORY = 'new KeyMapping(name, InputConstants.Type.KEYSYM, keyCode, "key.categories.misc")'
+KEY_CATEGORY = "new KeyMapping(name, InputConstants.Type.KEYSYM, keyCode, KeyMapping.Category.MISC)"
+KEY_CATEGORY_263 = "new KeyMapping(name, InputConstants.Type.KEYBOARD, keyCode, KeyMapping.Category.MISC)"
+
+ERAS = {
+    # 26.3
+    "v26_3": dict(
+        mc=mc_source("Minecraft 26.3",
+                     imports("net.minecraft.world.level.block.entity.BlockEntityTypes", "net.minecraft.world.level.block.entity.SignTextSlot"),
+                     "BlockEntityTypes.SIGN", "mc.gui.screen()", "mc.gui.setScreen(screen)",
+                     "mc.gui.hud.getChat().addClientSystemMessage(Component.literal(message))", "Component.literal(text)",
+                     KEY_CATEGORY_263, "SharedConstants.getCurrentVersion().name()", SIGN_TEXT_SLOTS, "AbstractSignEditScreen",
+                     "mc.player.setXRot(pitch)", "mc.player.getInventory().setSelectedSlot(slot)", None),
+    ),
+    # 26.2
+    "v26_2": dict(
+        mc=mc_source("Minecraft 26.2",
+                     imports("net.minecraft.world.level.block.entity.BlockEntityTypes", "net.minecraft.world.level.block.entity.SignText"),
+                     "BlockEntityTypes.SIGN", "mc.gui.screen()", "mc.gui.setScreen(screen)",
+                     "mc.gui.hud.getChat().addClientSystemMessage(Component.literal(message))", "Component.literal(text)",
+                     KEY_CATEGORY, "SharedConstants.getCurrentVersion().name()", SIGN_TEXT_FRONT_BACK, "AbstractSignEditScreen",
+                     "mc.player.setXRot(pitch)", "mc.player.getInventory().setSelectedSlot(slot)", None),
+    ),
+    # 26.1 - 26.1.2
+    "v26_1": dict(
+        mc=mc_source("Minecraft 26.1 - 26.1.2",
+                     imports("net.minecraft.world.level.block.entity.SignText"),
+                     "BlockEntityType.SIGN", "mc.screen", "mc.setScreen(screen)",
+                     "mc.gui.getChat().addClientSystemMessage(Component.literal(message))", "Component.literal(text)",
+                     KEY_CATEGORY, "SharedConstants.getCurrentVersion().name()", SIGN_TEXT_FRONT_BACK, "AbstractSignEditScreen",
+                     "mc.player.setXRot(pitch)", "mc.player.getInventory().setSelectedSlot(slot)", None),
+    ),
+    # 1.21.9 - 1.21.11
+    "v1_21_9": dict(
+        mc=mc_source("Minecraft 1.21.9 - 1.21.11",
+                     imports("net.minecraft.world.level.block.entity.SignText"),
+                     "BlockEntityType.SIGN", "mc.screen", "mc.setScreen(screen)",
+                     "mc.gui.getChat().addMessage(Component.literal(message))", "Component.literal(text)",
+                     KEY_CATEGORY, "SharedConstants.getCurrentVersion().name()", SIGN_TEXT_FRONT_BACK, "AbstractSignEditScreen",
+                     "mc.player.setXRot(pitch)", "mc.player.getInventory().setSelectedSlot(slot)", None),
+        screen=SCREEN_GRAPHICS_2D, wrapper=WRAPPER_RS_121,
+    ),
+    # 1.21.6 - 1.21.8
+    "v1_21_6": dict(
+        mc=mc_source("Minecraft 1.21.6 - 1.21.8",
+                     imports("net.minecraft.world.level.block.entity.SignText", *CLASSIC_IMPORTS),
+                     "BlockEntityType.SIGN", "mc.screen", "mc.setScreen(screen)",
+                     "mc.gui.getChat().addMessage(Component.literal(message))", "Component.literal(text)",
+                     KEY_STRING_CATEGORY, "SharedConstants.getCurrentVersion().name()", SIGN_TEXT_FRONT_BACK, "AbstractSignEditScreen",
+                     "mc.player.setXRot(pitch)", "mc.player.getInventory().setSelectedSlot(slot)", QUADS_ADD_VERTEX),
+        screen=SCREEN_GRAPHICS_2D, wrapper=WRAPPER_CLASSIC_VEC3,
+    ),
+}
+
+# ---- 1.20 - 1.21.5 ----
+
+# 1.21.2 - 1.21.5: 描画設定を渡す blit
+SCREEN_GRAPHICS_FN = screen_source(
+    "import net.minecraft.client.gui.GuiGraphics;\nimport net.minecraft.client.renderer.RenderType;", "GuiGraphics", "render",
+    """        final float unscale = unscale();
+        graphics.pose().pushPose();
+        graphics.pose().scale(unscale, unscale, 1f);
+        graphics.blit(RenderType::guiTextured, texture.id, ui.originX(), ui.originY(), 0f, 0f,
+                ui.pixelWidth(), ui.pixelHeight(), ui.pixelWidth(), ui.pixelHeight());
+        graphics.pose().popPose();""")
+# 1.20 - 1.21.1: 半透明を有効にしてから描く
+SCREEN_GRAPHICS_OLD = screen_source(
+    "import com.mojang.blaze3d.systems.RenderSystem;\nimport net.minecraft.client.gui.GuiGraphics;", "GuiGraphics", "render",
+    """        final float unscale = unscale();
+        RenderSystem.enableBlend();
+        graphics.pose().pushPose();
+        graphics.pose().scale(unscale, unscale, 1f);
+        graphics.blit(texture.id, ui.originX(), ui.originY(), 0f, 0f,
+                ui.pixelWidth(), ui.pixelHeight(), ui.pixelWidth(), ui.pixelHeight());
+        graphics.pose().popPose();
+        RenderSystem.disableBlend();""")
+
+QUADS_VERTEX = """        final Matrix4f matrix = poseStack.last().pose();
+        final float[] mesh = batch.vertices;
+        final int[] colors = batch.colors;
+        for (int i = 0; i < batch.vertexCount; i++) {
+            final int o = i * SignImage.Batch.STRIDE;
+            final int color = colors == null ? 0xFFFFFFFF : colors[i];
+            vertices.vertex(matrix, mesh[o], mesh[o + 1], mesh[o + 2])
+                    .color((color >> 16) & 0xFF, (color >> 8) & 0xFF, color & 0xFF, color >>> 24)
+                    .uv(mesh[o + 3], mesh[o + 4])
+                    .uv2(light)
+                    .endVertex();
+        }"""
+SELECT_FIELD = "mc.player.getInventory().selected = slot"
+SELECT_METHOD = "mc.player.getInventory().setSelectedSlot(slot)"
+VERSION_GET = "SharedConstants.getCurrentVersion().getName()"
+VERSION_NAME = "SharedConstants.getCurrentVersion().name()"
+
+
+def classic_mc(title, version, select, quads, *extra):
+    return mc_source(title, imports("net.minecraft.world.level.block.entity.SignText", *CLASSIC_IMPORTS, *extra),
+                     "BlockEntityType.SIGN", "mc.screen", "mc.setScreen(screen)",
+                     "mc.gui.getChat().addMessage(Component.literal(message))", "Component.literal(text)",
+                     KEY_STRING_CATEGORY, version, SIGN_TEXT_FRONT_BACK, "AbstractSignEditScreen",
+                     "mc.player.setXRot(pitch)", select, quads)
+
+
+ERAS.update({
+    "v1_21_5": dict(mc=classic_mc("Minecraft 1.21.5", VERSION_GET, SELECT_METHOD, QUADS_ADD_VERTEX),
+                    screen=SCREEN_GRAPHICS_FN, wrapper=WRAPPER_CLASSIC_VEC3),
+    "v1_21_2": dict(mc=classic_mc("Minecraft 1.21.2 - 1.21.4", VERSION_GET, SELECT_FIELD, QUADS_ADD_VERTEX),
+                    screen=SCREEN_GRAPHICS_FN, wrapper=WRAPPER_CLASSIC),
+    "v1_21": dict(mc=classic_mc("Minecraft 1.21 - 1.21.1", VERSION_GET, SELECT_FIELD, QUADS_ADD_VERTEX),
+                  screen=SCREEN_GRAPHICS_OLD, wrapper=WRAPPER_CLASSIC),
+    "v1_20": dict(mc=classic_mc("Minecraft 1.20 - 1.20.6", VERSION_GET, SELECT_FIELD, QUADS_VERTEX, "org.joml.Matrix4f"),
+                  screen=SCREEN_GRAPHICS_OLD, wrapper=WRAPPER_CLASSIC),
+})
+# ---- 1.17 - 1.19.4 ----
+
+# 1.17 - 1.19.4: 行列スタックを直接受け取り、テクスチャを指定してから描く
+SCREEN_POSE = """
+package marumasa.marumasa_sign.adapter;
+
+import com.mojang.blaze3d.systems.RenderSystem;
+import com.mojang.blaze3d.vertex.PoseStack;
+import net.minecraft.client.gui.GuiComponent;
+
+/**
+ * MarumaSign の画面の描画部分。
+ */
+final class UiScreen extends UiScreenBase {
+
+    @Override
+    public void render(PoseStack poseStack, int mouseX, int mouseY, float partialTicks) {
+        final Tex texture = prepare();
+        if (texture == null) return;
+
+        final float unscale = unscale();
+        RenderSystem.setShaderTexture(0, texture.id);
+        RenderSystem.enableBlend();
+        poseStack.pushPose();
+        poseStack.scale(unscale, unscale, 1f);
+        GuiComponent.blit(poseStack, ui.originX(), ui.originY(), 0f, 0f,
+                ui.pixelWidth(), ui.pixelHeight(), ui.pixelWidth(), ui.pixelHeight());
+        poseStack.popPose();
+        RenderSystem.disableBlend();
+    }
+}
+"""
+
+SIGN_TEXT_SINGLE = """        for (int i = 0; i < 4; i++) {
+            text.append(sign.getMessage(i, false).getString());
+        }"""
+LITERAL = ("mc.gui.getChat().addMessage(Component.literal(message))", "Component.literal(text)")
+TEXT_COMPONENT = ("mc.gui.getChat().addMessage(new TextComponent(message))", "new TextComponent(text)")
+SIGN_EDIT_OLD = "net.minecraft.client.gui.screens.inventory.SignEditScreen"
+SIGN_EDIT_NEW = "net.minecraft.client.gui.screens.inventory.AbstractSignEditScreen"
+
+
+def single_sign_mc(title, component, edit_import, matrix_import, *extra):
+    edit_class = edit_import.rsplit(".", 1)[1]
+    return mc_source(title, imports(edit_import, matrix_import, *CLASSIC_IMPORTS, *extra, drop=(SIGN_EDIT_NEW,) if edit_import != SIGN_EDIT_NEW else ()),
+                     "BlockEntityType.SIGN", "mc.screen", "mc.setScreen(screen)",
+                     component[0], component[1],
+                     KEY_STRING_CATEGORY, VERSION_GET, SIGN_TEXT_SINGLE, edit_class,
+                     "mc.player.setXRot(pitch)", SELECT_FIELD, QUADS_VERTEX)
+
+
+ERAS.update({
+    "v1_19_3": dict(mc=single_sign_mc("Minecraft 1.19.3 - 1.19.4", LITERAL, SIGN_EDIT_NEW, "org.joml.Matrix4f"),
+                    screen=SCREEN_POSE, wrapper=WRAPPER_CLASSIC),
+    "v1_19": dict(mc=single_sign_mc("Minecraft 1.19 - 1.19.2", LITERAL, SIGN_EDIT_OLD, "com.mojang.math.Matrix4f"),
+                  screen=SCREEN_POSE, wrapper=WRAPPER_CLASSIC),
+    "v1_17": dict(mc=single_sign_mc("Minecraft 1.17 - 1.18.2", TEXT_COMPONENT, SIGN_EDIT_OLD, "com.mojang.math.Matrix4f",
+                                    "net.minecraft.network.chat.TextComponent"),
+                  screen=SCREEN_POSE, wrapper=WRAPPER_CLASSIC),
+})
+
+# ---- 1.15 - 1.16.5 ----
+
+# 1.16.5 以前: 看板レンダラーは抽象クラスで、ディスパッチャーを受け取る
+write("ber16", "SignRendererBase.java", r"""
+package marumasa.marumasa_sign.adapter;
+
+import com.mojang.blaze3d.vertex.PoseStack;
+import marumasa.marumasa_sign.core.MarumaSign;
+import marumasa.marumasa_sign.core.sign.SignImage;
+import marumasa.marumasa_sign.core.util.Reflect;
+import net.minecraft.client.Minecraft;
+import net.minecraft.client.renderer.MultiBufferSource;
+import net.minecraft.client.renderer.blockentity.BlockEntityRenderDispatcher;
+import net.minecraft.client.renderer.blockentity.BlockEntityRenderer;
+import net.minecraft.world.level.block.StandingSignBlock;
+import net.minecraft.world.level.block.WallSignBlock;
+import net.minecraft.world.level.block.entity.BlockEntityType;
+import net.minecraft.world.level.block.entity.SignBlockEntity;
+import net.minecraft.world.level.block.state.BlockState;
+import net.minecraft.world.phys.Vec3;
+
+import java.lang.reflect.Field;
+import java.util.HashMap;
+import java.util.Map;
+
+/**
+ * 看板のレンダラーを包んで、MarumaSign の看板なら看板の代わりに画像を描く。
+ * 元のレンダラーをそのまま使うので、他の Mod が差し替えたレンダラーとも共存できる。
+ */
+final class SignRendererBase extends BlockEntityRenderer<SignBlockEntity> {
+
+    private static Field renderersField;
+
+    private final BlockEntityRenderer<SignBlockEntity> delegate;
+    private final Minecraft mc = Minecraft.getInstance();
+
+    private SignRendererBase(BlockEntityRenderDispatcher dispatcher, BlockEntityRenderer<SignBlockEntity> delegate) {
+        super(dispatcher);
+        this.delegate = delegate;
+    }
+
+    // 看板のレンダラーがまだ包まれていなければ包む
+    @SuppressWarnings("unchecked")
+    static void install(Minecraft mc) {
+        final BlockEntityRenderDispatcher dispatcher = BlockEntityRenderDispatcher.instance;
+        if (dispatcher == null) return;
+        if (renderersField == null) renderersField = Reflect.fieldOfType(BlockEntityRenderDispatcher.class, Map.class);
+        final Map<BlockEntityType<?>, BlockEntityRenderer<?>> renderers = Reflect.get(renderersField, dispatcher);
+        if (renderers == null) return;
+        final BlockEntityRenderer<?> current = renderers.get(Mc.SIGN);
+        if (current == null || current instanceof SignRendererBase) return;
+
+        // 元の表は変更できないことがあるので、写しを作って差し替える
+        final Map<BlockEntityType<?>, BlockEntityRenderer<?>> replaced = new HashMap<BlockEntityType<?>, BlockEntityRenderer<?>>(renderers);
+        replaced.put(Mc.SIGN, new SignRendererBase(dispatcher, (BlockEntityRenderer<SignBlockEntity>) current));
+        Reflect.set(renderersField, dispatcher, replaced);
+    }
+
+    @Override
+    public void render(SignBlockEntity sign, float partialTicks, PoseStack poseStack, MultiBufferSource buffers,
+                       int light, int overlay) {
+        final SignImage image = MarumaSign.sign(Mc.signText(sign));
+        // スペクテイターには看板そのものも見せる
+        if (image == null || (mc.player != null && mc.player.isSpectator())) {
+            delegate.render(sign, partialTicks, poseStack, buffers, light, overlay);
+        }
+        if (image == null) return;
+
+        final BlockState blockState = sign.getBlockState();
+        final boolean wall;
+        final float yaw;
+        if (blockState.getBlock() instanceof WallSignBlock) {
+            wall = true;
+            yaw = blockState.getValue(WallSignBlock.FACING).toYRot();
+        } else if (blockState.getBlock() instanceof StandingSignBlock) {
+            wall = false;
+            yaw = blockState.getValue(StandingSignBlock.ROTATION) * 22.5f;
+        } else {
+            return;
+        }
+
+        for (SignImage.Batch batch : image.batches(yaw, wall, distance(sign))) {
+            Mc.quads(buffers.getBuffer(((Tex) batch.texture).renderType), poseStack, batch, light);
+        }
+        MarumaSign.drawn(image);
+    }
+
+    // カメラから看板までの距離 (ブロック)
+    private double distance(SignBlockEntity sign) {
+        final Vec3 camera = mc.gameRenderer.getMainCamera().getPosition();
+        final double x = sign.getBlockPos().getX() + 0.5 - camera.x;
+        final double y = sign.getBlockPos().getY() + 0.5 - camera.y;
+        final double z = sign.getBlockPos().getZ() + 0.5 - camera.z;
+        return Math.sqrt(x * x + y * y + z * z);
+    }
+
+    @Override
+    public boolean shouldRenderOffScreen(SignBlockEntity sign) {
+        return true;
+    }
+}
+""")
+
+# 1.16: 行列スタックを受け取り、テクスチャを結び付けてから描く
+SCREEN_116 = """
+package marumasa.marumasa_sign.adapter;
+
+import com.mojang.blaze3d.systems.RenderSystem;
+import com.mojang.blaze3d.vertex.PoseStack;
+import net.minecraft.client.gui.GuiComponent;
+
+/**
+ * MarumaSign の画面の描画部分。
+ */
+final class UiScreen extends UiScreenBase {
+
+    @Override
+    public void render(PoseStack poseStack, int mouseX, int mouseY, float partialTicks) {
+        final Tex texture = prepare();
+        if (texture == null) return;
+
+        final float unscale = unscale();
+        minecraft.getTextureManager().bind(texture.id);
+        RenderSystem.enableBlend();
+        RenderSystem.defaultBlendFunc();
+        poseStack.pushPose();
+        poseStack.scale(unscale, unscale, 1f);
+        GuiComponent.blit(poseStack, ui.originX(), ui.originY(), 0f, 0f,
+                ui.pixelWidth(), ui.pixelHeight(), ui.pixelWidth(), ui.pixelHeight());
+        poseStack.popPose();
+        RenderSystem.disableBlend();
+    }
+}
+"""
+# 1.15: 行列スタックを受け取らない
+SCREEN_115 = """
+package marumasa.marumasa_sign.adapter;
+
+import com.mojang.blaze3d.systems.RenderSystem;
+
+/**
+ * MarumaSign の画面の描画部分。
+ */
+final class UiScreen extends UiScreenBase {
+
+    @Override
+    public void render(int mouseX, int mouseY, float partialTicks) {
+        final Tex texture = prepare();
+        if (texture == null) return;
+
+        final float unscale = unscale();
+        minecraft.getTextureManager().bind(texture.id);
+        RenderSystem.enableBlend();
+        RenderSystem.defaultBlendFunc();
+        RenderSystem.pushMatrix();
+        RenderSystem.scalef(unscale, unscale, 1f);
+        blit(ui.originX(), ui.originY(), 0f, 0f,
+                ui.pixelWidth(), ui.pixelHeight(), ui.pixelWidth(), ui.pixelHeight());
+        RenderSystem.popMatrix();
+        RenderSystem.disableBlend();
+    }
+}
+"""
+
+SIGN_TEXT_OLD = """        for (int i = 0; i < 4; i++) {
+            text.append(sign.getMessage(i).getString());
+        }"""
+SELECT_OLD = "mc.player.inventory.selected = slot"
+
+
+def old_mc(title):
+    return mc_source(title,
+                     imports(SIGN_EDIT_OLD, "com.mojang.math.Matrix4f", "net.minecraft.network.chat.TextComponent",
+                             *CLASSIC_IMPORTS, drop=(SIGN_EDIT_NEW,)),
+                     "BlockEntityType.SIGN", "mc.screen", "mc.setScreen(screen)",
+                     TEXT_COMPONENT[0], TEXT_COMPONENT[1],
+                     KEY_STRING_CATEGORY, VERSION_GET, SIGN_TEXT_OLD, "SignEditScreen",
+                     "mc.player.xRot = pitch", SELECT_OLD, QUADS_VERTEX)
+
+
+# 1.16.1 以前の編集画面は、看板のブロックエンティティを直接書き換える
+FILL_VIA_MESSAGES = """        if (signMessages == null) signMessages = Reflect.fieldOfType(SignEditScreen.class, String[].class);
+        final String[] messages = Reflect.get(signMessages, screen);
+        System.arraycopy(lines, 0, messages, 0, 4);"""
+FILL_VIA_SIGN = """        if (signMessages == null) signMessages = Reflect.fieldOfType(SignEditScreen.class, SignBlockEntity.class);
+        final SignBlockEntity sign = Reflect.get(signMessages, screen);
+        for (int i = 0; i < 4; i++) {
+            sign.setMessage(i, new TextComponent(lines[i]));
+        }"""
+
+
+def old_mc_direct(title):
+    source = old_mc(title)
+    if source.count(FILL_VIA_MESSAGES) != 1:
+        raise SystemExit("fillSign body not found")
+    return (source.replace(FILL_VIA_MESSAGES, FILL_VIA_SIGN)
+            .replace("    private static Field signMessages;", "    // 編集画面が持っている看板のフィールド\n    private static Field signMessages;"))
+
+
+# 1.16 系には看板の文字を取り出すメソッドがないため、フィールドから読む
+SIGN_TEXT_FIELD = """        if (signLines == null) signLines = Reflect.fieldOfType(SignBlockEntity.class, Component[].class);
+        final Component[] lines = Reflect.get(signLines, sign);
+        for (Component line : lines) {
+            if (line != null) text.append(line.getString());
+        }"""
+
+
+def mc_116():
+    source = old_mc("Minecraft 1.16 - 1.16.5")
+    if source.count(SIGN_TEXT_OLD) != 1:
+        raise SystemExit("signText body not found")
+    return (source.replace(SIGN_TEXT_OLD, SIGN_TEXT_FIELD)
+            .replace("    private static Field signMessages;", "    private static Field signMessages;\n    private static Field signLines;"))
+
+
+ERAS.update({
+    "v1_16": dict(mc=mc_116(), screen=SCREEN_116),
+    "v1_15": dict(mc=old_mc_direct("Minecraft 1.15 - 1.15.2"), screen=SCREEN_115),
+})
+
+# ---- 1.14 ----
+
+# 1.14: 描画設定の仕組みがまだないので、テクスチャの識別子だけを持つ
+write("tex_0", "Tex.java", r"""
+package marumasa.marumasa_sign.adapter;
+
+import com.mojang.blaze3d.platform.NativeImage;
+import marumasa.marumasa_sign.core.MarumaSign;
+import net.minecraft.client.Minecraft;
+import net.minecraft.client.renderer.texture.DynamicTexture;
+import net.minecraft.resources.ResourceLocation;
+
+import java.util.concurrent.atomic.AtomicInteger;
+
+/**
+ * テクスチャのハンドル。Minecraft 1.14 の作り方。
+ */
+final class Tex {
+
+    private static final AtomicInteger nextId = new AtomicInteger();
+
+    final ResourceLocation id;
+    private final DynamicTexture texture;
+
+    private Tex(ResourceLocation id, DynamicTexture texture) {
+        this.id = id;
+        this.texture = texture;
+    }
+
+    private static void copy(NativeImage image, int width, int height, int[] argb) {
+        for (int y = 0; y < height; y++) {
+            final int row = y * width;
+            for (int x = 0; x < width; x++) {
+                // この API は ABGR の並びで受け取る
+                final int color = argb[row + x];
+                image.setPixelRGBA(x, y, (color & 0xFF00FF00) | ((color & 0xFF) << 16) | ((color >> 16) & 0xFF));
+            }
+        }
+    }
+
+    static Tex create(Minecraft mc, int width, int height, int[] argb) {
+        final NativeImage image = new NativeImage(width, height, false);
+        copy(image, width, height, argb);
+        final ResourceLocation id = new ResourceLocation(MarumaSign.MOD_ID, "dynamic/" + nextId.incrementAndGet());
+        final DynamicTexture texture = new DynamicTexture(image);
+        mc.getTextureManager().register(id, texture);
+        return new Tex(id, texture);
+    }
+
+    void update(int width, int height, int[] argb) {
+        copy(texture.getPixels(), width, height, argb);
+        texture.upload();
+    }
+
+    void release(Minecraft mc) {
+        mc.getTextureManager().release(id);
+    }
+}
+""")
+
+# 1.14: 看板レンダラーはカメラからの位置を直接受け取り、OpenGL で描く
+write("ber14", "SignRendererBase.java", r"""
+package marumasa.marumasa_sign.adapter;
+
+import marumasa.marumasa_sign.core.MarumaSign;
+import marumasa.marumasa_sign.core.sign.SignImage;
+import marumasa.marumasa_sign.core.util.Reflect;
+import net.minecraft.client.Minecraft;
+import net.minecraft.client.renderer.blockentity.BlockEntityRenderDispatcher;
+import net.minecraft.client.renderer.blockentity.BlockEntityRenderer;
+import net.minecraft.world.level.block.StandingSignBlock;
+import net.minecraft.world.level.block.WallSignBlock;
+import net.minecraft.world.level.block.entity.SignBlockEntity;
+import net.minecraft.world.level.block.state.BlockState;
+import org.lwjgl.opengl.GL11;
+
+import java.lang.reflect.Field;
+import java.util.Map;
+
+/**
+ * 看板のレンダラーを包んで、MarumaSign の看板なら看板の代わりに画像を描く。
+ * 元のレンダラーをそのまま使うので、他の Mod が差し替えたレンダラーとも共存できる。
+ */
+final class SignRendererBase extends BlockEntityRenderer<SignBlockEntity> {
+
+    private static Field renderersField;
+
+    private final BlockEntityRenderer<SignBlockEntity> delegate;
+    private final Minecraft mc = Minecraft.getInstance();
+
+    private SignRendererBase(BlockEntityRenderer<SignBlockEntity> delegate) {
+        this.delegate = delegate;
+    }
+
+    // 看板のレンダラーがまだ包まれていなければ包む
+    @SuppressWarnings("unchecked")
+    static void install(Minecraft mc) {
+        final BlockEntityRenderDispatcher dispatcher = BlockEntityRenderDispatcher.instance;
+        if (dispatcher == null) return;
+        if (renderersField == null) renderersField = Reflect.fieldOfType(BlockEntityRenderDispatcher.class, Map.class);
+        // このバージョンでは、ブロックエンティティのクラスをキーにした表になっている
+        final Map<Class<?>, BlockEntityRenderer<?>> renderers = Reflect.get(renderersField, dispatcher);
+        if (renderers == null) return;
+        final BlockEntityRenderer<?> current = renderers.get(SignBlockEntity.class);
+        if (current == null || current instanceof SignRendererBase) return;
+
+        final SignRendererBase wrapper = new SignRendererBase((BlockEntityRenderer<SignBlockEntity>) current);
+        wrapper.init(dispatcher);
+        renderers.put(SignBlockEntity.class, wrapper);
+    }
+
+    @Override
+    public void render(SignBlockEntity sign, double x, double y, double z, float partialTicks, int destroyStage) {
+        final SignImage image = MarumaSign.sign(Mc.signText(sign));
+        // スペクテイターには看板そのものも見せる
+        if (image == null || (mc.player != null && mc.player.isSpectator())) {
+            delegate.render(sign, x, y, z, partialTicks, destroyStage);
+        }
+        if (image == null || destroyStage >= 0) return;
+
+        final BlockState blockState = sign.getBlockState();
+        final boolean wall;
+        final float yaw;
+        if (blockState.getBlock() instanceof WallSignBlock) {
+            wall = true;
+            yaw = blockState.getValue(WallSignBlock.FACING).toYRot();
+        } else if (blockState.getBlock() instanceof StandingSignBlock) {
+            wall = false;
+            yaw = blockState.getValue(StandingSignBlock.ROTATION) * 22.5f;
+        } else {
+            return;
+        }
+        final SignImage.Batch[] batches = image.batches(yaw, wall, Math.sqrt(x * x + y * y + z * z));
+
+        // 変更した状態は glPopAttrib で元に戻す
+        GL11.glPushAttrib(GL11.GL_ENABLE_BIT | GL11.GL_COLOR_BUFFER_BIT | GL11.GL_CURRENT_BIT | GL11.GL_LIGHTING_BIT
+                | GL11.GL_DEPTH_BUFFER_BIT);
+        GL11.glPushMatrix();
+        GL11.glTranslated(x, y, z);
+        GL11.glDisable(GL11.GL_LIGHTING);
+        GL11.glEnable(GL11.GL_TEXTURE_2D);
+        GL11.glEnable(GL11.GL_DEPTH_TEST);
+        GL11.glDepthMask(true);
+        GL11.glEnable(GL11.GL_BLEND);
+        GL11.glBlendFunc(GL11.GL_SRC_ALPHA, GL11.GL_ONE_MINUS_SRC_ALPHA);
+        GL11.glColor4f(1f, 1f, 1f, 1f);
+
+        for (SignImage.Batch batch : batches) {
+            mc.getTextureManager().bind(((Tex) batch.texture).id);
+            if (batch.colors != null) {
+                // 3D モデルは裏を向いた面と、透明な部分を描かない
+                GL11.glEnable(GL11.GL_CULL_FACE);
+                GL11.glEnable(GL11.GL_ALPHA_TEST);
+                GL11.glAlphaFunc(GL11.GL_GREATER, 0.1f);
+                GL11.glDepthMask(!batch.blend);
+                ModelArrays.draw(batch);
+                continue;
+            }
+            final float[] mesh = batch.vertices;
+            GL11.glBegin(GL11.GL_QUADS);
+            for (int i = 0; i < batch.vertexCount; i++) {
+                final int o = i * SignImage.Batch.STRIDE;
+                GL11.glTexCoord2f(mesh[o + 3], mesh[o + 4]);
+                GL11.glVertex3f(mesh[o], mesh[o + 1], mesh[o + 2]);
+            }
+            GL11.glEnd();
+        }
+
+        GL11.glPopMatrix();
+        GL11.glPopAttrib();
+        MarumaSign.drawn(image);
+    }
+
+    @Override
+    public boolean shouldRenderOffScreen(SignBlockEntity sign) {
+        return true;
+    }
+}
+""")
+
+write("ber14", "ModelArrays.java", r"""
+package marumasa.marumasa_sign.adapter;
+
+import marumasa.marumasa_sign.core.sign.SignImage;
+import org.lwjgl.BufferUtils;
+import org.lwjgl.opengl.GL11;
+import org.lwjgl.opengl.GL13;
+import org.lwjgl.opengl.GL15;
+
+import java.nio.ByteBuffer;
+import java.nio.FloatBuffer;
+import java.util.Map;
+import java.util.WeakHashMap;
+
+/**
+ * 3D モデルの頂点を、配列にまとめて OpenGL に渡す。
+ * 頂点が多いので、1 つずつ渡すと時間がかかる。
+ */
+final class ModelArrays {
+
+    private static final int BYTES_PER_VERTEX = SignImage.Batch.STRIDE * 4;
+
+    private static final class Buffers {
+        final FloatBuffer vertices;
+        final ByteBuffer colors;
+        int revision = -1;
+
+        Buffers(int vertexCount) {
+            vertices = BufferUtils.createFloatBuffer(vertexCount * SignImage.Batch.STRIDE);
+            colors = BufferUtils.createByteBuffer(vertexCount * 4);
+        }
+    }
+
+    // まとまりごとのバッファ。まとまりが使われなくなれば、一緒に破棄される
+    private static final Map<SignImage.Batch, Buffers> BUFFERS = new WeakHashMap<SignImage.Batch, Buffers>();
+
+    private ModelArrays() {
+    }
+
+    static void draw(SignImage.Batch batch) {
+        Buffers buffers = BUFFERS.get(batch);
+        if (buffers == null) {
+            buffers = new Buffers(batch.vertexCount);
+            BUFFERS.put(batch, buffers);
+        }
+        if (buffers.revision != batch.revision) {
+            // 内容が変わったときだけ詰め直す
+            buffers.vertices.clear();
+            buffers.vertices.put(batch.vertices, 0, batch.vertexCount * SignImage.Batch.STRIDE);
+            buffers.colors.clear();
+            final int[] colors = batch.colors;
+            for (int i = 0; i < batch.vertexCount; i++) {
+                final int color = colors[i];
+                buffers.colors.put((byte) (color >> 16)).put((byte) (color >> 8)).put((byte) color).put((byte) (color >>> 24));
+            }
+            buffers.colors.flip();
+            buffers.revision = batch.revision;
+        }
+
+        // 変更した状態は glPopClientAttrib で元に戻す
+        GL11.glPushClientAttrib(GL11.GL_CLIENT_VERTEX_ARRAY_BIT);
+        GL15.glBindBuffer(GL15.GL_ARRAY_BUFFER, 0);
+        GL13.glClientActiveTexture(GL13.GL_TEXTURE0);
+        GL11.glDisableClientState(GL11.GL_NORMAL_ARRAY);
+        GL11.glEnableClientState(GL11.GL_VERTEX_ARRAY);
+        GL11.glEnableClientState(GL11.GL_TEXTURE_COORD_ARRAY);
+        GL11.glEnableClientState(GL11.GL_COLOR_ARRAY);
+        // 位置とテクスチャ座標は、同じバッファに交互に入っている
+        buffers.vertices.position(0);
+        GL11.glVertexPointer(3, GL11.GL_FLOAT, BYTES_PER_VERTEX, buffers.vertices);
+        buffers.vertices.position(3);
+        GL11.glTexCoordPointer(2, GL11.GL_FLOAT, BYTES_PER_VERTEX, buffers.vertices);
+        buffers.colors.position(0);
+        GL11.glColorPointer(4, GL11.GL_UNSIGNED_BYTE, 0, buffers.colors);
+        GL11.glDrawArrays(GL11.GL_QUADS, 0, batch.vertexCount);
+        GL11.glPopClientAttrib();
+    }
+}
+""")
+
+# 1.14: 状態の変更は GlStateManager 経由で行う
+SCREEN_114 = """
+package marumasa.marumasa_sign.adapter;
+
+import com.mojang.blaze3d.platform.GlStateManager;
+
+/**
+ * MarumaSign の画面の描画部分。
+ */
+final class UiScreen extends UiScreenBase {
+
+    @Override
+    public void render(int mouseX, int mouseY, float partialTicks) {
+        final Tex texture = prepare();
+        if (texture == null) return;
+
+        final float unscale = unscale();
+        minecraft.getTextureManager().bind(texture.id);
+        GlStateManager.enableBlend();
+        GlStateManager.blendFunc(GlStateManager.SourceFactor.SRC_ALPHA, GlStateManager.DestFactor.ONE_MINUS_SRC_ALPHA);
+        GlStateManager.color4f(1f, 1f, 1f, 1f);
+        GlStateManager.pushMatrix();
+        GlStateManager.scalef(unscale, unscale, 1f);
+        blit(ui.originX(), ui.originY(), 0f, 0f,
+                ui.pixelWidth(), ui.pixelHeight(), ui.pixelWidth(), ui.pixelHeight());
+        GlStateManager.popMatrix();
+        GlStateManager.disableBlend();
+    }
+}
+"""
+
+
+def mc_114():
+    source = mc_source("Minecraft 1.14 - 1.14.4",
+                       imports(SIGN_EDIT_OLD, "net.minecraft.network.chat.TextComponent", drop=(SIGN_EDIT_NEW,)),
+                       "BlockEntityType.SIGN", "mc.screen", "mc.setScreen(screen)",
+                       TEXT_COMPONENT[0], TEXT_COMPONENT[1],
+                       KEY_STRING_CATEGORY, VERSION_GET, SIGN_TEXT_OLD, "SignEditScreen",
+                       "mc.player.xRot = pitch", SELECT_OLD, None, window="mc.window")
+    if source.count(FILL_VIA_MESSAGES) != 1:
+        raise SystemExit("fillSign body not found")
+    return source.replace(FILL_VIA_MESSAGES, FILL_VIA_SIGN)
+
+
+ERAS.update({
+    "v1_14": dict(mc=mc_114(), screen=SCREEN_114),
+})
+
+for era, files in ERAS.items():
+    write(era, "Mc.java", files["mc"])
+    if "screen" in files:
+        write(era, "UiScreen.java", files["screen"])
+    if "wrapper" in files:
+        write(era, "SignRendererWrapper.java", files["wrapper"])
+
+# 26.x 共通の画面とレンダラーの受け口
+write("v26", "UiScreen.java", SCREEN_EXTRACTOR)
+write("v26", "SignRendererWrapper.java", WRAPPER_RS_26)
+print("generated")

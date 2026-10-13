@@ -16,7 +16,7 @@ import java.util.Locale;
  */
 final class FileBrowserPage extends Page {
 
-    private static final String[] EXTENSIONS = {".png", ".jpg", ".jpeg", ".gif", ".apng"};
+    private static final String[] EXTENSIONS = {".png", ".jpg", ".jpeg", ".gif", ".apng", ".glb", ".gltf"};
 
     private final MainPage owner;
     private final TextField location;

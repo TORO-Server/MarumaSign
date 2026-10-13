@@ -1,8 +1,11 @@
 package marumasa.marumasa_sign.core.sign;
 
+import marumasa.marumasa_sign.core.gltf.GltfScene;
+
 /**
  * URL ごとの画像テクスチャ。読み込み中・失敗の場合は代わりの画像を指す。
  * 動画や音声の場合は、再生中のフレームを映すテクスチャを指す。
+ * 3D モデルの場合は、モデルと、その材質のテクスチャを持つ。
  */
 public final class TextureEntry {
 
@@ -25,6 +28,8 @@ public final class TextureEntry {
     private MediaSession media;
     // frames のテクスチャをこのエントリが所有しているかどうか (共用の画像を指しているだけなら false)
     private boolean ownsTextures;
+    // 3D モデル。画像なら null
+    private GltfScene model;
 
     TextureEntry(int state, int width, int height, Object texture) {
         set(state, width, height, new Object[]{texture}, new int[]{1}, 0, false);
@@ -40,6 +45,26 @@ public final class TextureEntry {
         this.loadedAt = System.currentTimeMillis();
         this.state = state;
         this.revision++;
+    }
+
+    // 3D モデルを表示する状態にする。textures はモデルのテクスチャと同じ並び
+    void setModel(GltfScene model, Object[] textures) {
+        this.model = model;
+        set(LOADED, 1, 1, textures, new int[]{1}, 0, true);
+    }
+
+    // 3D モデル。画像なら null
+    GltfScene model() {
+        return model;
+    }
+
+    Object modelTexture(int index) {
+        return frames[index];
+    }
+
+    // 読み込んでからの時間 (秒)。アニメーションの時刻に使う
+    float modelTime() {
+        return (System.currentTimeMillis() - loadedAt) / 1000f;
     }
 
     void setMedia(MediaSession media) {

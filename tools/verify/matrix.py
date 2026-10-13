@@ -10,6 +10,7 @@
 """
 
 import argparse
+import hashlib
 import json
 import sys
 from pathlib import Path
@@ -25,6 +26,10 @@ def mod_version():
         if line.replace(" ", "").startswith("mod_version="):
             return line.split("=", 1)[1].strip()
     raise RuntimeError("mod_version was not found in gradle.properties")
+
+
+def file_digest(path):
+    return hashlib.sha256(Path(path).read_bytes()).hexdigest()
 
 
 def combinations(libs):
@@ -47,11 +52,19 @@ def combinations(libs):
                 yield "neoforge", minecraft, loader_version, universal
 
 
-def run_one(root, loader, minecraft, loader_version, mod, baseline, timeout):
+# 看板に表示して確かめるファイル。どれも同じテスト画像が見えるように作ってある
+MEDIA = {
+    "image": "test-image.png",
+    "model": "test-model.glb",
+    "video": "test-video.mp4",
+}
+
+
+def run_one(root, loader, minecraft, loader_version, mod, baseline, timeout, media=("image",)):
     args = SimpleNamespace(
         minecraft=minecraft, loader=loader, loader_version=loader_version, spec="",
         mod=None if baseline else str(mod), baseline=baseline,
-        image=str(REPO / "tools" / "verify" / "test-image.png"), lang="en_us",
+        image="|".join(str(REPO / "tools" / "verify" / MEDIA[kind]) for kind in media), lang="en_us",
         port=25570, timeout=timeout, root=str(root),
     )
     try:
@@ -65,7 +78,9 @@ def main():
     parser.add_argument("--only", nargs="*", default=[], help="loader:version の形式で対象を絞る")
     parser.add_argument("--skip-passed", action="store_true", help="前回合格した組み合わせを飛ばす")
     parser.add_argument("--rebaseline", action="store_true", help="基準のログを取り直す")
-    parser.add_argument("--timeout", type=int, default=420)
+    parser.add_argument("--media", nargs="+", choices=sorted(MEDIA), default=list(MEDIA),
+                        help="看板に表示して確かめるものの種類。1 回の起動で順に確かめる")
+    parser.add_argument("--timeout", type=int, default=480)
     parser.add_argument("--root", default=str(verify.DEFAULT_ROOT))
     parser.add_argument("--libs", default=str(REPO / "dist" / "build" / "libs"),
                         help="確認する jar があるフォルダ。ビルドを続けながら確認するときは、コピーした先を指定する")
@@ -75,14 +90,20 @@ def main():
     summary_file = root / "summary.json"
     summary = json.loads(summary_file.read_text(encoding="utf-8")) if summary_file.is_file() else {}
 
+    selected = set()
     for loader, minecraft, loader_version, mod in combinations(Path(args.libs)):
         key = f"{loader}:{minecraft}"
         if args.only and key not in args.only:
             continue
-        if args.skip_passed and summary.get(key, {}).get("clean") and summary[key].get("mod") == mod.name:
-            continue
+        selected.add(key)
         if not mod.is_file():
             summary[key] = {"ok": False, "clean": False, "detail": f"missing {mod.name}"}
+            continue
+        # 確認済みかどうかは、ファイルの内容で判断する (ビルドし直すと名前は同じでも中身が変わる)
+        digest = file_digest(mod)
+        previous = summary.get(key, {})
+        if (args.skip_passed and previous.get("clean") and previous.get("mod_sha256") == digest
+                and set(args.media) <= set(previous.get("media", []))):
             continue
 
         baseline_file = root / "baselines" / f"{loader}-{minecraft}.json"
@@ -95,17 +116,19 @@ def main():
                 continue
 
         verify.log(f"=== verify {key}")
-        result = run_one(root, loader, minecraft, loader_version, mod, False, args.timeout)
+        result = run_one(root, loader, minecraft, loader_version, mod, False, args.timeout, args.media)
         if not result.get("clean"):
             # 他の処理と重なって時間切れになることがあるので、1 回だけやり直す
             verify.log(f"=== retry {key} ({str(result.get('detail'))[:80]})")
-            result = run_one(root, loader, minecraft, loader_version, mod, False, args.timeout)
+            result = run_one(root, loader, minecraft, loader_version, mod, False, args.timeout, args.media)
         summary[key] = {
             "ok": bool(result.get("ok")),
             "clean": bool(result.get("clean")),
             "detail": " / ".join([str(result.get("detail"))[:300], str(result.get("image_detail", "no screenshot")),
                                   str(result.get("sign_detail", "sign view not captured"))]),
             "mod": mod.name,
+            "mod_sha256": digest,
+            "media": list(args.media),
             "new_client_findings": result.get("new_client_findings", [])[:8],
             "new_server_findings": result.get("new_server_findings", [])[:8],
         }
@@ -116,7 +139,7 @@ def main():
     print(f"{'combination':<24} {'works':<6} {'clean':<6} detail")
     failed = 0
     for key in sorted(summary):
-        if args.only and key not in args.only:
+        if key not in selected:
             continue
         entry = summary[key]
         if not entry.get("clean"):

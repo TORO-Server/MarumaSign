@@ -23,6 +23,14 @@ tasks.register('uiPreview', JavaExec) {
             (providers.gradleProperty('previewImage').isPresent() ? [providers.gradleProperty('previewImage').get()] : [])
 }
 
+// Minecraft を起動せずに 3D モデルを PNG に描く。引数は -PgltfArgs="出力先 時刻 モデルのファイル..." で渡す
+tasks.register('gltfCheck', JavaExec) {
+    classpath = sourceSets.test.runtimeClasspath
+    mainClass = 'marumasa.marumasa_sign.core.gltf.GltfCheck'
+    javaLauncher = javaToolchains.launcherFor(java.toolchain)
+    args = providers.gradleProperty('gltfArgs').getOrElse('').tokenize(' ')
+}
+
 tasks.withType(JavaCompile).configureEach {
     // Minecraft に依存しないので JDK 8 の API だけに制限する
     options.release = 8

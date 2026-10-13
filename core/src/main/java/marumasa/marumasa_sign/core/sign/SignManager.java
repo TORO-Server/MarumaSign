@@ -2,6 +2,8 @@ package marumasa.marumasa_sign.core.sign;
 
 import marumasa.marumasa_sign.core.MarumaSign;
 import marumasa.marumasa_sign.core.Platform;
+import marumasa.marumasa_sign.core.gltf.GltfModel;
+import marumasa.marumasa_sign.core.gltf.GltfScene;
 import marumasa.marumasa_sign.core.image.DecodedImage;
 import marumasa.marumasa_sign.core.image.ImageLoader;
 import marumasa.marumasa_sign.core.media.Ffmpeg;
@@ -83,6 +85,16 @@ public final class SignManager {
             }
 
             @Override
+            public void onModel(final GltfScene scene) {
+                platform.execute(new Runnable() {
+                    @Override
+                    public void run() {
+                        registerModel(url, created, scene);
+                    }
+                });
+            }
+
+            @Override
             public void onMedia() {
                 platform.execute(new Runnable() {
                     @Override
@@ -123,6 +135,26 @@ public final class SignManager {
         } catch (RuntimeException | Error e) {
             // スケジュールされたタスクの中の例外は呼び出し元で捨てられるため、ここで記録する
             MarumaSign.LOGGER.error("Failed to register texture: " + url, e);
+            fail(url, entry);
+        }
+    }
+
+    private void registerModel(String url, TextureEntry entry, GltfScene scene) {
+        if (textures.get(url) != entry) return;
+        final GltfModel model = scene.model();
+        final Object[] created = new Object[model.textureCount()];
+        try {
+            for (int i = 0; i < created.length; i++) {
+                final GltfModel.Texture texture = model.texture(i);
+                created[i] = platform.createTexture(texture.width, texture.height, texture.pixels);
+            }
+            entry.setModel(scene, created);
+            MarumaSign.LOGGER.info("Load: " + url + " (" + model.triangleCount() + " triangles)");
+        } catch (RuntimeException | Error e) {
+            MarumaSign.LOGGER.error("Failed to register model: " + url, e);
+            for (Object texture : created) {
+                if (texture != null) platform.releaseTexture(texture);
+            }
             fail(url, entry);
         }
     }

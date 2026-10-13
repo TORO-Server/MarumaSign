@@ -70,22 +70,54 @@ class MockHost:
                 pass
 
             def _send(self, status, body, content_type="text/plain"):
+                # 動画は途中から読めないと再生できないことがあるので、範囲指定に対応する
+                total = len(body)
+                requested = re.match(r"bytes=(\d*)-(\d*)$", self.headers.get("Range", "")) if status == 200 else None
+                if requested and (requested.group(1) or requested.group(2)):
+                    if requested.group(1):
+                        start = int(requested.group(1))
+                        end = min(int(requested.group(2)), total - 1) if requested.group(2) else total - 1
+                    else:
+                        start = max(0, total - int(requested.group(2)))
+                        end = total - 1
+                    if start > end or start >= total:
+                        self.send_response(416)
+                        self.send_header("Content-Range", f"bytes */{total}")
+                        self.send_header("Content-Length", "0")
+                        self.end_headers()
+                        return
+                    body = body[start:end + 1]
+                    status = 206
                 self.send_response(status)
                 self.send_header("Content-Type", content_type)
                 self.send_header("Content-Length", str(len(body)))
+                if status in (200, 206):
+                    self.send_header("Accept-Ranges", "bytes")
+                if status == 206:
+                    self.send_header("Content-Range", f"bytes {start}-{end}/{total}")
                 self.end_headers()
-                self.wfile.write(body)
+                try:
+                    self.wfile.write(body)
+                except (BrokenPipeError, ConnectionError):
+                    # 動画の再生では、読む側が途中で接続を閉じることがある
+                    pass
 
             def do_POST(self):
                 body = self.rfile.read(int(self.headers.get("Content-Length", "0")))
                 host.requests.append("POST " + self.path)
-                # multipart の中から画像ファイルの本体を取り出す
+                # multipart の中からファイルの本体を取り出す
                 boundary = self.headers.get("Content-Type", "").split("boundary=")[-1].encode()
                 data = b""
+                extension = ".png"
                 for part in body.split(b"--" + boundary):
                     if b'name="fileToUpload"' in part:
-                        data = part.split(b"\r\n\r\n", 1)[1].rsplit(b"\r\n", 1)[0]
-                name = f"{len(host.files) + 1}.png"
+                        header, content = part.split(b"\r\n\r\n", 1)
+                        data = content.rsplit(b"\r\n", 1)[0]
+                        # 実際のアップロード先と同じように、元のファイルの拡張子を引き継ぐ
+                        filename = re.search(rb'filename="[^"]*?(\.[A-Za-z0-9]{1,5})"', header)
+                        if filename:
+                            extension = filename.group(1).decode().lower()
+                name = f"{len(host.files) + 1}{extension}"
                 host.files[name] = data
                 self._send(200, f"http://127.0.0.1:{host.port}/i/{name}".encode())
 
@@ -97,7 +129,7 @@ class MockHost:
                     if data is None:
                         self._send(404, b"not found")
                     else:
-                        self._send(200, data, "image/png")
+                        self._send(200, data, "application/octet-stream")
                 elif parsed.path == "/shorten":
                     target = urllib.parse.parse_qs(parsed.query).get("url", [""])[0]
                     name = target.rsplit("/", 1)[-1]
@@ -237,6 +269,13 @@ class Server:
         if self.process and self.process.poll() is None:
             self.process.stdin.write(text + "\n")
             self.process.stdin.flush()
+
+    def move_player(self, distance):
+        """プレイヤーを、いまの場所から離れた場所へ移動させる。"""
+        if version_key(self.minecraft) >= (1, 13, 0):
+            self.command(f"execute as {PLAYER} at @s run tp @s ~{distance} ~ ~")
+        else:
+            self.command(f"tp {PLAYER} ~{distance} ~ ~")
 
     def on_join(self):
         """プレイヤーが入ったら、サバイバルモードで看板を持たせる。"""
@@ -457,6 +496,9 @@ def prepare_work_dir(work_dir, mod, lang):
     if mod is not None:
         shutil.copy2(mod, work_dir / "mods" / mod.name)
     (work_dir / "options.txt").write_text(OPTIONS.format(lang=lang))
+    # 動画や音声の確認で音が鳴らないように、音量を 0 にしておく
+    (work_dir / "config").mkdir(exist_ok=True)
+    (work_dir / "config" / "marumasa_sign.json").write_text('{\n  "MaxThreads": 5,\n  "Volume": 0\n}\n')
 
 
 def minecraft_windows():
@@ -655,7 +697,8 @@ def run(args):
     work_dir = root / "runs" / name
     result_dir = work_dir / "selftest"
     mod = Path(args.mod).resolve() if args.mod else None
-    image = Path(args.image).resolve()
+    # 看板に表示して確かめるファイル。| で区切って複数指定できる
+    images = [Path(item).resolve() for item in str(args.image).split("|") if item]
 
     prepare_work_dir(work_dir, mod, args.lang)
     result = {
@@ -704,7 +747,7 @@ def run(args):
         jvm_args = " ".join([
             "-Xmx2G",
             f"-Dmarumasign.selftest={result_dir}",
-            f"-Dmarumasign.selftest.image={image}",
+            "-Dmarumasign.selftest.image=" + "|".join(str(image) for image in images),
             f"-Dmarumasign.uploadUrl=http://127.0.0.1:{host.port}/upload",
             f"-Dmarumasign.shortenUrl=http://127.0.0.1:{host.port}/shorten",
         ])
@@ -717,8 +760,11 @@ def run(args):
         deadline = time.time() + args.timeout
         joined_handled = False
         joined_at = 0.0
-        sign_captured = False
         captured = False
+        # ファイルごとの結果と、次に待つ合図
+        media = [{"name": image.name} for image in images]
+        current = 0
+        stage = "view"
         while time.time() < deadline:
             if client.poll() is not None:
                 break
@@ -732,11 +778,27 @@ def run(args):
                 time.sleep(0.5)
                 if not args.baseline and grab_screen(work_dir / "screenshot.png"):
                     result["screenshot"] = str(work_dir / "screenshot.png")
-                    result["image_visible"], result["image_detail"] = analyze_screenshot(work_dir / "screenshot.png")
-            if not args.baseline and not sign_captured and (result_dir / "sign-view.txt").is_file():
-                sign_captured = True
-                if grab_screen(work_dir / "screenshot-sign.png"):
-                    result["sign_hidden"], result["sign_detail"] = analyze_sign_view(work_dir / "screenshot-sign.png")
+            if not args.baseline and current < len(media):
+                entry = media[current]
+                if stage == "view" and (result_dir / f"view-{current}.txt").is_file():
+                    # 画像の全体が写っている状態
+                    shot = work_dir / f"screenshot-{current}.png"
+                    if grab_screen(shot):
+                        entry["visible"], entry["detail"] = analyze_screenshot(shot)
+                    stage = "sign"
+                elif stage == "sign" and (result_dir / f"sign-view-{current}.txt").is_file():
+                    # 看板の位置を見下ろしている状態
+                    shot = work_dir / f"screenshot-sign-{current}.png"
+                    if grab_screen(shot):
+                        entry["sign_hidden"], entry["sign_detail"] = analyze_sign_view(shot)
+                    stage = "move"
+                elif stage == "move" and (result_dir / f"move-{current}.txt").is_file():
+                    # 次のファイルは、前の看板が見えない場所で確認する
+                    server.move_player(300)
+                    time.sleep(1.0)
+                    (result_dir / f"moved-{current}.txt").write_text("done\n")
+                    current += 1
+                    stage = "view"
             if args.baseline and joined_handled and time.time() - joined_at > 25:
                 # 基準の取得では、ワールドに入ってしばらくしたら終了する
                 result["detail"] = "baseline"
@@ -759,6 +821,13 @@ def run(args):
     finally:
         server.stop()
         host.close()
+
+    if not args.baseline:
+        result["media"] = media
+        result["image_visible"] = all(entry.get("visible") for entry in media)
+        result["sign_hidden"] = all(entry.get("sign_hidden") for entry in media)
+        result["image_detail"] = ", ".join(f"{entry['name']}: {entry.get('detail', 'not captured')}" for entry in media)
+        result["sign_detail"] = ", ".join(f"{entry['name']}: {entry.get('sign_detail', 'not captured')}" for entry in media)
 
     result_file = result_dir / "result.txt"
     if result_file.is_file():
