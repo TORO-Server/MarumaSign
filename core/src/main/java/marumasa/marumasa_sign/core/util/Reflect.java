@@ -46,6 +46,26 @@ public final class Reflect {
         }
     }
 
+    /**
+     * static final のフィールドを書き換える。
+     * 普通のリフレクションでは書き換えられないか、Java のバージョンによって警告が出るため、
+     * JDK が用意しているメモリの直接操作 (sun.misc.Unsafe) を使う。このクラスは古い Java では
+     * コンパイル時に参照できないので、名前で呼び出す (JDK のクラスなので、名前は実行環境によって変わらない)。
+     * 実行中のコードが値を定数として取り込む前に、できるだけ早い時点で呼ぶこと。
+     */
+    public static void setStaticFinal(Field field, Object value) {
+        try {
+            final Class<?> unsafeClass = Class.forName("sun.misc.Unsafe");
+            final Field holder = unsafeClass.getDeclaredField("theUnsafe");
+            holder.setAccessible(true);
+            final Object unsafe = holder.get(null);
+            final Object base = unsafeClass.getMethod("staticFieldBase", Field.class).invoke(unsafe, field);
+            final Object offset = unsafeClass.getMethod("staticFieldOffset", Field.class).invoke(unsafe, field);
+            unsafeClass.getMethod("putObjectVolatile", Object.class, long.class, Object.class).invoke(unsafe, base, offset, value);
+        } catch (ReflectiveOperationException e) {
+            throw new IllegalStateException(e);
+        }
+    }
     @SuppressWarnings("unchecked")
     public static <T> T get(Field field, Object instance) {
         try {
