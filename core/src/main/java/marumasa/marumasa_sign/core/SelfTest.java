@@ -21,10 +21,11 @@ final class SelfTest {
     private static final int WAIT_WRITE_MODE = 3;
     private static final int USE_ITEM = 4;
     private static final int WAIT_RENDER = 5;
-    private static final int FINISHED = 6;
+    private static final int LOOK_AT_SIGN = 6;
+    private static final int FINISHED = 7;
 
     private static final String[] STEP_NAMES = {
-            "WAIT_WORLD", "OPEN_UI", "FILL", "WAIT_WRITE_MODE", "USE_ITEM", "WAIT_RENDER", "FINISHED"
+            "WAIT_WORLD", "OPEN_UI", "FILL", "WAIT_WRITE_MODE", "USE_ITEM", "WAIT_RENDER", "LOOK_AT_SIGN", "FINISHED"
     };
 
     // 1 つの手順にかけられる時間の上限 (tick)
@@ -130,13 +131,30 @@ final class SelfTest {
             case WAIT_RENDER:
                 // 画像の全体が見えるように正面を向く
                 if (ticksInStep == 1) platform.selfTestLook(0f);
-                if (MarumaSign.loadedRenderCount() > 0 && ticksInStep > 40) {
-                    finish(true, "Rendered " + MarumaSign.loadedRenderCount() + " times");
-                }
+                if (MarumaSign.loadedRenderCount() > 0 && ticksInStep > 40) next(LOOK_AT_SIGN);
+                break;
+
+            case LOOK_AT_SIGN:
+                // 看板そのものが消えていることを外部で確認できるように、看板の位置を見下ろす
+                if (ticksInStep == 1) platform.selfTestLook(50f);
+                if (ticksInStep == 30) writeFile("sign-view.txt", "ready\n");
+                // 最後に、画像の全体が写る向きに戻して終了する
+                if (ticksInStep == 80) platform.selfTestLook(0f);
+                if (ticksInStep == 110) finish(true, "Rendered " + MarumaSign.loadedRenderCount() + " times");
                 break;
 
             default:
                 break;
+        }
+    }
+
+    // 外部の確認用スクリプトに進み具合を知らせるファイルを書く
+    private void writeFile(String name, String content) {
+        try {
+            if (!directory.isDirectory() && !directory.mkdirs()) throw new IOException("Cannot create " + directory);
+            Files.write(new File(directory, name).toPath(), content.getBytes(StandardCharsets.UTF_8));
+        } catch (IOException e) {
+            MarumaSign.LOGGER.error("Failed to write " + name, e);
         }
     }
 
@@ -146,12 +164,7 @@ final class SelfTest {
                 + "minecraft=" + platform.minecraftVersion() + "\n"
                 + "loader=" + platform.loaderName() + "\n";
         MarumaSign.LOGGER.info("Self test result: " + (ok ? "OK" : "FAIL") + " - " + detail);
-        try {
-            if (!directory.isDirectory() && !directory.mkdirs()) throw new IOException("Cannot create " + directory);
-            Files.write(new File(directory, "result.txt").toPath(), result.getBytes(StandardCharsets.UTF_8));
-        } catch (IOException e) {
-            MarumaSign.LOGGER.error("Failed to write the self test result", e);
-        }
+        writeFile("result.txt", result);
         // 結果を書いてから、外部で画面を記録できるように少し待って終了する
         quitCountdown = 100;
     }

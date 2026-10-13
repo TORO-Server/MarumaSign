@@ -68,6 +68,7 @@ public final class MarumaSign {
     public static void tick() {
         if (platform == null) return;
         if (platform.isInWorld()) loader.pump(config.getMaxThreads());
+        signs.tick();
         ui.tick();
         if (selfTest != null) selfTest.tick();
     }

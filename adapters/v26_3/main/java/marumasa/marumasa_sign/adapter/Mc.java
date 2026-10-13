@@ -1,6 +1,7 @@
 package marumasa.marumasa_sign.adapter;
 
 import com.mojang.blaze3d.platform.InputConstants;
+import com.mojang.blaze3d.platform.Window;
 import marumasa.marumasa_sign.core.util.Reflect;
 import net.minecraft.SharedConstants;
 import net.minecraft.client.KeyMapping;
@@ -31,6 +32,10 @@ final class Mc {
 
     static String version() {
         return SharedConstants.getCurrentVersion().name();
+    }
+
+    static Window window(Minecraft mc) {
+        return mc.getWindow();
     }
 
     static Screen screen(Minecraft mc) {

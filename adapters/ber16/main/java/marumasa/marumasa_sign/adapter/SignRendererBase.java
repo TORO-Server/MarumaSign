@@ -13,6 +13,7 @@ import net.minecraft.world.level.block.WallSignBlock;
 import net.minecraft.world.level.block.entity.BlockEntityType;
 import net.minecraft.world.level.block.entity.SignBlockEntity;
 import net.minecraft.world.level.block.state.BlockState;
+import net.minecraft.world.phys.Vec3;
 
 import java.lang.reflect.Field;
 import java.util.HashMap;
@@ -74,8 +75,17 @@ final class SignRendererBase extends BlockEntityRenderer<SignBlockEntity> {
             return;
         }
 
-        Mc.quads(buffers.getBuffer(((Tex) image.texture()).renderType), poseStack, image.mesh(yaw, wall), light);
+        Mc.quads(buffers.getBuffer(((Tex) image.texture(distance(sign))).renderType), poseStack, image.mesh(yaw, wall), light);
         MarumaSign.drawn(image);
+    }
+
+    // カメラから看板までの距離 (ブロック)
+    private double distance(SignBlockEntity sign) {
+        final Vec3 camera = mc.gameRenderer.getMainCamera().getPosition();
+        final double x = sign.getBlockPos().getX() + 0.5 - camera.x;
+        final double y = sign.getBlockPos().getY() + 0.5 - camera.y;
+        final double z = sign.getBlockPos().getZ() + 0.5 - camera.z;
+        return Math.sqrt(x * x + y * y + z * z);
     }
 
     @Override

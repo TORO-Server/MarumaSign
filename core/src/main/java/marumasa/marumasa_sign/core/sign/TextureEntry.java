@@ -2,6 +2,7 @@ package marumasa.marumasa_sign.core.sign;
 
 /**
  * URL ごとの画像テクスチャ。読み込み中・失敗の場合は代わりの画像を指す。
+ * 動画や音声の場合は、再生中のフレームを映すテクスチャを指す。
  */
 public final class TextureEntry {
 
@@ -20,20 +21,33 @@ public final class TextureEntry {
     private long loadedAt;
     // 状態が変わるたびに増える。SignImage が頂点を作り直すために使う
     private volatile int revision;
+    // 動画や音声の再生。画像なら null
+    private MediaSession media;
+    // frames のテクスチャをこのエントリが所有しているかどうか (共用の画像を指しているだけなら false)
+    private boolean ownsTextures;
 
     TextureEntry(int state, int width, int height, Object texture) {
-        set(state, width, height, new Object[]{texture}, new int[]{1}, 0);
+        set(state, width, height, new Object[]{texture}, new int[]{1}, 0, false);
     }
 
-    void set(int state, int width, int height, Object[] frames, int[] frameEnd, int repetitions) {
+    void set(int state, int width, int height, Object[] frames, int[] frameEnd, int repetitions, boolean ownsTextures) {
         this.width = width;
         this.height = height;
         this.frames = frames;
         this.frameEnd = frameEnd;
         this.repetitions = repetitions;
+        this.ownsTextures = ownsTextures;
         this.loadedAt = System.currentTimeMillis();
         this.state = state;
         this.revision++;
+    }
+
+    void setMedia(MediaSession media) {
+        this.media = media;
+    }
+
+    MediaSession media() {
+        return media;
     }
 
     public int state() {
@@ -52,12 +66,19 @@ public final class TextureEntry {
         return revision;
     }
 
-    Object[] frames() {
-        return frames;
+    // このエントリが所有していて、破棄するときに解放するべきテクスチャ
+    Object[] ownedTextures() {
+        return ownsTextures ? frames : new Object[0];
     }
 
-    // 現在表示するべきフレームのテクスチャ
-    public Object current() {
+    /**
+     * 現在表示するべきテクスチャ。描画のたびに呼ぶ。
+     *
+     * @param distance カメラから看板までの距離 (ブロック)。音量の計算に使う
+     */
+    public Object current(double distance) {
+        if (media != null) media.use(distance);
+
         final Object[] frames = this.frames;
         if (frames.length == 1) return frames[0];
 

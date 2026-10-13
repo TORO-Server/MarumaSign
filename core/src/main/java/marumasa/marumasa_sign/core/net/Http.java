@@ -1,6 +1,8 @@
 package marumasa.marumasa_sign.core.net;
 
 import java.io.ByteArrayOutputStream;
+import java.io.File;
+import java.io.FileInputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
@@ -18,6 +20,8 @@ public final class Http {
 
     // ダウンロード・アップロードするファイルの大きさの上限 (10MB)
     public static final int MAX_SIZE = 10 * 1024 * 1024;
+    // アップロードできるファイルの大きさの上限 (アップロード先の上限と同じ 200MB)
+    public static final long MAX_UPLOAD_SIZE = 200L * 1024 * 1024;
 
     private static final String USER_AGENT = "Mozilla/5.0 (MarumaSign)";
 
@@ -62,6 +66,18 @@ public final class Http {
         return connection;
     }
 
+    // 先頭の最大 count バイトを読む
+    private static byte[] readHead(InputStream input, int count) throws IOException {
+        final byte[] buffer = new byte[count];
+        int filled = 0;
+        while (filled < count) {
+            final int read = input.read(buffer, filled, count - filled);
+            if (read < 0) break;
+            filled += read;
+        }
+        return filled == count ? buffer : java.util.Arrays.copyOf(buffer, filled);
+    }
+
     private static byte[] readLimited(InputStream input, int limit) throws IOException {
         final ByteArrayOutputStream output = new ByteArrayOutputStream();
         final byte[] buffer = new byte[8192];
@@ -75,7 +91,20 @@ public final class Http {
         return output.toByteArray();
     }
 
+    // ダウンロードの途中で、先頭のバイト列を見て続けるかどうかを決める
+    public interface HeadCheck {
+        boolean accept(byte[] head, int length);
+    }
+
     public static byte[] download(String url) throws IOException {
+        return download(url, null);
+    }
+
+    /**
+     * URL の内容をダウンロードする。
+     * check が先頭のバイト列を受け付けなかった場合は、残りを読まずに null を返す。
+     */
+    public static byte[] download(String url, HeadCheck check) throws IOException {
         final HttpURLConnection connection = open(url);
         try {
             connection.setRequestMethod("GET");
@@ -84,12 +113,22 @@ public final class Http {
 
             final int status = connection.getResponseCode();
             if (status / 100 != 2) throw new IOException("HTTP " + status);
-            if (connection.getContentLength() > MAX_SIZE) {
-                throw new IOException("Content size exceeds the limit of " + MAX_SIZE + " bytes.");
-            }
             final InputStream input = connection.getInputStream();
             try {
-                return readLimited(input, MAX_SIZE);
+                byte[] head = new byte[0];
+                if (check != null) {
+                    head = readHead(input, 16);
+                    if (!check.accept(head, head.length)) return null;
+                }
+                if (connection.getContentLength() > MAX_SIZE) {
+                    throw new IOException("Content size exceeds the limit of " + MAX_SIZE + " bytes.");
+                }
+                final byte[] rest = readLimited(input, MAX_SIZE - head.length);
+                if (head.length == 0) return rest;
+                final byte[] all = new byte[head.length + rest.length];
+                System.arraycopy(head, 0, all, 0, head.length);
+                System.arraycopy(rest, 0, all, head.length, rest.length);
+                return all;
             } finally {
                 input.close();
             }
@@ -112,34 +151,43 @@ public final class Http {
         return body;
     }
 
-    // 画像をアップロードして、その URL を返す
-    public static String upload(byte[] fileBytes, String filename) throws IOException {
-        if (fileBytes.length > MAX_SIZE) throw new IOException("File size exceeds the limit of " + MAX_SIZE + " bytes.");
-        final String safeName = (filename == null ? "file.png" : filename)
-                .replace("\"", "").replace("\r", "").replace("\n", "");
+    // ファイルをアップロードして、その URL を返す。大きなファイルでもメモリに載せずに送る
+    public static String upload(File file) throws IOException {
+        final long size = file.length();
+        if (size > MAX_UPLOAD_SIZE) throw new IOException("File size exceeds the limit of " + MAX_UPLOAD_SIZE + " bytes.");
+        final String safeName = file.getName().replace("\"", "").replace("\r", "").replace("\n", "");
         final String boundary = "----MarumaSign" + Long.toHexString(System.nanoTime());
         final String crlf = "\r\n";
 
-        final ByteArrayOutputStream body = new ByteArrayOutputStream(fileBytes.length + 512);
-        body.write(("--" + boundary + crlf
+        final byte[] head = ("--" + boundary + crlf
                 + "Content-Disposition: form-data; name=\"reqtype\"" + crlf + crlf
                 + "fileupload" + crlf
                 + "--" + boundary + crlf
                 + "Content-Disposition: form-data; name=\"fileToUpload\"; filename=\"" + safeName + "\"" + crlf
-                + "Content-Type: application/octet-stream" + crlf + crlf).getBytes(StandardCharsets.UTF_8));
-        body.write(fileBytes);
-        body.write((crlf + "--" + boundary + "--" + crlf).getBytes(StandardCharsets.UTF_8));
+                + "Content-Type: application/octet-stream" + crlf + crlf).getBytes(StandardCharsets.UTF_8);
+        final byte[] tail = (crlf + "--" + boundary + "--" + crlf).getBytes(StandardCharsets.UTF_8);
 
         final HttpURLConnection connection = open(uploadEndpoint());
         try {
-            connection.setReadTimeout(60000);
+            connection.setReadTimeout(120000);
             connection.setDoOutput(true);
             connection.setRequestMethod("POST");
             connection.setRequestProperty("Content-Type", "multipart/form-data; boundary=" + boundary);
-            connection.setFixedLengthStreamingMode(body.size());
+            connection.setFixedLengthStreamingMode(head.length + size + tail.length);
             final OutputStream output = connection.getOutputStream();
             try {
-                body.writeTo(output);
+                output.write(head);
+                final InputStream input = new FileInputStream(file);
+                try {
+                    final byte[] buffer = new byte[65536];
+                    int read;
+                    while ((read = input.read(buffer)) >= 0) {
+                        output.write(buffer, 0, read);
+                    }
+                } finally {
+                    input.close();
+                }
+                output.write(tail);
             } finally {
                 output.close();
             }

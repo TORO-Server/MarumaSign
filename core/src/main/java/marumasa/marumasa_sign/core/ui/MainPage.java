@@ -5,12 +5,15 @@ import marumasa.marumasa_sign.core.Lang;
 import marumasa.marumasa_sign.core.MarumaSign;
 import marumasa.marumasa_sign.core.image.DecodedImage;
 import marumasa.marumasa_sign.core.image.ImageLoader;
+import marumasa.marumasa_sign.core.media.MediaTools;
 import marumasa.marumasa_sign.core.net.Http;
 import marumasa.marumasa_sign.core.sign.SignSpec;
 
 import java.awt.image.BufferedImage;
 import java.io.File;
+import java.io.FileInputStream;
 import java.io.IOException;
+import java.io.InputStream;
 import java.nio.file.Files;
 import java.util.HashMap;
 import java.util.List;
@@ -30,6 +33,7 @@ public final class MainPage extends Page {
     private final NumberField posX, posY, posZ;
     private final NumberField rotX, rotY, rotZ;
     private final NumberField threads;
+    private final NumberField volume;
     private final Button clearCache;
     private final ImageView preview;
     private final Label previewInfo;
@@ -71,28 +75,32 @@ public final class MainPage extends Page {
         rotZ = numberRow("Z", 254, 190, 18, 76, 0f, 5f);
 
         final Config config = MarumaSign.config();
-        add(new GroupBox(Lang.get("ui.group.settings")).bounds(12, 226, 344, 52));
+        add(new GroupBox(Lang.get("ui.group.settings")).bounds(12, 226, 344, 80));
         add(new Label(Lang.get("ui.threads")).bounds(22, 246, 136, 21));
         threads = add(new NumberField(config.getMaxThreads(), Config.MIN_THREADS, Config.MAX_THREADS, 1f, true));
         threads.bounds(160, 246, 48, 21);
         threads.onChange(() -> config.setMaxThreads(Math.round(threads.getValue())));
         clearCache = add(new Button(Lang.get("ui.clear_cache"), this::clearCache));
         clearCache.bounds(216, 245, 132, 23);
+        add(new Label(Lang.get("ui.volume")).bounds(22, 274, 136, 21));
+        volume = add(new NumberField(config.getVolume(), 0, 100, 5f, true));
+        volume.bounds(160, 274, 48, 21);
+        volume.onChange(() -> config.setVolume(Math.round(volume.getValue())));
 
-        add(new GroupBox(Lang.get("ui.group.preview")).bounds(364, 34, 172, 244));
+        add(new GroupBox(Lang.get("ui.group.preview")).bounds(364, 34, 172, 272));
         preview = add(new ImageView());
-        preview.bounds(372, 52, 156, 200);
+        preview.bounds(372, 52, 156, 228);
         preview.setPlaceholder(Lang.get("ui.preview.none"));
         previewInfo = add(new Label(""));
-        previewInfo.bounds(372, 256, 156, 14);
+        previewInfo.bounds(372, 284, 156, 14);
 
         status = add(new Label(Lang.get("ui.status.ready")));
-        status.bounds(12, 290, 524, 16);
+        status.bounds(12, 318, 524, 16);
 
         place = add(new Button(Lang.get("ui.place"), this::place));
-        place.bounds(318, 316, 128, 24);
+        place.bounds(318, 344, 128, 24);
         final Button cancel = add(new Button(Lang.get("ui.cancel"), root::close));
-        cancel.bounds(452, 316, 84, 24);
+        cancel.bounds(452, 344, 84, 24);
 
         defaultButton = place;
         cancelButton = cancel;
@@ -180,9 +188,26 @@ public final class MainPage extends Page {
         loadPreview();
     }
 
-    private static byte[] readFile(File file) throws IOException {
+    private static final Http.HeadCheck IMAGE_ONLY = new Http.HeadCheck() {
+        @Override
+        public boolean accept(byte[] head, int length) {
+            return ImageLoader.isSupportedImage(head, length);
+        }
+    };
+
+    // 画像ファイルなら内容を返す。画像でなければ null
+    private static byte[] readImageFile(File file) throws IOException {
         if (!file.isFile()) throw new IOException(Lang.get("ui.status.file_not_found", file.getPath()));
-        if (file.length() > Http.MAX_SIZE) throw new IOException(Lang.get("ui.status.file_too_large"));
+        final byte[] head = new byte[16];
+        final int length;
+        final InputStream input = new FileInputStream(file);
+        try {
+            length = Math.max(0, input.read(head));
+        } finally {
+            input.close();
+        }
+        if (!ImageLoader.isSupportedImage(head, length)) return null;
+        if (file.length() > Http.MAX_SIZE) throw new IOException(Lang.get("ui.status.file_too_large", 10));
         return Files.readAllBytes(file.toPath());
     }
 
@@ -209,10 +234,15 @@ public final class MainPage extends Page {
             BufferedImage image = null;
             String info = "";
             try {
-                final byte[] bytes = Http.isHttpUrl(text) ? Http.download(text) : readFile(new File(text));
-                final DecodedImage decoded = ImageLoader.decode(bytes);
-                image = toBufferedImage(decoded);
-                info = decoded.width + " x " + decoded.height;
+                final byte[] bytes = Http.isHttpUrl(text) ? Http.download(text, IMAGE_ONLY) : readImageFile(new File(text));
+                if (bytes != null) {
+                    final DecodedImage decoded = ImageLoader.decode(bytes);
+                    image = toBufferedImage(decoded);
+                } else {
+                    // 画像でなければ、動画などから 1 枚取り出す
+                    image = MediaTools.thumbnail(text);
+                }
+                if (image != null) info = image.getWidth() + " x " + image.getHeight();
             } catch (Exception e) {
                 // プレビューを表示できないだけなので、理由は画面に出すだけにする
             }
@@ -299,11 +329,17 @@ public final class MainPage extends Page {
     }
 
     private String upload(File file) throws IOException {
-        final byte[] bytes = readFile(file);
-        try {
-            ImageLoader.decode(bytes);
-        } catch (IOException e) {
-            throw new IOException(Lang.get("ui.status.not_image"));
+        final byte[] bytes = readImageFile(file);
+        if (bytes != null) {
+            try {
+                ImageLoader.decode(bytes);
+            } catch (IOException e) {
+                throw new IOException(Lang.get("ui.status.not_image"));
+            }
+        } else {
+            // 画像でなければ、動画や音声として再生できるかを確かめる
+            if (file.length() > Http.MAX_UPLOAD_SIZE) throw new IOException(Lang.get("ui.status.file_too_large", 200));
+            if (!MediaTools.isPlayable(file)) throw new IOException(Lang.get("ui.status.not_image"));
         }
 
         final String key = file.getAbsolutePath() + '|' + file.length() + '|' + file.lastModified();
@@ -315,7 +351,7 @@ public final class MainPage extends Page {
         progress(Lang.get("ui.status.uploading"));
         final String url;
         try {
-            url = Http.upload(bytes, file.getName());
+            url = Http.upload(file);
         } catch (IOException e) {
             throw new IOException(Lang.get("ui.status.upload_failed", String.valueOf(e.getMessage())));
         }

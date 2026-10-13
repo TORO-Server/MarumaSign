@@ -5,6 +5,7 @@ import marumasa.marumasa_sign.core.anim.AnimationFrame;
 import marumasa.marumasa_sign.core.anim.ApngDecoder;
 import marumasa.marumasa_sign.core.anim.DecodedAnimation;
 import marumasa.marumasa_sign.core.anim.GifDecoder;
+import marumasa.marumasa_sign.core.media.Ffmpeg;
 import marumasa.marumasa_sign.core.net.Http;
 
 import javax.imageio.ImageIO;
@@ -28,6 +29,9 @@ public final class ImageLoader {
 
     public interface Callback {
         void onLoaded(DecodedImage image);
+
+        // 画像ではなかったとき。動画や音声として再生できるかもしれない
+        void onMedia();
 
         void onFailed();
     }
@@ -91,8 +95,20 @@ public final class ImageLoader {
         final String url = request.url;
         MarumaSign.LOGGER.info("Start: " + url);
         try {
-            final DecodedImage image = decode(Http.download(url));
-            request.callback.onLoaded(image);
+            // 先頭だけを読んで、画像でなければ残りは読まない
+            final byte[] content = Http.download(url, new Http.HeadCheck() {
+                @Override
+                public boolean accept(byte[] head, int length) {
+                    return isSupportedImage(head, length);
+                }
+            });
+            if (content == null) {
+                // FFmpeg を探すのには時間がかかることがあるので、メインスレッドに渡す前にここで済ませておく
+                Ffmpeg.isAvailable();
+                request.callback.onMedia();
+                return;
+            }
+            request.callback.onLoaded(decode(content));
         } catch (Exception e) {
             MarumaSign.LOGGER.info("Failure: " + url + " (" + e + ")");
             request.callback.onFailed();
@@ -171,6 +187,14 @@ public final class ImageLoader {
             // 読めなかった場合は 1 ピクセルのマゼンタで代用する
             return new DecodedImage(1, 1, new int[][]{{0xFFFF00FF}}, new int[]{1}, 0);
         }
+    }
+
+    // このクラスで読める形式 (PNG, GIF, JPEG, BMP) かどうかを、先頭のバイト列から判定する
+    public static boolean isSupportedImage(byte[] head, int length) {
+        if (length >= 8 && (head[0] & 0xFF) == 0x89 && head[1] == 'P' && head[2] == 'N' && head[3] == 'G') return true;
+        if (length >= 6 && head[0] == 'G' && head[1] == 'I' && head[2] == 'F' && head[3] == '8') return true;
+        if (length >= 3 && (head[0] & 0xFF) == 0xFF && (head[1] & 0xFF) == 0xD8 && (head[2] & 0xFF) == 0xFF) return true;
+        return length >= 2 && head[0] == 'B' && head[1] == 'M';
     }
 
     public static boolean isGif(byte[] bytes) {

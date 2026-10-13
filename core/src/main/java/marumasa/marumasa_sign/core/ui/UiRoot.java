@@ -21,7 +21,7 @@ public final class UiRoot {
 
     // ウィンドウの大きさ (拡大前)
     public static final int WIDTH = 548;
-    public static final int HEIGHT = 352;
+    public static final int HEIGHT = 380;
 
     private static final int MAX_SCALE = 4;
     // キャレットの点滅間隔 (tick)

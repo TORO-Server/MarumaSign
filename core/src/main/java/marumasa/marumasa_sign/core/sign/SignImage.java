@@ -34,9 +34,18 @@ public final class SignImage {
         return texture;
     }
 
-    // 現在表示するべきテクスチャ
+    // 現在表示するべきテクスチャ。描画のたびに呼ぶ
     public Object texture() {
-        return texture.current();
+        return texture.current(0);
+    }
+
+    /**
+     * 現在表示するべきテクスチャ。描画のたびに呼ぶ。
+     *
+     * @param distance カメラから看板までの距離 (ブロック)。動画や音声の音量に使う
+     */
+    public Object texture(double distance) {
+        return texture.current(distance);
     }
 
     // 読み込みが完了した画像を表示しているかどうか

@@ -542,6 +542,29 @@ def analyze_screenshot(path):
     return judge_colours(sums, width, height)
 
 
+def analyze_sign_view(path):
+    """看板の位置を見下ろした画面に、看板の板が写っていないかを調べる。"""
+    from PIL import Image
+
+    image = Image.open(path).convert("RGB")
+    image.thumbnail((640, 640))
+    width, height = image.size
+    pixels = image.load()
+    # 看板は画面の中央付近に来る。右下に写る手持ちの看板は範囲に入れない
+    wood = total = 0
+    for y in range(int(height * 0.15), int(height * 0.70)):
+        for x in range(int(width * 0.30), int(width * 0.70)):
+            r, g, b = pixels[x, y]
+            total += 1
+            # 木の板の色 (赤 > 緑 > 青 で、くすんだ茶色)
+            if 90 < r < 225 and 12 <= r - g <= 65 and 25 <= g - b <= 95:
+                wood += 1
+    ratio = wood / max(1, total)
+    if ratio > 0.012:
+        return False, f"sign board seems visible ({ratio:.1%} of the centre is wood-coloured)"
+    return True, "sign hidden"
+
+
 def classify(r, g, b):
     """ピクセルがテスト画像のどの色かを、明るさに左右されないよう色の比率で判定する。"""
     if r > 80 and r > 2.5 * g and r > 2.5 * b:
@@ -694,6 +717,7 @@ def run(args):
         deadline = time.time() + args.timeout
         joined_handled = False
         joined_at = 0.0
+        sign_captured = False
         captured = False
         while time.time() < deadline:
             if client.poll() is not None:
@@ -709,6 +733,10 @@ def run(args):
                 if not args.baseline and grab_screen(work_dir / "screenshot.png"):
                     result["screenshot"] = str(work_dir / "screenshot.png")
                     result["image_visible"], result["image_detail"] = analyze_screenshot(work_dir / "screenshot.png")
+            if not args.baseline and not sign_captured and (result_dir / "sign-view.txt").is_file():
+                sign_captured = True
+                if grab_screen(work_dir / "screenshot-sign.png"):
+                    result["sign_hidden"], result["sign_detail"] = analyze_sign_view(work_dir / "screenshot-sign.png")
             if args.baseline and joined_handled and time.time() - joined_at > 25:
                 # 基準の取得では、ワールドに入ってしばらくしたら終了する
                 result["detail"] = "baseline"
@@ -772,7 +800,7 @@ def run(args):
         result["baseline"] = True
         result["new_client_findings"] = [line for line in client_findings if is_new(line, baseline["client"])]
         result["new_server_findings"] = [line for line in server_findings if is_new(line, baseline["server"])]
-        result["clean"] = (result["ok"] and bool(result.get("image_visible"))
+        result["clean"] = (result["ok"] and bool(result.get("image_visible")) and bool(result.get("sign_hidden"))
                            and not result["new_client_findings"] and not result["new_server_findings"])
     else:
         result["baseline"] = False
