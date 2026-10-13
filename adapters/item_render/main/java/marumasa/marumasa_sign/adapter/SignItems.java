@@ -35,6 +35,10 @@ final class SignItems {
         // 1. mc.renderItem を差し替える (GUI などの共通経路)
         replaceField(mc, current, custom);
 
+        // 手持ちの枠 (ホットバー) と、開いている画面
+        replaceField(mc.ingameGUI, current, custom);
+        replaceField(mc.currentScreen, current, custom);
+
         // 2. ItemRenderer.itemRenderer を差し替える (手持ちアイテムの描画)
         final ItemRenderer itemRenderer = mc.getItemRenderer();
         if (itemRenderer != null) {
