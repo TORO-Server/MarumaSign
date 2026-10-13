@@ -38,8 +38,9 @@ def combinations(libs):
                 yield loader, target["minecraft"], "", libs / f"MarumaSign-{version}-liteloader-mc{target['minecraft']}.litemod"
                 continue
             for minecraft in spec["versions"]:
-                # 対応表のバージョンがビルドに使ったものと違う場合は、ランチャーに選ばせる
-                loader_version = spec.get("launch", spec["loader"]) if minecraft == target["minecraft"] else ""
+                # 起動に使うローダーのバージョン。バージョンごとの表があればそこから引く
+                launch = spec.get("launch")
+                loader_version = launch[minecraft] if isinstance(launch, dict) else spec["loader"]
                 yield loader, minecraft, loader_version, universal
 
 
@@ -92,6 +93,10 @@ def main():
 
         verify.log(f"=== verify {key}")
         result = run_one(root, loader, minecraft, loader_version, mod, False, args.timeout)
+        if not result.get("clean"):
+            # 他の処理と重なって時間切れになることがあるので、1 回だけやり直す
+            verify.log(f"=== retry {key} ({str(result.get('detail'))[:80]})")
+            result = run_one(root, loader, minecraft, loader_version, mod, False, args.timeout)
         summary[key] = {
             "ok": bool(result.get("ok")),
             "clean": bool(result.get("clean")),

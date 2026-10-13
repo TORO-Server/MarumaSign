@@ -9,7 +9,7 @@ final class UiScreen extends UiScreenBase {
 
     @Override
     public void render(GuiGraphics graphics, int mouseX, int mouseY, float partialTicks) {
-        final PlatformImpl.Texture texture = prepare();
+        final Tex texture = prepare();
         if (texture == null) return;
 
         final float unscale = unscale();

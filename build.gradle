@@ -4,7 +4,10 @@ plugins {
 
 def targetTable = new groovy.json.JsonSlurper().parse(file('targets.json'))
 // 各ビルド対象に、世代 (era) ごとの共通設定を合わせたもの
-ext.marumaTargets = targetTable.targets.collect { target ->
+def marumaOnly = (providers.gradleProperty('marumaOnly').orNull ?: '').tokenize(',')
+ext.marumaTargets = targetTable.targets.findAll {
+    marumaOnly.isEmpty() || it.name in marumaOnly
+}.collect { target ->
     def era = targetTable.eras[target.era]
     if (era == null) throw new GradleException("Unknown era '${target.era}' in targets.json")
     era + target

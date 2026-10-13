@@ -193,6 +193,9 @@ class Server:
             "server-ip=127.0.0.1",
             "online-mode=false",
             "enforce-secure-profile=false",
+            # 新しいバージョンでは、既定でホワイトリストが有効になっている
+            "white-list=false",
+            "enforce-whitelist=false",
             "level-type=flat" if version_key(self.minecraft) >= (1, 13, 0) else "level-type=FLAT",
             "generate-structures=false",
             "spawn-protection=0",
@@ -596,6 +599,8 @@ def normalize(line):
     line = re.sub(r"^\[[^\]]*\d\d:\d\d:\d\d[^\]]*\]\s*", "", line)
     # 基準の取得と本番では作業フォルダの名前が違う
     line = line.replace("-baseline\\", "\\").replace("-baseline/", "/")
+    # オブジェクトのハッシュ値 (ModConfig@110dc235 など) は実行のたびに変わる
+    line = re.sub(r"@[0-9a-fA-F]{4,16}\b", "@H", line)
     return re.sub(r"\d+", "N", line)
 
 
@@ -757,6 +762,8 @@ def run(args):
         result["baseline_server_count"] = len(server_findings)
     elif baseline_file.is_file():
         baseline = json.loads(baseline_file.read_text(encoding="utf-8"))
+        # 保存後に正規化の規則が増えていても比較できるように、もう一度正規化する
+        baseline = {side: {normalize(line) for line in lines} for side, lines in baseline.items()}
         noise = load_known_noise()
 
         def is_new(line, known):

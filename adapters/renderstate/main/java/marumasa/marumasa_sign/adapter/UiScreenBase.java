@@ -8,7 +8,6 @@ import net.minecraft.client.gui.screens.Screen;
 import net.minecraft.client.input.CharacterEvent;
 import net.minecraft.client.input.KeyEvent;
 import net.minecraft.client.input.MouseButtonEvent;
-import net.minecraft.network.chat.Component;
 
 import java.io.File;
 import java.nio.file.Path;
@@ -24,7 +23,7 @@ abstract class UiScreenBase extends Screen {
     protected final UiRoot ui = MarumaSign.ui();
 
     protected UiScreenBase() {
-        super(Component.literal("MarumaSign"));
+        super(Mc.text("MarumaSign"));
         ui.opened();
     }
 
@@ -45,11 +44,11 @@ abstract class UiScreenBase extends Screen {
     }
 
     // 描画の直前に呼ぶ。画面に貼るテクスチャを返す (なければ null)
-    protected final PlatformImpl.Texture prepare() {
+    protected final Tex prepare() {
         final Window window = minecraft.getWindow();
         ui.layout(window.getWidth(), window.getHeight());
         ui.mouseMoved(mouseX(), mouseY());
-        return (PlatformImpl.Texture) ui.texture();
+        return (Tex) ui.texture();
     }
 
     // GUI の拡大率を打ち消して、ピクセル単位で描くための倍率

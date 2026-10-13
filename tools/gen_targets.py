@@ -31,20 +31,67 @@ ERAS = {
     "v1_10": {"sources": legacy_sources("v1_10")},
     "v1_11": {"sources": legacy_sources("v1_11")},
     "v1_12": {"sources": legacy_sources("v1_12")},
-    "v1_21_9": {"sources": modern_sources("renderstate", "v1_21_9")},
-    "v26_1": {"sources": modern_sources("renderstate", "v26", "v26_1")},
-    "v26_2": {"sources": modern_sources("renderstate", "v26", "v26_2")},
-    "v26_3": {"sources": modern_sources("renderstate", "v26", "v26_3")},
+    "v1_15": {"sources": modern_sources("modern", "classic", "ber16", "tex_1", "v1_15")},
+    "v1_16": {"sources": modern_sources("modern", "classic", "ber16", "tex_1", "v1_16")},
+    "v1_16_2": {"sources": modern_sources("modern", "classic", "ber16", "tex_1", "v1_16_2")},
+    "v1_17": {"sources": modern_sources("modern", "classic", "classic_ber", "tex_1", "v1_17")},
+    "v1_19": {"sources": modern_sources("modern", "classic", "classic_ber", "tex_1", "v1_19")},
+    "v1_19_3": {"sources": modern_sources("modern", "classic", "classic_ber", "tex_1", "v1_19_3")},
+    "v1_20": {"sources": modern_sources("modern", "classic", "classic_ber", "tex_1", "v1_20")},
+    "v1_21": {"sources": modern_sources("modern", "classic", "classic_ber", "tex_2", "v1_21")},
+    "v1_21_2": {"sources": modern_sources("modern", "classic", "classic_ber", "tex_3", "v1_21_2")},
+    "v1_21_5": {"sources": modern_sources("modern", "classic", "classic_ber", "tex_4", "v1_21_5")},
+    "v1_21_6": {"sources": modern_sources("modern", "classic", "classic_ber", "tex_4", "v1_21_6")},
+    "v1_21_9": {"sources": modern_sources("modern", "renderstate", "tex_4", "v1_21_9")},
+    "v1_21_11": {"sources": modern_sources("modern", "renderstate", "tex_5", "v1_21_9")},
+    "v26_1": {"sources": modern_sources("modern", "renderstate", "tex_5", "v26", "v26_1")},
+    "v26_2": {"sources": modern_sources("modern", "renderstate", "tex_5", "v26", "v26_2")},
+    "v26_3": {"sources": modern_sources("modern", "renderstate", "tex_5", "v26", "v26_3")},
 }
 
-# (Minecraft, 世代, マッピング, Fabric Loader, Forge, NeoForge)
+# Minecraft 1.14 以降。1 つのビルドが、API の同じ複数のバージョンを受け持つ。
+# (ビルドに使う Minecraft, 世代, マッピング, {受け持つバージョン: (Forge, NeoForge)})
+# Forge / NeoForge が None のバージョンは、そのローダーが存在しないか、まだ対応していない。
+FABRIC_LOADER = "0.19.5"
 MODERN = [
-    ("1.21.11", "v1_21_9", "mojmap", "0.19.5", "61.2.3", "21.11.45"),
-    ("26.1", "v26_1", "none", "0.19.5", "62.0.9", "26.1.0.19-beta"),
-    ("26.1.1", "v26_1", "none", "0.19.5", "63.0.2", "26.1.1.15-beta"),
-    ("26.1.2", "v26_1", "none", "0.19.5", "64.1.4", "26.1.2.116"),
-    ("26.2", "v26_2", "none", "0.19.5", "65.1.4", "26.2.0.90"),
-    ("26.3", "v26_3", "none", "0.19.5", "66.0.11", "26.3.0.76"),
+    ("1.20.1", "v1_20", "mojmap", {
+        "1.20": ("46.0.14", None),
+        "1.20.1": ("47.4.26", None),
+    }),
+    ("1.20.4", "v1_20", "mojmap", {
+        "1.20.2": ("48.1.0", "20.2.93"),
+        "1.20.3": ("49.0.2", "20.3.8-beta"),
+        "1.20.4": ("49.2.11", "20.4.251"),
+    }),
+    ("1.20.6", "v1_20", "mojmap", {
+        "1.20.5": (None, "20.5.21-beta"),
+        "1.20.6": ("50.2.12", "20.6.141"),
+    }),
+    ("1.21.1", "v1_21", "mojmap", {
+        "1.21": ("51.0.33", "21.0.167"),
+        "1.21.1": ("52.1.18", "21.1.259"),
+    }),
+    ("1.21.4", "v1_21_2", "mojmap", {
+        "1.21.2": (None, "21.2.1-beta"),
+        "1.21.3": ("53.1.14", "21.3.97"),
+        "1.21.4": ("54.1.20", "21.4.158"),
+    }),
+    ("1.21.5", "v1_21_5", "mojmap", {
+        "1.21.5": ("55.1.16", "21.5.98"),
+    }),
+    ("1.21.8", "v1_21_6", "mojmap", {
+        "1.21.6": ("56.0.9", "21.6.20-beta"),
+        "1.21.7": ("57.0.3", "21.7.25-beta"),
+        "1.21.8": ("58.1.24", "21.8.54"),
+    }),
+    ("1.21.11", "v1_21_11", "mojmap", {
+        "1.21.11": ("61.2.3", "21.11.45"),
+    }),
+    ("26.1", "v26_1", "none", {"26.1": ("62.0.9", "26.1.0.19-beta")}),
+    ("26.1.1", "v26_1", "none", {"26.1.1": ("63.0.2", "26.1.1.15-beta")}),
+    ("26.1.2", "v26_1", "none", {"26.1.2": ("64.1.4", "26.1.2.116")}),
+    ("26.2", "v26_2", "none", {"26.2": ("65.1.4", "26.2.0.90")}),
+    ("26.3", "v26_3", "none", {"26.3": ("66.0.11", "26.3.0.76")}),
 ]
 
 # (Minecraft, 世代, MCP のマッピング, Forge, LiteLoader)
@@ -81,15 +128,17 @@ def build():
             "name": target_name(minecraft), "era": era, "minecraft": minecraft,
             "mappings": f"mcp:stable:{mcp}", "loaders": loaders,
         })
-    for minecraft, era, mappings, fabric, forge, neoforge in MODERN:
-        loaders = {}
-        if fabric:
-            loaders["fabric"] = {"loader": fabric, "versions": [minecraft]}
+    for minecraft, era, mappings, served in MODERN:
+        versions = list(served)
+        loaders = {"fabric": {"loader": FABRIC_LOADER, "versions": versions}}
+        forge = {version: pair[0] for version, pair in served.items() if pair[0]}
         if forge:
-            loaders["forge"] = {"loader": forge, "versions": [minecraft]}
+            loaders["forge"] = {"loader": forge[minecraft], "versions": list(forge), "launch": forge}
+        neoforge = {version: pair[1] for version, pair in served.items() if pair[1]}
         if neoforge:
             # ビルドツールにはビルド番号だけを、ランチャーには完全なバージョンを渡す
-            loaders["neoforge"] = {"loader": neoforge.rsplit(".", 1)[1], "launch": neoforge, "versions": [minecraft]}
+            loaders["neoforge"] = {"loader": neoforge[minecraft].rsplit(".", 1)[1], "versions": list(neoforge),
+                                   "launch": neoforge}
         targets.append({
             "name": target_name(minecraft), "era": era, "minecraft": minecraft,
             "mappings": mappings, "loaders": loaders,

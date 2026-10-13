@@ -1,6 +1,7 @@
 package marumasa.marumasa_sign.adapter;
 
 import marumasa.marumasa_sign.core.MarumaSign;
+import marumasa.marumasa_sign.core.util.OptionsFile;
 import marumasa.marumasa_sign.core.util.Reflect;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.inventory.GuiEditSign;
@@ -38,8 +39,16 @@ public final class Adapter {
         // キーバインド登録 (48 は B キー)
         openMenu = new KeyBinding("MarumaSign", 48, "key.categories.misc");
         mc.gameSettings.keyBindings = ArrayUtils.add(mc.gameSettings.keyBindings, openMenu);
-        // 保存されているキーの割り当てを読み直す
-        mc.gameSettings.loadOptions();
+        // 保存されているキーの割り当てを反映する
+        final String saved = OptionsFile.read(Mc.gameDirectory(), "key_MarumaSign");
+        if (saved != null) {
+            try {
+                openMenu.setKeyCode(Integer.parseInt(saved));
+            } catch (NumberFormatException e) {
+                // 読めない値なら既定のキーのままにする
+            }
+        }
+        KeyBinding.resetKeyBindingArrayAndHash();
         return true;
     }
 

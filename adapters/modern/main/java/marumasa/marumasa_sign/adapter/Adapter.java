@@ -1,19 +1,18 @@
 package marumasa.marumasa_sign.adapter;
 
+import com.mojang.blaze3d.platform.InputConstants;
 import marumasa.marumasa_sign.core.MarumaSign;
+import marumasa.marumasa_sign.core.util.OptionsFile;
 import marumasa.marumasa_sign.core.util.Reflect;
 import net.minecraft.client.KeyMapping;
 import net.minecraft.client.Minecraft;
-import net.minecraft.client.gui.screens.Screen;
-import net.minecraft.client.gui.screens.inventory.AbstractSignEditScreen;
 
-import java.lang.reflect.Field;
 import java.util.Timer;
 import java.util.TimerTask;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
- * Minecraft 1.21.9 以降向けの実装の入口。バージョンによって違う部分は Mc クラスにまとめてある。
+ * Minecraft 1.14 以降向けの実装の入口。バージョンによって違う部分は Mc クラスなどにまとめてある。
  * ローダーの API を使わずに済むよう、タイマーから定期的にメインスレッドへ処理を渡している。
  */
 public final class Adapter {
@@ -32,7 +31,6 @@ public final class Adapter {
     private static boolean active;
     private static boolean initialized;
     private static KeyMapping openMenu;
-    private static Field signMessages;
 
     private Adapter() {
     }
@@ -56,7 +54,7 @@ public final class Adapter {
         final Minecraft mc = Minecraft.getInstance();
         if (!initialized) {
             // 設定の読み込みが終わるまで待つ
-            if (mc.options == null || mc.getWindow() == null) return;
+            if (mc.options == null) return;
             initialized = true;
             if (MarumaSign.isInitialized()) return;
             MarumaSign.init(new PlatformImpl(loaderName));
@@ -73,9 +71,11 @@ public final class Adapter {
         }
 
         // 看板の編集画面が開かれたら、予約されている文字列を書き込んで閉じる
-        final Screen screen = Mc.screen(mc);
-        if (MarumaSign.hasPendingWrite() && screen instanceof AbstractSignEditScreen) {
-            writeSign(mc, (AbstractSignEditScreen) screen);
+        if (MarumaSign.hasPendingWrite() && Mc.isSignEdit(Mc.screen(mc))) {
+            final String[] lines = MarumaSign.takePendingWrite();
+            if (lines != null) Mc.fillSign(Mc.screen(mc), lines);
+            // 画面を閉じると、看板の内容がサーバーへ送信される
+            Mc.setScreen(mc, null);
         }
     }
 
@@ -87,19 +87,15 @@ public final class Adapter {
         System.arraycopy(current, 0, extended, 0, current.length);
         extended[current.length] = openMenu;
         Reflect.set(Reflect.fieldHolding(mc.options, current), mc.options, extended);
-        // 保存されているキーの割り当てを読み直す
-        mc.options.load();
-        KeyMapping.resetMapping();
-    }
-
-    private static void writeSign(Minecraft mc, AbstractSignEditScreen screen) {
-        if (signMessages == null) signMessages = Reflect.fieldOfType(AbstractSignEditScreen.class, String[].class);
-        final String[] messages = Reflect.get(signMessages, screen);
-        final String[] lines = MarumaSign.takePendingWrite();
-        if (messages != null && lines != null) {
-            System.arraycopy(lines, 0, messages, 0, 4);
+        // 保存されているキーの割り当てを反映する
+        final String saved = OptionsFile.read(mc.gameDirectory, "key_MarumaSign");
+        if (saved != null && !saved.isEmpty()) {
+            try {
+                openMenu.setKey(InputConstants.getKey(saved));
+            } catch (RuntimeException e) {
+                // 読めない値なら既定のキーのままにする
+            }
         }
-        // 画面を閉じると、看板の内容がサーバーへ送信される
-        Mc.setScreen(mc, null);
+        KeyMapping.resetMapping();
     }
 }
