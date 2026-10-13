@@ -115,7 +115,18 @@ final class Mc {
 
     // Forge は、カメラの向きが軸にぴったり沿っていると看板を描かないことがあるので、見た目に分からない程度だけずらす
     static void avoidExactAngles(Minecraft mc) {
-        if (mc.player.getXRot() == 0f) mc.player.setXRot(0.01f);
-        if (mc.player.getYRot() % 90f == 0f) mc.player.setYRot(mc.player.getYRot() + 0.01f);
+        mc.player.setXRot(awayFromAxis(mc.player.getXRot(), true));
+        mc.player.setYRot(awayFromAxis(mc.player.getYRot(), false));
+    }
+
+    // 90 度の倍数から 0.05 度以内なら、0.05 度だけ離す (画面では 1 ピクセルほどの違い)。
+    // これより小さいずれは、向きを行列にする計算の途中で丸められて消えることがある
+    private static float awayFromAxis(float degrees, boolean vertical) {
+        final float nearest = Math.round(degrees / 90f) * 90f;
+        final float offset = degrees - nearest;
+        if (Math.abs(offset) >= 0.05f) return degrees;
+        // 上下の向きは、真上と真下を超えないように内側へずらす
+        if (vertical && nearest != 0f) return nearest > 0f ? nearest - 0.05f : nearest + 0.05f;
+        return nearest + (offset < 0f ? -0.05f : 0.05f);
     }
 }
