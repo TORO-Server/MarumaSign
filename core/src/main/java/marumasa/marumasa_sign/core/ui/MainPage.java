@@ -3,6 +3,10 @@ package marumasa.marumasa_sign.core.ui;
 import marumasa.marumasa_sign.core.Config;
 import marumasa.marumasa_sign.core.Lang;
 import marumasa.marumasa_sign.core.MarumaSign;
+import marumasa.marumasa_sign.core.gltf.GltfLoader;
+import marumasa.marumasa_sign.core.gltf.GltfPacker;
+import marumasa.marumasa_sign.core.gltf.GltfPreview;
+import marumasa.marumasa_sign.core.gltf.GltfScene;
 import marumasa.marumasa_sign.core.image.DecodedImage;
 import marumasa.marumasa_sign.core.image.ImageLoader;
 import marumasa.marumasa_sign.core.media.MediaTools;
@@ -188,15 +192,11 @@ public final class MainPage extends Page {
         loadPreview();
     }
 
-    private static final Http.HeadCheck IMAGE_ONLY = new Http.HeadCheck() {
-        @Override
-        public boolean accept(byte[] head, int length) {
-            return ImageLoader.isSupportedImage(head, length);
-        }
-    };
+    // プレビューの画像の一辺の長さ (3D モデルの場合)
+    private static final int MODEL_PREVIEW_SIZE = 256;
 
-    // 画像ファイルなら内容を返す。画像でなければ null
-    private static byte[] readImageFile(File file) throws IOException {
+    // ファイルの先頭のバイト列を読む
+    private static byte[] readHead(File file) throws IOException {
         if (!file.isFile()) throw new IOException(Lang.get("ui.status.file_not_found", file.getPath()));
         final byte[] head = new byte[16];
         final int length;
@@ -206,9 +206,21 @@ public final class MainPage extends Page {
         } finally {
             input.close();
         }
-        if (!ImageLoader.isSupportedImage(head, length)) return null;
+        return java.util.Arrays.copyOf(head, length);
+    }
+
+    // 画像ファイルなら内容を返す。画像でなければ null
+    private static byte[] readImageFile(File file) throws IOException {
+        final byte[] head = readHead(file);
+        if (!ImageLoader.isSupportedImage(head, head.length)) return null;
         if (file.length() > Http.MAX_SIZE) throw new IOException(Lang.get("ui.status.file_too_large", 10));
         return Files.readAllBytes(file.toPath());
+    }
+
+    // 3D モデルのファイルかどうか
+    private static boolean isModelFile(File file) throws IOException {
+        final byte[] head = readHead(file);
+        return ImageLoader.isModel(head, head.length);
     }
 
     private static BufferedImage toBufferedImage(DecodedImage image) {
@@ -234,15 +246,36 @@ public final class MainPage extends Page {
             BufferedImage image = null;
             String info = "";
             try {
-                final byte[] bytes = Http.isHttpUrl(text) ? Http.download(text, IMAGE_ONLY) : readImageFile(new File(text));
-                if (bytes != null) {
-                    final DecodedImage decoded = ImageLoader.decode(bytes);
-                    image = toBufferedImage(decoded);
+                final boolean[] isImage = new boolean[1];
+                GltfScene model = null;
+                final byte[] bytes;
+                if (Http.isHttpUrl(text)) {
+                    bytes = Http.download(text, new Http.HeadCheck() {
+                        @Override
+                        public boolean accept(byte[] head, int length) {
+                            isImage[0] = ImageLoader.isSupportedImage(head, length);
+                            return isImage[0] || ImageLoader.isModel(head, length);
+                        }
+                    }, ImageLoader.MAX_MODEL_SIZE);
+                    if (bytes != null && !isImage[0]) model = ImageLoader.model(text, bytes);
                 } else {
-                    // 画像でなければ、動画などから 1 枚取り出す
-                    image = MediaTools.thumbnail(text);
+                    final File file = new File(text);
+                    bytes = readImageFile(file);
+                    if (bytes == null && isModelFile(file)) model = loadModelFile(file);
                 }
-                if (image != null) info = image.getWidth() + " x " + image.getHeight();
+                if (model != null) {
+                    image = GltfPreview.render(model, 0f, MODEL_PREVIEW_SIZE);
+                    info = Lang.get("ui.preview.model", model.model().triangleCount());
+                } else {
+                    if (bytes != null) {
+                        final DecodedImage decoded = ImageLoader.decode(bytes);
+                        image = toBufferedImage(decoded);
+                    } else {
+                        // 画像でなければ、動画などから 1 枚取り出す
+                        image = MediaTools.thumbnail(text);
+                    }
+                    if (image != null) info = image.getWidth() + " x " + image.getHeight();
+                }
             } catch (Exception e) {
                 // プレビューを表示できないだけなので、理由は画面に出すだけにする
             }
@@ -328,12 +361,40 @@ public final class MainPage extends Page {
         root.platform.execute(() -> setStatus(message, false));
     }
 
+    // 3D モデルのファイルを読み込む。JSON ではあるがモデルではないファイルなら null
+    private static GltfScene loadModelFile(File file) {
+        try {
+            return ImageLoader.model(file);
+        } catch (IOException e) {
+            MarumaSign.LOGGER.info("Could not load the model: " + e.getMessage());
+            return null;
+        }
+    }
+
     private String upload(File file) throws IOException {
         final byte[] bytes = readImageFile(file);
+        File packed = null;
         if (bytes != null) {
             try {
                 ImageLoader.decode(bytes);
             } catch (IOException e) {
+                throw new IOException(Lang.get("ui.status.not_image"));
+            }
+        } else if (isModelFile(file)) {
+            if (file.length() > ImageLoader.MAX_MODEL_SIZE) throw new IOException(Lang.get("ui.status.file_too_large", 64));
+            final byte[] content = Files.readAllBytes(file.toPath());
+            try {
+                // 表示できるモデルかどうかを確かめる
+                ImageLoader.model(file);
+                if (!GltfLoader.isGlb(content, content.length)) {
+                    // 外部ファイルを参照していても 1 つのファイルで済むように、.glb にまとめる
+                    final byte[] glb = GltfPacker.pack(content, ImageLoader.fileResources(file));
+                    packed = File.createTempFile("marumasign", ".glb");
+                    Files.write(packed.toPath(), glb);
+                }
+            } catch (IOException e) {
+                if (packed != null) packed.delete();
+                MarumaSign.LOGGER.info("Could not load the model: " + e.getMessage());
                 throw new IOException(Lang.get("ui.status.not_image"));
             }
         } else {
@@ -345,15 +406,20 @@ public final class MainPage extends Page {
         final String key = file.getAbsolutePath() + '|' + file.length() + '|' + file.lastModified();
         synchronized (uploaded) {
             final String cached = uploaded.get(key);
-            if (cached != null) return cached;
+            if (cached != null) {
+                if (packed != null) packed.delete();
+                return cached;
+            }
         }
 
         progress(Lang.get("ui.status.uploading"));
         final String url;
         try {
-            url = Http.upload(file);
+            url = Http.upload(packed != null ? packed : file);
         } catch (IOException e) {
             throw new IOException(Lang.get("ui.status.upload_failed", String.valueOf(e.getMessage())));
+        } finally {
+            if (packed != null) packed.delete();
         }
         synchronized (uploaded) {
             uploaded.put(key, url);

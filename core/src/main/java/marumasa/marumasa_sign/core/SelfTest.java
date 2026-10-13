@@ -1,5 +1,7 @@
 package marumasa.marumasa_sign.core;
 
+import marumasa.marumasa_sign.core.sign.SignImage;
+import marumasa.marumasa_sign.core.sign.SignSpec;
 import marumasa.marumasa_sign.core.ui.Key;
 import marumasa.marumasa_sign.core.ui.UiRoot;
 
@@ -11,7 +13,8 @@ import java.nio.file.Files;
 /**
  * 実機での動作確認を自動で行うための仕組み。
  * システムプロパティ marumasign.selftest に結果の出力先フォルダを指定したときだけ動く。
- * ワールドに入ったあと、画面を開いて画像を選び、看板を設置して画像が表示されるまでを確認する。
+ * ワールドに入ったあと、画面を開いてファイルを選び、看板を設置して表示されるまでを確認する。
+ * ファイルを複数指定した場合は、外部のスクリプトにプレイヤーを移動させてもらいながら、順に確認する。
  */
 final class SelfTest {
 
@@ -22,10 +25,12 @@ final class SelfTest {
     private static final int USE_ITEM = 4;
     private static final int WAIT_RENDER = 5;
     private static final int LOOK_AT_SIGN = 6;
-    private static final int FINISHED = 7;
+    private static final int WAIT_MOVE = 7;
+    private static final int FINISHED = 8;
 
     private static final String[] STEP_NAMES = {
-            "WAIT_WORLD", "OPEN_UI", "FILL", "WAIT_WRITE_MODE", "USE_ITEM", "WAIT_RENDER", "LOOK_AT_SIGN", "FINISHED"
+            "WAIT_WORLD", "OPEN_UI", "FILL", "WAIT_WRITE_MODE", "USE_ITEM", "WAIT_RENDER", "LOOK_AT_SIGN", "WAIT_MOVE",
+            "FINISHED"
     };
 
     // 1 つの手順にかけられる時間の上限 (tick)
@@ -33,7 +38,14 @@ final class SelfTest {
 
     private final Platform platform;
     private final File directory;
-    private final String image;
+    // 看板に表示して確かめるファイル
+    private final String[] images;
+    // 確認中のファイルの番号
+    private int index;
+    // 確認中の看板の URL と、それを描画した回数
+    private volatile String expectedUrl;
+    private volatile int drawnCount;
+    private final StringBuilder summary = new StringBuilder();
 
     private int step = WAIT_WORLD;
     private int ticksInStep;
@@ -41,18 +53,25 @@ final class SelfTest {
     private int useAttempts;
     private int quitCountdown = -1;
 
-    private SelfTest(Platform platform, File directory, String image) {
+    private SelfTest(Platform platform, File directory, String[] images) {
         this.platform = platform;
         this.directory = directory;
-        this.image = image;
+        this.images = images;
     }
 
     static SelfTest createIfRequested(Platform platform) {
         final String directory = System.getProperty("marumasign.selftest");
         if (directory == null || directory.isEmpty()) return null;
-        final String image = System.getProperty("marumasign.selftest.image", "");
+        // 複数のファイルは | で区切って指定する
+        final String images = System.getProperty("marumasign.selftest.image", "");
         MarumaSign.LOGGER.info("Self test enabled: " + directory);
-        return new SelfTest(platform, new File(directory), image);
+        return new SelfTest(platform, new File(directory), images.split("\\|"));
+    }
+
+    // 読み込みが完了した看板が描画されたとき
+    void onDrawn(SignImage image) {
+        final String url = expectedUrl;
+        if (url != null && url.equals(image.spec.url)) drawnCount++;
     }
 
     private void next(int nextStep) {
@@ -84,7 +103,10 @@ final class SelfTest {
             case WAIT_WORLD:
                 // ワールドに入ってから、サーバー側の準備 (アイテムの付与など) が済むまで待つ
                 worldTicks = platform.isInWorld() ? worldTicks + 1 : 0;
-                if (worldTicks > 20 * 8) next(OPEN_UI);
+                if (worldTicks > 20 * 8) {
+                    worldTicks = 0;
+                    next(OPEN_UI);
+                }
                 break;
 
             case OPEN_UI:
@@ -97,7 +119,7 @@ final class SelfTest {
                     // キー入力の経路も通すため、1 文字入力してから消す
                     ui.charTyped('x');
                     ui.keyPressed(Key.BACKSPACE, 0);
-                    ui.mainPage().setSource(image);
+                    ui.mainPage().setSource(images[index]);
                     ui.mainPage().setParameters(1f, 1f, 0f, 1f, 0f, 0f, 0f, 0f);
                 }
                 if (ticksInStep == 20) {
@@ -108,6 +130,10 @@ final class SelfTest {
 
             case WAIT_WRITE_MODE:
                 if (MarumaSign.hasPendingWrite()) {
+                    final SignSpec spec = SignSpec.parse(MarumaSign.pendingWriteText());
+                    drawnCount = 0;
+                    expectedUrl = spec == null ? null : spec.url;
+                    useAttempts = 0;
                     next(USE_ITEM);
                 } else if (!ui.mainPage().isBusy() && ticksInStep > 5) {
                     finish(false, "Could not prepare the sign: " + ui.mainPage().statusText());
@@ -131,16 +157,42 @@ final class SelfTest {
             case WAIT_RENDER:
                 // 画像の全体が見えるように正面を向く
                 if (ticksInStep == 1) platform.selfTestLook(0f);
-                if (MarumaSign.loadedRenderCount() > 0 && ticksInStep > 40) next(LOOK_AT_SIGN);
+                if (drawnCount > 0 && ticksInStep > 40) next(LOOK_AT_SIGN);
                 break;
 
             case LOOK_AT_SIGN:
-                // 看板そのものが消えていることを外部で確認できるように、看板の位置を見下ろす
-                if (ticksInStep == 1) platform.selfTestLook(50f);
-                if (ticksInStep == 30) writeFile("sign-view.txt", "ready\n");
-                // 最後に、画像の全体が写る向きに戻して終了する
-                if (ticksInStep == 80) platform.selfTestLook(0f);
-                if (ticksInStep == 110) finish(true, "Rendered " + MarumaSign.loadedRenderCount() + " times");
+                // 外部のスクリプトが画面を記録できるように、合図のファイルを書きながら進める。
+                // まず、画像の全体が写っている状態
+                if (ticksInStep == 20) writeFile("view-" + index + ".txt", "ready\n");
+                // 次に、看板そのものが消えていることを確認できるように、看板の位置を見下ろす
+                if (ticksInStep == 60) platform.selfTestLook(50f);
+                if (ticksInStep == 90) writeFile("sign-view-" + index + ".txt", "ready\n");
+                if (ticksInStep == 140) platform.selfTestLook(0f);
+                if (ticksInStep == 150) {
+                    if (summary.length() > 0) summary.append(", ");
+                    summary.append(new File(images[index]).getName()).append(" rendered ").append(drawnCount).append(" times");
+                    if (index + 1 < images.length) {
+                        // 次のファイルは、前の看板が見えない場所で確認する
+                        writeFile("move-" + index + ".txt", "ready\n");
+                        next(WAIT_MOVE);
+                    } else {
+                        finish(true, summary.toString());
+                    }
+                }
+                break;
+
+            case WAIT_MOVE:
+                // 外部のスクリプトがプレイヤーを移動させるのを待つ
+                if (new File(directory, "moved-" + index + ".txt").isFile()) {
+                    if (worldTicks == 0) worldTicks = ticksInStep;
+                    // 移動先の地形が届くまで少し待つ
+                    if (ticksInStep - worldTicks > 80) {
+                        worldTicks = 0;
+                        expectedUrl = null;
+                        index++;
+                        next(OPEN_UI);
+                    }
+                }
                 break;
 
             default:

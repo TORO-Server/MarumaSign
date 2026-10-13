@@ -31,9 +31,9 @@ ERAS = {
     "v1_10": {"sources": legacy_sources("v1_10")},
     "v1_11": {"sources": legacy_sources("v1_11")},
     "v1_12": {"sources": legacy_sources("v1_12")},
+    "v1_14": {"sources": modern_sources("modern", "classic", "ber14", "tex_0", "v1_14")},
     "v1_15": {"sources": modern_sources("modern", "classic", "ber16", "tex_1", "v1_15")},
     "v1_16": {"sources": modern_sources("modern", "classic", "ber16", "tex_1", "v1_16")},
-    "v1_16_2": {"sources": modern_sources("modern", "classic", "ber16", "tex_1", "v1_16_2")},
     "v1_17": {"sources": modern_sources("modern", "classic", "classic_ber", "tex_1", "v1_17")},
     "v1_19": {"sources": modern_sources("modern", "classic", "classic_ber", "tex_1", "v1_19")},
     "v1_19_3": {"sources": modern_sources("modern", "classic", "classic_ber", "tex_1", "v1_19_3")},
@@ -53,7 +53,19 @@ ERAS = {
 # (ビルドに使う Minecraft, 世代, マッピング, {受け持つバージョン: (Forge, NeoForge)})
 # Forge / NeoForge が None のバージョンは、そのローダーが存在しないか、まだ対応していない。
 FABRIC_LOADER = "0.19.5"
+# Forge が足したメソッドと、公式の名前に直した Minecraft のメソッドが同じ名前になるバージョンでの回避。
+# [クラス, "メソッド;シグネチャ", 付け直す名前] (名前は SRG のもの)
+FORGE_STUBS = {
+    "1.16.1": [["net/minecraft/client/gui/widget/Widget", "func_238483_d_;()I", "getHeightRealms"]],
+}
 MODERN = [
+    ("1.14.4", "v1_14", "mojmap", {
+        "1.14": (None, None),
+        "1.14.1": (None, None),
+        "1.14.2": ("26.0.63", None),
+        "1.14.3": ("27.0.60", None),
+        "1.14.4": ("28.2.26", None),
+    }),
     ("1.15.2", "v1_15", "mojmap", {
         "1.15": ("29.0.4", None),
         "1.15.1": ("30.0.51", None),
@@ -63,7 +75,7 @@ MODERN = [
         "1.16": (None, None),
         "1.16.1": ("32.0.108", None),
     }),
-    ("1.16.5", "v1_16_2", "mojmap", {
+    ("1.16.5", "v1_16", "mojmap", {
         "1.16.2": ("33.0.61", None),
         "1.16.3": ("34.1.42", None),
         "1.16.4": ("35.1.37", None),
@@ -171,6 +183,8 @@ def build():
         forge = {version: pair[0] for version, pair in served.items() if pair[0]}
         if forge:
             loaders["forge"] = {"loader": forge[minecraft], "versions": list(forge), "launch": forge}
+            if minecraft in FORGE_STUBS:
+                loaders["forge"]["stubs"] = FORGE_STUBS[minecraft]
         # NeoForge 1.20.1 は Forge と互換で、Forge 用の実装がそのまま動く。専用のビルドは作らず、確認だけ行う
         compatible = {version: pair[1] for version, pair in served.items() if pair[1] and pair[1].startswith("1.20.1-")}
         if compatible:

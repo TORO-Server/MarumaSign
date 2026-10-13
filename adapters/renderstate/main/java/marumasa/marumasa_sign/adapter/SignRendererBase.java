@@ -112,17 +112,21 @@ abstract class SignRendererBase implements BlockEntityRenderer<SignBlockEntity, 
             return;
         }
 
-        final float[] mesh = image.mesh(state.yaw, state.wall);
         final int light = state.lightCoords;
-        collector.submitCustomGeometry(poseStack, ((Tex) image.texture(state.distance)).renderType, (pose, vertices) -> {
-            for (int i = 0; i < SignImage.VERTEX_COUNT; i++) {
-                final int o = i * SignImage.STRIDE;
-                vertices.addVertex(pose, mesh[o], mesh[o + 1], mesh[o + 2])
-                        .setColor(255, 255, 255, 255)
-                        .setUv(mesh[o + 3], mesh[o + 4])
-                        .setLight(light);
-            }
-        });
+        for (final SignImage.Batch batch : image.batches(state.yaw, state.wall, state.distance)) {
+            collector.submitCustomGeometry(poseStack, ((Tex) batch.texture).renderType, (pose, vertices) -> {
+                final float[] mesh = batch.vertices;
+                final int[] colors = batch.colors;
+                for (int i = 0; i < batch.vertexCount; i++) {
+                    final int o = i * SignImage.Batch.STRIDE;
+                    final int color = colors == null ? 0xFFFFFFFF : colors[i];
+                    vertices.addVertex(pose, mesh[o], mesh[o + 1], mesh[o + 2])
+                            .setColor((color >> 16) & 0xFF, (color >> 8) & 0xFF, color & 0xFF, color >>> 24)
+                            .setUv(mesh[o + 3], mesh[o + 4])
+                            .setLight(light);
+                }
+            });
+        }
         MarumaSign.drawn(image);
     }
 

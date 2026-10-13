@@ -4,6 +4,7 @@ import marumasa.marumasa_sign.core.image.ImageLoader;
 import marumasa.marumasa_sign.core.sign.SignImage;
 import marumasa.marumasa_sign.core.sign.SignManager;
 import marumasa.marumasa_sign.core.sign.SignSpec;
+import marumasa.marumasa_sign.core.sign.SignText;
 import marumasa.marumasa_sign.core.ui.UiRoot;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
@@ -87,8 +88,23 @@ public final class MarumaSign {
     }
 
     // 画像を実際に描画したときに呼ぶ (動作確認用の記録)
+    /**
+     * アイテムのデータに保存されている看板の文字から、表示する画像を返す。MarumaSign の看板でなければ null。
+     * 行ごとのデータは、文字そのままでも、テキストコンポーネント (JSON) でもよい。
+     */
+    public static SignImage itemSign(String[] rawLines) {
+        if (signs == null || rawLines == null) return null;
+        final StringBuilder text = new StringBuilder();
+        for (String raw : rawLines) {
+            text.append(SignText.plain(raw));
+        }
+        return signs.get(text.toString());
+    }
+
     public static void drawn(SignImage image) {
-        if (image.isLoaded()) loadedRenderCount++;
+        if (!image.isLoaded()) return;
+        loadedRenderCount++;
+        if (selfTest != null) selfTest.onDrawn(image);
     }
 
     // スレッドを問わず呼べる、MarumaSign の看板かどうかの判定
@@ -125,6 +141,11 @@ public final class MarumaSign {
         final String[] lines = SignSpec.splitLines(text, platform.maxSignLineLength());
         if (lines != null) chat("text.write_done");
         return lines;
+    }
+
+    // 看板に書き込む予定の文字列。なければ null
+    static String pendingWriteText() {
+        return pendingWrite;
     }
 
     static int loadedRenderCount() {

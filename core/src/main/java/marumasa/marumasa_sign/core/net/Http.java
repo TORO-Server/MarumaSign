@@ -105,6 +105,11 @@ public final class Http {
      * check が先頭のバイト列を受け付けなかった場合は、残りを読まずに null を返す。
      */
     public static byte[] download(String url, HeadCheck check) throws IOException {
+        return download(url, check, MAX_SIZE);
+    }
+
+    // maxSize はダウンロードする大きさの上限 (バイト)
+    public static byte[] download(String url, HeadCheck check, int maxSize) throws IOException {
         final HttpURLConnection connection = open(url);
         try {
             connection.setRequestMethod("GET");
@@ -120,10 +125,10 @@ public final class Http {
                     head = readHead(input, 16);
                     if (!check.accept(head, head.length)) return null;
                 }
-                if (connection.getContentLength() > MAX_SIZE) {
-                    throw new IOException("Content size exceeds the limit of " + MAX_SIZE + " bytes.");
+                if (connection.getContentLength() > maxSize) {
+                    throw new IOException("Content size exceeds the limit of " + maxSize + " bytes.");
                 }
-                final byte[] rest = readLimited(input, MAX_SIZE - head.length);
+                final byte[] rest = readLimited(input, maxSize - head.length);
                 if (head.length == 0) return rest;
                 final byte[] all = new byte[head.length + rest.length];
                 System.arraycopy(head, 0, all, 0, head.length);
