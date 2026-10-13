@@ -58,7 +58,7 @@ final class SignDraw {
         GL11.glEnable(GL11.GL_BLEND);
         GL11.glBlendFunc(GL11.GL_SRC_ALPHA, GL11.GL_ONE_MINUS_SRC_ALPHA);
         GL11.glColor4f(1f, 1f, 1f, 1f);
-        // 影 Mod は面の向きを使って光を計算するので、どの向きの絵も同じ明るさになるように上向きにしておく
+        // 3D モデルは陰影を計算済みなので、影 Mod には上を向いた面として扱ってもらう (絵は面ごとに向きを指定する)
         GL11.glNormal3f(0f, 1f, 0f);
 
         for (SignImage.Batch batch : batches) {
@@ -76,6 +76,15 @@ final class SignDraw {
             GL11.glBegin(GL11.GL_QUADS);
             for (int i = 0; i < batch.vertexCount; i++) {
                 final int o = i * SignImage.Batch.STRIDE;
+                if ((i & 3) == 0 && i + 2 < batch.vertexCount) {
+                    // 面の向き。影 Mod が光の当たり方を計算するのに使う (通常の描画では使われない)
+                    final int b = o + SignImage.Batch.STRIDE, c = b + SignImage.Batch.STRIDE;
+                    final float ux = mesh[b] - mesh[o], uy = mesh[b + 1] - mesh[o + 1], uz = mesh[b + 2] - mesh[o + 2];
+                    final float vx = mesh[c] - mesh[o], vy = mesh[c + 1] - mesh[o + 1], vz = mesh[c + 2] - mesh[o + 2];
+                    final float nx = uy * vz - uz * vy, ny = uz * vx - ux * vz, nz = ux * vy - uy * vx;
+                    final float length = (float) Math.sqrt(nx * nx + ny * ny + nz * nz);
+                    if (length > 0) GL11.glNormal3f(nx / length, ny / length, nz / length);
+                }
                 GL11.glTexCoord2f(mesh[o + 3], mesh[o + 4]);
                 GL11.glVertex3f(mesh[o], mesh[o + 1], mesh[o + 2]);
             }
