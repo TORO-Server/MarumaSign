@@ -613,6 +613,42 @@ def analyze_screenshot(path):
     return judge_colours(sums, width, height)
 
 
+# シェーダーを使っているときの判定で見る位置 (画面の幅と高さに対する割合) と、そこにあるはずの色合い (色相の範囲、度)。
+# テスト画像は、どのバージョンでも画面のほぼ同じ場所に写る
+SHADED_POINTS = [
+    ("red", 0.37, 0.46, [(320, 360), (0, 25)]),
+    ("green", 0.63, 0.46, [(90, 175)]),
+    ("blue", 0.37, 0.66, [(195, 265)]),
+    ("yellow", 0.63, 0.66, [(35, 85)]),
+]
+
+
+def analyze_screenshot_shaded(path):
+    """シェーダーを使っているときの、テスト画像の判定。
+
+    シェーダーは絵にも影や空の色を付けるので、色そのものは元の画像と大きく変わる。
+    そこで、絵の 4 つの区画があるはずの位置の色合い (色相) が、赤・緑・青・黄の並びになっているかを調べる。
+    絵がなければ、上の 2 か所は空、下の 2 か所は地面の色になるので、区別できる。
+    """
+    import colorsys
+
+    from PIL import Image
+
+    image = Image.open(path).convert("RGB")
+    width, height = image.size
+    found = {}
+    for name, fx, fy, ranges in SHADED_POINTS:
+        # 周りを含めて平均した色で判定する
+        box = (int(width * fx) - 6, int(height * fy) - 6, int(width * fx) + 7, int(height * fy) + 7)
+        patch = image.crop(box).resize((1, 1), Image.BOX).getpixel((0, 0))
+        hue, saturation, value = colorsys.rgb_to_hsv(patch[0] / 255, patch[1] / 255, patch[2] / 255)
+        degrees = hue * 360
+        found[name] = (round(degrees), round(saturation, 2), round(value, 2))
+        if saturation < 0.2 or value < 0.08 or not any(low <= degrees <= high for low, high in ranges):
+            return False, f"test image not found at the expected place (hue, saturation, value: {found})"
+    return True, "test image visible (shaded)"
+
+
 def analyze_item_view(path):
     """画面の下にあるホットバーに、テスト画像の見た目になった看板アイテムが写っているかを調べる。"""
     from PIL import Image
@@ -858,6 +894,8 @@ def run(args):
                     shot = work_dir / f"screenshot-{current}.png"
                     if grab_screen(shot):
                         entry["visible"], entry["detail"] = analyze_screenshot(shot)
+                        if shaders and not entry["visible"]:
+                            entry["visible"], entry["detail"] = analyze_screenshot_shaded(shot)
                     stage = "sign"
                 elif stage == "sign" and (result_dir / f"sign-view-{current}.txt").is_file():
                     # 看板の位置を見下ろしている状態

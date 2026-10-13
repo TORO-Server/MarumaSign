@@ -21,6 +21,7 @@ public final class WorldPass {
 
         final List<?> tileEntities = Mc.tileEntities();
         boolean lightmap = false;
+        boolean shaders = false;
         for (int i = 0; i < tileEntities.size(); i++) {
             final Object tileEntity = tileEntities.get(i);
             if (!(tileEntity instanceof TileEntitySign)) continue;
@@ -38,11 +39,14 @@ public final class WorldPass {
             if (!lightmap) {
                 Mc.enableLightmap();
                 lightmap = true;
+                // 影 Mod が有効なら、ブロックエンティティ用のシェーダーで描く
+                shaders = ShaderHooks.begin();
             }
             // 看板の位置の明るさで描く
             Mc.applyLight(sign);
             SignDraw.draw(image, sign, x, y, z);
         }
+        if (shaders) ShaderHooks.end();
         if (lightmap) Mc.disableLightmap();
     }
 }
