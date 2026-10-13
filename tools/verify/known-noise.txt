@@ -8,3 +8,5 @@ Author: Paul Lamb, www\.paulscode\.com
 
 # 検証ではクライアントを一方的に終了させるため、サーバー側に切断の例外が記録される (INFO)
 lost connection: .*Internal Exception: java\.io\.IOException
+# 確認の途中で、スクリプトがプレイヤーを離れた場所へ移動させるために出る
+moved too quickly

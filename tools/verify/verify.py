@@ -277,6 +277,33 @@ class Server:
         else:
             self.command(f"tp {PLAYER} ~{distance} ~ ~")
 
+    def give_sign_item(self, lines):
+        """看板の文字をデータとして持つ看板アイテムを、プレイヤーに渡す。データの書き方はバージョンによって違う。"""
+        version = version_key(self.minecraft)
+        if version >= (1, 21, 5):
+            # 文字はそのまま保存する
+            messages = ",".join('"' + line + '"' for line in lines)
+        else:
+            # 文字は JSON のテキストコンポーネントとして保存する
+            messages = ",".join("'" + json.dumps({"text": line}, separators=(",", ":")) + "'" for line in lines)
+        if version >= (1, 20, 5):
+            item = f'minecraft:oak_sign[minecraft:block_entity_data={{id:"minecraft:sign",front_text:{{messages:[{messages}]}}}}]'
+            self.command(f"give {PLAYER} {item}")
+        elif version >= (1, 20, 0):
+            self.command(f"give {PLAYER} minecraft:oak_sign{{BlockEntityTag:{{front_text:{{messages:[{messages}]}}}}}}")
+        elif version >= (1, 13, 0):
+            texts = ",".join(f"Text{i + 1}:'" + json.dumps({"text": line}, separators=(",", ":")) + "'"
+                             for i, line in enumerate(lines))
+            self.command(f"give {PLAYER} {sign_item(self.minecraft)}{{BlockEntityTag:{{{texts}}}}}")
+        elif version >= (1, 8, 0):
+            texts = ",".join(f"Text{i + 1}:" + json.dumps(json.dumps({"text": line}, separators=(",", ":")))
+                             for i, line in enumerate(lines))
+            self.command(f"give {PLAYER} minecraft:sign 1 0 {{BlockEntityTag:{{{texts}}}}}")
+        else:
+            # 1.7.10 は文字をそのまま保存する
+            texts = ",".join(f'Text{i + 1}:"{line}"' for i, line in enumerate(lines))
+            self.command(f"give {PLAYER} minecraft:sign 1 0 {{BlockEntityTag:{{{texts}}}}}")
+
     def on_join(self):
         """プレイヤーが入ったら、サバイバルモードで看板を持たせる。"""
         time.sleep(2)
@@ -285,6 +312,12 @@ class Server:
         else:
             self.command(f"gamemode 0 {PLAYER}")
         self.command(f"give {PLAYER} {sign_item(self.minecraft)} 16")
+        # 真南など、軸にぴったり沿った向きを避ける。
+        # 一部のバージョンの Forge は、その向きのときに看板などのブロックエンティティを (Mod がなくても) 描かないため
+        if version_key(self.minecraft) >= (1, 13, 0):
+            self.command(f"execute as {PLAYER} at @s run tp @s ~ ~ ~ 8 0")
+        elif version_key(self.minecraft) >= (1, 8, 0):
+            self.command(f"tp {PLAYER} ~ ~ ~ 8 0")
         self.command("time set 6000" if version_key(self.minecraft) < (1, 13, 0) else "time set noon")
         self.command("weather clear")
 
@@ -584,6 +617,36 @@ def analyze_screenshot(path):
     return judge_colours(sums, width, height)
 
 
+def analyze_item_view(path):
+    """画面の下にあるホットバーに、テスト画像の見た目になった看板アイテムが写っているかを調べる。"""
+    from PIL import Image
+
+    image = Image.open(path).convert("RGB")
+    width, height = image.size
+    # ホットバーは画面の下の中央にある。手に持ったアイテム (右下) は範囲に入れない
+    region = image.crop((int(width * 0.28), int(height * 0.86), int(width * 0.72), height))
+    pixels = region.load()
+    sums = {name: [0, 0, 0] for name in TEST_COLORS}
+    for y in range(region.height):
+        for x in range(region.width):
+            name = classify(*pixels[x, y])
+            if name is not None:
+                entry = sums[name]
+                entry[0] += 1
+                entry[1] += x
+                entry[2] += y
+    counts = {name: entry[0] for name, entry in sums.items()}
+    # 枠 1 つ分の小さな絵なので、色ごとに少しでも写っていればよい
+    if any(count < 12 for count in counts.values()):
+        return False, f"item picture not found in the hotbar (pixels: {counts})"
+    centre = {name: (entry[1] / entry[0], entry[2] / entry[0]) for name, entry in sums.items()}
+    ordered = (centre["red"][0] < centre["green"][0] and centre["blue"][0] < centre["yellow"][0]
+               and centre["red"][1] < centre["blue"][1] and centre["green"][1] < centre["yellow"][1])
+    if not ordered:
+        return False, f"item picture is mirrored or rotated (centres: {centre})"
+    return True, "item picture visible"
+
+
 def analyze_sign_view(path):
     """看板の位置を見下ろした画面に、看板の板が写っていないかを調べる。"""
     from PIL import Image
@@ -748,6 +811,7 @@ def run(args):
             "-Xmx2G",
             f"-Dmarumasign.selftest={result_dir}",
             "-Dmarumasign.selftest.image=" + "|".join(str(image) for image in images),
+            "-Dmarumasign.selftest.item=true",
             f"-Dmarumasign.uploadUrl=http://127.0.0.1:{host.port}/upload",
             f"-Dmarumasign.shortenUrl=http://127.0.0.1:{host.port}/shorten",
         ])
@@ -765,6 +829,7 @@ def run(args):
         media = [{"name": image.name} for image in images]
         current = 0
         stage = "view"
+        item_stage = "request"
         while time.time() < deadline:
             if client.poll() is not None:
                 break
@@ -799,6 +864,20 @@ def run(args):
                     (result_dir / f"moved-{current}.txt").write_text("done\n")
                     current += 1
                     stage = "view"
+            if not args.baseline and item_stage == "request" and (result_dir / "item-request.txt").is_file():
+                # 看板の文字を持たせた看板アイテムを渡す。置いた看板と区別できるように、別の URL にする
+                host.files["item.png"] = images[0].read_bytes()
+                url = f"http://127.0.0.1:{host.port}/i/item.png"
+                text = url + "|0|0|0|1|1|0|0|0"
+                server.give_sign_item([text[i:i + 15] for i in range(0, 60, 15)])
+                time.sleep(1.0)
+                (result_dir / "item-given.txt").write_text(url)
+                item_stage = "view"
+            elif not args.baseline and item_stage == "view" and (result_dir / "item-view.txt").is_file():
+                shot = work_dir / "screenshot-item.png"
+                if grab_screen(shot):
+                    result["item_visible"], result["item_detail"] = analyze_item_view(shot)
+                item_stage = "done"
             if args.baseline and joined_handled and time.time() - joined_at > 25:
                 # 基準の取得では、ワールドに入ってしばらくしたら終了する
                 result["detail"] = "baseline"
@@ -870,6 +949,7 @@ def run(args):
         result["new_client_findings"] = [line for line in client_findings if is_new(line, baseline["client"])]
         result["new_server_findings"] = [line for line in server_findings if is_new(line, baseline["server"])]
         result["clean"] = (result["ok"] and bool(result.get("image_visible")) and bool(result.get("sign_hidden"))
+                           and bool(result.get("item_visible"))
                            and not result["new_client_findings"] and not result["new_server_findings"])
     else:
         result["baseline"] = False

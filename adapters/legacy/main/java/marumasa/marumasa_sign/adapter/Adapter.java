@@ -56,6 +56,7 @@ public final class Adapter {
     public static void tick() {
         if (!active) return;
         if (!rendererInstalled) installRenderer();
+        SignItems.install(mc);
 
         MarumaSign.tick();
 

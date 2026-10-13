@@ -16,6 +16,9 @@ public final class Entry {
         // クライアント専用
         if (FMLCommonHandler.instance().getSide() != Side.CLIENT) return;
         if (!Adapter.init("forge")) return;
+        // 看板アイテムの見た目は、Forge の仕組みで差し替える
+        ForgeInstaller.install();
+        SignItems.handledByLoader = true;
         // 1.7.10 では tick のイベントは FML のバスに、描画のイベントは Forge のバスに流れる
         final Entry entry = new Entry();
         FMLCommonHandler.instance().bus().register(entry);

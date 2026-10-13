@@ -12,9 +12,14 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parents[1]
 
 
-def legacy_sources(era, forge="legacy/forge"):
-    """Minecraft 1.7.10 - 1.12.2 の世代で使うソースフォルダ。"""
-    return {"main": ["legacy/main", f"{era}/main"], "forge": [forge], "liteloader": ["legacy/liteloader"]}
+def legacy_sources(era, item, forge="legacy/forge"):
+    """Minecraft 1.7.10 - 1.12.2 の世代で使うソースフォルダ。item は看板アイテムの見た目を差し替える層。"""
+    sources = {"main": ["legacy/main", f"{era}/main", f"{item}/main"], "forge": [forge], "liteloader": ["legacy/liteloader"]}
+    # ローダーごとのコードを持つ層もある
+    for loader in ("forge", "liteloader"):
+        if (REPO / "adapters" / item / loader).is_dir():
+            sources[loader].append(f"{item}/{loader}")
+    return sources
 
 
 def modern_sources(*layers):
@@ -24,24 +29,27 @@ def modern_sources(*layers):
 
 
 ERAS = {
-    "v1_7": {"sources": legacy_sources("v1_7", "v1_7/forge")},
-    "v1_8_0": {"sources": legacy_sources("v1_8_0")},
-    "v1_8": {"sources": legacy_sources("v1_8")},
-    "v1_9": {"sources": legacy_sources("v1_9")},
-    "v1_10": {"sources": legacy_sources("v1_10")},
-    "v1_11": {"sources": legacy_sources("v1_11")},
-    "v1_12": {"sources": legacy_sources("v1_12")},
-    "v1_14": {"sources": modern_sources("modern", "classic", "ber14", "tex_0", "v1_14")},
-    "v1_15": {"sources": modern_sources("modern", "classic", "ber16", "tex_1", "v1_15")},
-    "v1_16": {"sources": modern_sources("modern", "classic", "ber16", "tex_1", "v1_16")},
-    "v1_17": {"sources": modern_sources("modern", "classic", "classic_ber", "tex_1", "v1_17")},
-    "v1_19": {"sources": modern_sources("modern", "classic", "classic_ber", "tex_1", "v1_19")},
-    "v1_19_3": {"sources": modern_sources("modern", "classic", "classic_ber", "tex_1", "v1_19_3")},
-    "v1_20": {"sources": modern_sources("modern", "classic", "classic_ber", "tex_1", "v1_20")},
-    "v1_21": {"sources": modern_sources("modern", "classic", "classic_ber", "tex_2", "v1_21")},
-    "v1_21_2": {"sources": modern_sources("modern", "classic", "classic_ber", "tex_3", "v1_21_2")},
-    "v1_21_5": {"sources": modern_sources("modern", "classic", "classic_ber", "tex_4", "v1_21_5")},
-    "v1_21_6": {"sources": modern_sources("modern", "classic", "classic_ber", "tex_4", "v1_21_6")},
+    "v1_7": {"sources": legacy_sources("v1_7", "item_legacy17", "v1_7/forge")},
+    "v1_8_0": {"sources": legacy_sources("v1_8_0", "item_mesher")},
+    "v1_8": {"sources": legacy_sources("v1_8", "item_mesher")},
+    "v1_9": {"sources": legacy_sources("v1_9", "item_render")},
+    "v1_10": {"sources": legacy_sources("v1_10", "item_render")},
+    "v1_11": {"sources": legacy_sources("v1_11", "item_render")},
+    "v1_12": {"sources": legacy_sources("v1_12", "item_render")},
+    "v1_14": {"sources": modern_sources("modern", "classic", "ber14", "tex_0", "v1_14", "item_none")},
+    "v1_15": {"sources": modern_sources("modern", "classic", "ber16", "tex_1", "v1_15", "item_none")},
+    "v1_16": {"sources": modern_sources("modern", "classic", "ber16", "tex_1", "v1_16", "item_none")},
+    "v1_17": {"sources": modern_sources("modern", "classic", "classic_ber", "tex_1", "v1_17", "item_bewlr_1", "item_nbt")},
+    "v1_19": {"sources": modern_sources("modern", "classic", "classic_ber", "tex_1", "v1_19", "item_bewlr_1", "item_nbt")},
+    "v1_19_3": {"sources": modern_sources("modern", "classic", "classic_ber", "tex_1", "v1_19_3", "item_bewlr_2", "item_nbt")},
+    "v1_20": {"sources": modern_sources("modern", "classic", "classic_ber", "tex_1", "v1_20", "item_bewlr_2", "item_nbt")},
+    # 1.20.5 で、アイテムのデータの持ち方が変わった
+    "v1_20_5": {"sources": modern_sources("modern", "classic", "classic_ber", "tex_1", "v1_20", "item_bewlr_2", "item_components")},
+    "v1_21": {"sources": modern_sources("modern", "classic", "classic_ber", "tex_2", "v1_21", "item_bewlr_2", "item_components")},
+    "v1_21_2": {"sources": modern_sources("modern", "classic", "classic_ber", "tex_3", "v1_21_2", "item_bewlr_3", "item_components")},
+    "v1_21_4": {"sources": modern_sources("modern", "classic", "classic_ber", "tex_3", "v1_21_2", "item_model_1")},
+    "v1_21_5": {"sources": modern_sources("modern", "classic", "classic_ber", "tex_4", "v1_21_5", "item_model_2")},
+    "v1_21_6": {"sources": modern_sources("modern", "classic", "classic_ber", "tex_4", "v1_21_6", "item_model_3")},
     "v1_21_9": {"sources": modern_sources("modern", "renderstate", "tex_4", "v1_21_9")},
     "v1_21_11": {"sources": modern_sources("modern", "renderstate", "tex_5", "v1_21_9")},
     "v26_1": {"sources": modern_sources("modern", "renderstate", "tex_5", "v26", "v26_1")},
@@ -108,7 +116,7 @@ MODERN = [
         "1.20.3": ("49.0.2", "20.3.8-beta"),
         "1.20.4": ("49.2.11", "20.4.251"),
     }),
-    ("1.20.6", "v1_20", "mojmap", {
+    ("1.20.6", "v1_20_5", "mojmap", {
         "1.20.5": (None, "20.5.21-beta"),
         "1.20.6": ("50.2.12", "20.6.141"),
     }),
@@ -121,7 +129,7 @@ MODERN = [
         "1.21.2": (None, "21.2.1-beta"),
         "1.21.3": ("53.1.14", "21.3.97"),
     }),
-    ("1.21.4", "v1_21_2", "mojmap", {
+    ("1.21.4", "v1_21_4", "mojmap", {
         "1.21.4": ("54.1.20", "21.4.158"),
     }),
     ("1.21.5", "v1_21_5", "mojmap", {

@@ -26,12 +26,16 @@ final class SelfTest {
     private static final int WAIT_RENDER = 5;
     private static final int LOOK_AT_SIGN = 6;
     private static final int WAIT_MOVE = 7;
-    private static final int FINISHED = 8;
+    private static final int WAIT_ITEM = 8;
+    private static final int FINISHED = 9;
 
     private static final String[] STEP_NAMES = {
             "WAIT_WORLD", "OPEN_UI", "FILL", "WAIT_WRITE_MODE", "USE_ITEM", "WAIT_RENDER", "LOOK_AT_SIGN", "WAIT_MOVE",
-            "FINISHED"
+            "WAIT_ITEM", "FINISHED"
     };
+
+    // 看板アイテムを受け取ってから、描かれるのを待つ時間の上限 (tick)
+    private static final int ITEM_TIMEOUT = 20 * 15;
 
     // 1 つの手順にかけられる時間の上限 (tick)
     private static final int STEP_TIMEOUT = 20 * 120;
@@ -46,6 +50,11 @@ final class SelfTest {
     private volatile String expectedUrl;
     private volatile int drawnCount;
     private final StringBuilder summary = new StringBuilder();
+    // 看板の文字を持った看板アイテムの見た目も確かめるかどうか
+    private final boolean checkItem = Boolean.getBoolean("marumasign.selftest.item");
+    // 看板アイテムを受け取った時点と、画面の記録を頼んだ時点 (その手順での tick)。まだなら -1
+    private int itemGivenAt = -1;
+    private int itemViewAt = -1;
 
     private int step = WAIT_WORLD;
     private int ticksInStep;
@@ -175,6 +184,11 @@ final class SelfTest {
                         // 次のファイルは、前の看板が見えない場所で確認する
                         writeFile("move-" + index + ".txt", "ready\n");
                         next(WAIT_MOVE);
+                    } else if (checkItem) {
+                        // 外部のスクリプトに、看板の文字を持った看板アイテムを渡してもらう
+                        expectedUrl = null;
+                        writeFile("item-request.txt", "ready\n");
+                        next(WAIT_ITEM);
                     } else {
                         finish(true, summary.toString());
                     }
@@ -195,8 +209,41 @@ final class SelfTest {
                 }
                 break;
 
+            case WAIT_ITEM:
+                if (itemGivenAt < 0) {
+                    // 渡したアイテムの URL が書かれたファイルを待つ
+                    final String url = readFile("item-given.txt");
+                    if (url != null) {
+                        drawnCount = 0;
+                        expectedUrl = url.trim();
+                        itemGivenAt = ticksInStep;
+                    }
+                } else if (itemViewAt < 0) {
+                    // アイテムは手持ちの枠 (ホットバー) に入るので、画面の下に描かれる
+                    if (drawnCount > 0 && ticksInStep - itemGivenAt > 40) {
+                        writeFile("item-view.txt", "ready\n");
+                        itemViewAt = ticksInStep;
+                    } else if (ticksInStep - itemGivenAt > ITEM_TIMEOUT) {
+                        finish(true, summary + ", item not rendered");
+                    }
+                } else if (ticksInStep - itemViewAt > 60) {
+                    finish(true, summary + ", item rendered " + drawnCount + " times");
+                }
+                break;
+
             default:
                 break;
+        }
+    }
+
+    // 外部のスクリプトが書いたファイルを読む。まだなければ null
+    private String readFile(String name) {
+        final File file = new File(directory, name);
+        if (!file.isFile()) return null;
+        try {
+            return new String(Files.readAllBytes(file.toPath()), StandardCharsets.UTF_8);
+        } catch (IOException e) {
+            return null;
         }
     }
 

@@ -95,6 +95,7 @@ public final class Adapter {
         if (!active) return;
 
         SignRendererBase.install(mc);
+        SignItems.install(mc);
         MarumaSign.tick();
 
         while (openMenu.consumeClick()) {
@@ -1539,6 +1540,541 @@ for era, files in ERAS.items():
         write(era, "UiScreen.java", files["screen"])
     if "wrapper" in files:
         write(era, "SignRendererWrapper.java", files["wrapper"])
+
+# ---------------------------------------------------------------- 看板アイテムの見た目
+
+# まだ対応していない世代用。何もしない
+write("item_none", "SignItems.java", """
+package marumasa.marumasa_sign.adapter;
+
+import net.minecraft.client.Minecraft;
+
+/**
+ * 看板アイテムの見た目の差し替え。この世代では、まだ対応していない。
+ */
+final class SignItems {
+
+    private SignItems() {
+    }
+
+    static void install(Minecraft mc) {
+    }
+}
+""")
+
+
+def item_model_source(title, read_lines, replace_layers, extra_fields, animated, extents):
+    """1.21.4 - 1.21.8: アイテムのモデルの表にある看板アイテムのモデルを包む。"""
+    return f"""
+package marumasa.marumasa_sign.adapter;
+
+import com.mojang.blaze3d.vertex.PoseStack;
+import marumasa.marumasa_sign.core.MarumaSign;
+import marumasa.marumasa_sign.core.sign.SignImage;
+import marumasa.marumasa_sign.core.util.Reflect;
+import net.minecraft.client.Minecraft;
+import net.minecraft.client.multiplayer.ClientLevel;
+import net.minecraft.client.renderer.MultiBufferSource;
+import net.minecraft.client.renderer.item.ItemModel;
+import net.minecraft.client.renderer.item.ItemModelResolver;
+import net.minecraft.client.renderer.item.ItemStackRenderState;
+import net.minecraft.client.renderer.special.SpecialModelRenderer;
+import net.minecraft.client.resources.model.ModelManager;
+import net.minecraft.core.component.DataComponents;
+import net.minecraft.core.registries.BuiltInRegistries;
+import net.minecraft.nbt.CompoundTag;
+import net.minecraft.nbt.ListTag;
+import net.minecraft.nbt.StringTag;
+import net.minecraft.nbt.Tag;
+import net.minecraft.world.entity.LivingEntity;
+import net.minecraft.world.item.BlockItem;
+import net.minecraft.world.item.Item;
+import net.minecraft.world.item.ItemDisplayContext;
+import net.minecraft.world.item.ItemStack;
+import net.minecraft.world.item.component.CustomData;
+import net.minecraft.world.level.block.StandingSignBlock;
+import org.joml.Vector3f;
+
+import java.lang.reflect.Field;
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.Set;
+
+/**
+ * 看板の文字を持っている看板アイテムを、その看板と同じ内容 (画像・動画・3D モデル) で描く。({title})
+ * アイテムのモデルの表にある看板アイテムのモデルを包み、MarumaSign の看板のデータを持つときだけ描き方を差し替える。
+ */
+final class SignItems {{
+
+    private static Field modelsField;
+    private static Field layersField;
+    private static Field layerCountField;{extra_fields}
+
+    private SignItems() {{
+    }}
+
+    // 看板アイテムのモデルがまだ包まれていなければ包む。リソースの再読み込みで元に戻るため、毎 tick 確認する
+    static void install(Minecraft mc) {{
+        final ModelManager manager = mc.getModelManager();
+        if (manager == null) return;
+
+        // 看板アイテムと、そのモデルの名前
+        final List<Object> ids = new ArrayList<Object>();
+        for (Item item : BuiltInRegistries.ITEM) {{
+            // 立て看板になるアイテムだけを対象にする (吊り看板は対象外)
+            if (!(item instanceof BlockItem) || !(((BlockItem) item).getBlock() instanceof StandingSignBlock)) continue;
+            final Object id = new ItemStack(item).get(DataComponents.ITEM_MODEL);
+            if (id != null) ids.add(id);
+        }}
+        if (ids.isEmpty()) return;
+
+        if (modelsField == null) {{
+            // アイテムのモデルの表は、同じ型のフィールドがほかにもあるので、中身で見分ける
+            for (Field field : ModelManager.class.getDeclaredFields()) {{
+                if (!Map.class.isAssignableFrom(field.getType())) continue;
+                field.setAccessible(true);
+                final Map<Object, Object> map = Reflect.get(field, manager);
+                if (map != null && map.get(ids.get(0)) instanceof ItemModel) {{
+                    modelsField = field;
+                    break;
+                }}
+            }}
+            // まだモデルが読み込まれていない
+            if (modelsField == null) return;
+        }}
+
+        final Map<Object, ItemModel> models = Reflect.get(modelsField, manager);
+        if (models == null) return;
+        boolean wrapped = true;
+        for (Object id : ids) {{
+            final ItemModel model = models.get(id);
+            if (model != null && !(model instanceof Model)) wrapped = false;
+        }}
+        if (wrapped) return;
+
+        // 元の表は変更できないことがあるので、写しを作って差し替える
+        final Map<Object, ItemModel> replaced = new HashMap<Object, ItemModel>(models);
+        for (Object id : ids) {{
+            final ItemModel model = replaced.get(id);
+            if (model != null && !(model instanceof Model)) replaced.put(id, new Model(model));
+        }}
+        Reflect.set(modelsField, manager, replaced);
+    }}
+
+    // アイテムが持っている看板のデータから、表示する内容を探す。MarumaSign の看板でなければ null
+    static SignImage find(ItemStack stack) {{
+        final CustomData data = stack.get(DataComponents.BLOCK_ENTITY_DATA);
+        if (data == null) return null;
+        final CompoundTag tag = data.getUnsafe();
+        final String[] lines = new String[8];
+{read_lines}
+        return MarumaSign.itemSign(lines);
+    }}
+
+    /**
+     * 看板アイテムのモデルを包み、MarumaSign の看板のデータを持つときだけ、中身を画像に差し替える。
+     */
+    private static final class Model implements ItemModel {{
+
+        private final ItemModel delegate;
+
+        Model(ItemModel delegate) {{
+            this.delegate = delegate;
+        }}
+
+        @Override
+        public void update(ItemStackRenderState state, ItemStack stack, ItemModelResolver resolver, ItemDisplayContext context,
+                           ClientLevel level, LivingEntity entity, int seed) {{
+            final SignImage image = find(stack);
+            if (image == null) {{
+                delegate.update(state, stack, resolver, context, level, entity, seed);
+                return;
+            }}
+
+            // 元のモデルに層を作らせて、手に持ったときや枠の中での位置と向きをそのまま使う
+            if (layersField == null) {{
+                layersField = Reflect.fieldOfType(ItemStackRenderState.class, ItemStackRenderState.LayerRenderState[].class);
+                layerCountField = Reflect.fieldOfType(ItemStackRenderState.class, int.class);
+            }}
+            final int before = Reflect.<Integer>get(layerCountField, state);
+            delegate.update(state, stack, resolver, context, level, entity, seed);
+            final int after = Reflect.<Integer>get(layerCountField, state);
+            final ItemStackRenderState.LayerRenderState[] layers = Reflect.get(layersField, state);
+
+{replace_layers}{animated}
+        }}
+    }}
+
+    /**
+     * 画像を描く部分。
+     */
+    private static final class Renderer implements SpecialModelRenderer<SignImage> {{
+
+        static final Renderer INSTANCE = new Renderer();
+
+        @Override
+        public void render(SignImage image, ItemDisplayContext context, PoseStack poseStack, MultiBufferSource buffers,
+                           int light, int overlay, boolean foil) {{
+            if (image == null) return;
+            // 距離は分からないので、手元にあるものとして扱う
+            for (SignImage.Batch batch : image.itemBatches(1.0)) {{
+                Mc.quads(buffers.getBuffer(((Tex) batch.texture).renderType), poseStack, batch, light);
+            }}
+            MarumaSign.drawn(image);
+        }}
+{extents}
+        @Override
+        public SignImage extractArgument(ItemStack stack) {{
+            return find(stack);
+        }}
+    }}
+}}
+"""
+
+
+# 1.21.4 まで: 文字は JSON の文字列として保存されている
+ITEM_LINES_OLD = """        readLines(tag.getCompound("front_text"), lines, 0);
+        readLines(tag.getCompound("back_text"), lines, 4);
+        return MarumaSign.itemSign(lines);
+    }
+
+    private static void readLines(CompoundTag text, String[] lines, int offset) {
+        final ListTag messages = text.getList("messages", Tag.TAG_STRING);
+        for (int i = 0; i < 4 && i < messages.size(); i++) {
+            lines[offset + i] = messages.getString(i);
+        }"""
+# 1.21.5 以降: 文字だけの行は文字列、装飾のある行は複合タグ
+ITEM_LINES_NEW = """        readLines(tag.getCompoundOrEmpty("front_text"), lines, 0);
+        readLines(tag.getCompoundOrEmpty("back_text"), lines, 4);
+        return MarumaSign.itemSign(lines);
+    }
+
+    private static void readLines(CompoundTag text, String[] lines, int offset) {
+        final ListTag messages = text.getListOrEmpty("messages");
+        for (int i = 0; i < 4 && i < messages.size(); i++) {
+            final Tag message = messages.get(i);
+            // 文字だけの行は文字列で、装飾のある行は複合タグで保存されている
+            lines[offset + i] = message instanceof StringTag ? ((StringTag) message).value() : String.valueOf(message);
+        }"""
+# 1.21.4: 層は、位置と向きを決めるためのモデルを持つ
+ITEM_LAYERS_MODEL = """            if (after > before) {
+                // 元の絵 (板の形) は描かず、最初の層で画像を描く。位置と向きは、元のモデルのものを使う
+                if (layerModelField == null) layerModelField = Reflect.fieldOfType(ItemStackRenderState.LayerRenderState.class, BakedModel.class);
+                final BakedModel model = Reflect.get(layerModelField, layers[before]);
+                layers[before].setupSpecialModel(Renderer.INSTANCE, image, model);
+                // 残りの層には何も描かせない
+                for (int i = before + 1; i < after; i++) layers[i].setupSpecialModel(Renderer.INSTANCE, null, model);
+            }"""
+# 1.21.5 以降: 層は、描く面の一覧を持つ
+ITEM_LAYERS_QUADS = """            if (after > before) {
+                // 元の絵 (板の形) は描かず、最初の層で画像を描く。残りの層には何も描かせない
+                layers[before].setupSpecialModel(Renderer.INSTANCE, image);
+                for (int i = before + 1; i < after; i++) layers[i].setupSpecialModel(Renderer.INSTANCE, null);
+            } else {
+                state.newLayer().setupSpecialModel(Renderer.INSTANCE, image);
+            }"""
+ITEM_ANIMATED = """
+            // 動画などで内容が変わるので、枠の中の絵を使い回さず毎回描き直してもらう
+            state.appendModelIdentityElement(image);
+            state.setAnimated();"""
+ITEM_EXTENTS = """
+        // アイテムが占める範囲。一辺 1 の立方体の中に収まる
+        @Override
+        public void getExtents(Set<Vector3f> output) {
+            output.add(new Vector3f(0f, 0f, 0f));
+            output.add(new Vector3f(1f, 1f, 1f));
+        }
+"""
+
+
+def item_model(title, read_lines, replace_layers, extra_fields="", animated="", extents=""):
+    source = item_model_source(title, "{LINES}", replace_layers, extra_fields, animated, extents)
+    # 行の読み取りは、メソッドの終わりまでを含む形で差し込む
+    marker = "{LINES}\n        return MarumaSign.itemSign(lines);\n    }"
+    if source.count(marker) != 1:
+        raise SystemExit("line reader marker not found")
+    source = source.replace(marker, read_lines + "\n    }")
+    if "Set<Vector3f>" not in source:
+        source = source.replace("import org.joml.Vector3f;\n\n", "\n").replace("import java.util.Set;\n", "")
+    if "BakedModel" in source:
+        source = source.replace("import net.minecraft.client.resources.model.ModelManager;\n",
+                                "import net.minecraft.client.resources.model.BakedModel;\nimport net.minecraft.client.resources.model.ModelManager;\n")
+    if "StringTag" not in source.split("final class SignItems")[1]:
+        source = source.replace("import net.minecraft.nbt.StringTag;\n", "")
+    return source
+
+
+write("item_model_1", "SignItems.java", item_model(
+    "Minecraft 1.21.4", ITEM_LINES_OLD, ITEM_LAYERS_MODEL, extra_fields="\n    private static Field layerModelField;"))
+write("item_model_2", "SignItems.java", item_model("Minecraft 1.21.5", ITEM_LINES_NEW, ITEM_LAYERS_QUADS))
+write("item_model_3", "SignItems.java", item_model(
+    "Minecraft 1.21.6 - 1.21.8", ITEM_LINES_NEW, ITEM_LAYERS_QUADS, animated=ITEM_ANIMATED, extents=ITEM_EXTENTS))
+
+
+def item_bewlr_source(title, context_import, context_type, built_in, shaper_methods, shaper_imports):
+    """1.17 - 1.21.3: アイテムのモデルを選ぶ部分と、専用の描画を行う部分を包む。"""
+    return f"""
+package marumasa.marumasa_sign.adapter;
+
+import com.mojang.blaze3d.vertex.PoseStack;
+import marumasa.marumasa_sign.core.MarumaSign;
+import marumasa.marumasa_sign.core.sign.SignImage;
+import marumasa.marumasa_sign.core.util.Reflect;
+import net.minecraft.client.Minecraft;
+import net.minecraft.client.renderer.BlockEntityWithoutLevelRenderer;
+import net.minecraft.client.renderer.ItemModelShaper;
+import net.minecraft.client.renderer.MultiBufferSource;
+{context_import}
+import net.minecraft.client.renderer.entity.ItemRenderer;
+import net.minecraft.client.resources.model.BakedModel;
+import net.minecraft.client.resources.model.BuiltInModel;
+{shaper_imports}import net.minecraft.nbt.CompoundTag;
+import net.minecraft.nbt.ListTag;
+import net.minecraft.server.packs.resources.ResourceManager;
+import net.minecraft.world.item.BlockItem;
+import net.minecraft.world.item.Item;
+import net.minecraft.world.item.ItemStack;
+import net.minecraft.world.level.block.StandingSignBlock;
+
+import java.lang.reflect.Field;
+import java.util.IdentityHashMap;
+import java.util.Map;
+
+/**
+ * 看板の文字を持っている看板アイテムを、その看板と同じ内容 (画像・動画・3D モデル) で描く。({title})
+ * アイテムのモデルを選ぶ部分を包んで、MarumaSign の看板のデータを持つアイテムには「専用の描画を行うモデル」を返し、
+ * 専用の描画を行う部分を包んで、そのアイテムのときに画像を描く。
+ */
+final class SignItems {{
+
+    private static Field shaperField;
+    private static Field rendererField;
+
+    private SignItems() {{
+    }}
+
+    // まだ包まれていなければ包む。毎 tick 確認する
+    static void install(Minecraft mc) {{
+        final ItemRenderer itemRenderer = mc.getItemRenderer();
+        if (itemRenderer == null) return;
+
+        if (rendererField == null) {{
+            rendererField = Reflect.fieldOfType(ItemRenderer.class, BlockEntityWithoutLevelRenderer.class);
+            shaperField = Reflect.fieldOfType(ItemRenderer.class, ItemModelShaper.class);
+        }}
+        final BlockEntityWithoutLevelRenderer renderer = Reflect.get(rendererField, itemRenderer);
+        if (renderer != null && !(renderer instanceof Renderer)) {{
+            Reflect.set(rendererField, itemRenderer, new Renderer(renderer, mc));
+        }}
+        final ItemModelShaper shaper = Reflect.get(shaperField, itemRenderer);
+        if (shaper != null && !(shaper instanceof Shaper)) {{
+            Reflect.set(shaperField, itemRenderer, new Shaper(shaper, mc));
+        }}
+    }}
+
+    // アイテムが持っている看板のデータから、表示する内容を探す。MarumaSign の看板でなければ null
+    static SignImage find(ItemStack stack) {{
+        // 立て看板になるアイテムだけを対象にする (吊り看板は対象外)
+        final Item item = stack.getItem();
+        if (!(item instanceof BlockItem) || !(((BlockItem) item).getBlock() instanceof StandingSignBlock)) return null;
+        final CompoundTag tag = SignItemData.blockEntityTag(stack);
+        if (tag == null) return null;
+
+        final String[] lines = new String[8];
+        if (tag.contains("front_text")) {{
+            // 1.20 以降: 表と裏
+            readLines(tag.getCompound("front_text"), lines, 0);
+            readLines(tag.getCompound("back_text"), lines, 4);
+        }} else {{
+            for (int i = 0; i < 4; i++) {{
+                lines[i] = tag.getString("Text" + (i + 1));
+            }}
+        }}
+        return MarumaSign.itemSign(lines);
+    }}
+
+    private static void readLines(CompoundTag text, String[] lines, int offset) {{
+        // 8 は文字列のタグの種類
+        final ListTag messages = text.getList("messages", 8);
+        for (int i = 0; i < 4 && i < messages.size(); i++) {{
+            lines[offset + i] = messages.getString(i);
+        }}
+    }}
+
+    /**
+     * アイテムのモデルを選ぶ部分。MarumaSign の看板のデータを持つアイテムには、専用の描画を行うモデルを返す。
+     */
+    private static final class Shaper extends ItemModelShaper {{
+
+        private final ItemModelShaper delegate;
+        // 元のモデルごとの、専用の描画を行うモデル。位置と向きは元のモデルと同じ
+        private final Map<BakedModel, BakedModel> builtIn = new IdentityHashMap<BakedModel, BakedModel>();
+
+        Shaper(ItemModelShaper delegate, Minecraft mc) {{
+            super(mc.getModelManager());
+            this.delegate = delegate;
+        }}
+
+        @Override
+        public BakedModel getItemModel(ItemStack stack) {{
+            final BakedModel model = delegate.getItemModel(stack);
+            if (model == null || find(stack) == null) return model;
+            BakedModel replaced = builtIn.get(model);
+            if (replaced == null) {{
+                replaced = {built_in};
+                builtIn.put(model, replaced);
+            }}
+            return replaced;
+        }}
+{shaper_methods}
+    }}
+
+    /**
+     * 専用の描画を行う部分。MarumaSign の看板アイテムのときだけ画像を描き、それ以外は元の処理に任せる。
+     */
+    private static final class Renderer extends BlockEntityWithoutLevelRenderer {{
+
+        private final BlockEntityWithoutLevelRenderer delegate;
+
+        Renderer(BlockEntityWithoutLevelRenderer delegate, Minecraft mc) {{
+            super(mc.getBlockEntityRenderDispatcher(), mc.getEntityModels());
+            this.delegate = delegate;
+        }}
+
+        @Override
+        public void renderByItem(ItemStack stack, {context_type} context, PoseStack poseStack, MultiBufferSource buffers,
+                                 int light, int overlay) {{
+            final SignImage image = find(stack);
+            if (image == null) {{
+                delegate.renderByItem(stack, context, poseStack, buffers, light, overlay);
+                return;
+            }}
+            // 距離は分からないので、手元にあるものとして扱う
+            for (SignImage.Batch batch : image.itemBatches(1.0)) {{
+                Mc.quads(buffers.getBuffer(((Tex) batch.texture).renderType), poseStack, batch, light);
+            }}
+            MarumaSign.drawn(image);
+        }}
+
+        @Override
+        public void onResourceManagerReload(ResourceManager resourceManager) {{
+            delegate.onResourceManagerReload(resourceManager);
+        }}
+    }}
+}}
+"""
+
+
+# 1.21.1 まで: モデルの表は、アイテムごとに登録する形
+SHAPER_METHODS_OLD = """
+        @Override
+        public BakedModel getItemModel(Item item) {
+            return delegate.getItemModel(item);
+        }
+
+        @Override
+        public ModelManager getModelManager() {
+            return delegate.getModelManager();
+        }
+
+        @Override
+        public void register(Item item, ModelResourceLocation location) {
+            delegate.register(item, location);
+        }
+
+        @Override
+        public void rebuildCache() {
+            delegate.rebuildCache();
+            builtIn.clear();
+        }"""
+SHAPER_IMPORTS_OLD = ("import net.minecraft.client.renderer.block.model.ItemOverrides;\n"
+                      "import net.minecraft.client.resources.model.ModelManager;\n"
+                      "import net.minecraft.client.resources.model.ModelResourceLocation;\n")
+BUILT_IN_OLD = "new BuiltInModel(model.getTransforms(), ItemOverrides.EMPTY, model.getParticleIcon(), model.usesBlockLight())"
+# 1.21.2 - 1.21.3: モデルは名前で引く
+SHAPER_METHODS_NEW = """
+        @Override
+        public BakedModel getItemModel(ResourceLocation location) {
+            return delegate.getItemModel(location);
+        }
+
+        @Override
+        public void invalidateCache() {
+            delegate.invalidateCache();
+            builtIn.clear();
+        }"""
+SHAPER_IMPORTS_NEW = "import net.minecraft.resources.ResourceLocation;\n"
+BUILT_IN_NEW = "new BuiltInModel(model.getTransforms(), model.getParticleIcon(), model.usesBlockLight())"
+
+
+def sorted_imports(source):
+    """生成したソースの import を、ほかのファイルと同じ並び (名前順) に直す。"""
+    lines = source.split("\n")
+    first = next(i for i, line in enumerate(lines) if line.startswith("import com.mojang"))
+    last = next(i for i, line in enumerate(lines) if line.startswith("import net.minecraft.world.level.block.StandingSignBlock"))
+    block = sorted(line for line in lines[first:last + 1] if line)
+    return "\n".join(lines[:first] + block + lines[last + 1:])
+
+
+write("item_bewlr_1", "SignItems.java", sorted_imports(item_bewlr_source(
+    "Minecraft 1.17 - 1.19.2", "import net.minecraft.client.renderer.block.model.ItemTransforms;", "ItemTransforms.TransformType",
+    BUILT_IN_OLD, SHAPER_METHODS_OLD, SHAPER_IMPORTS_OLD)))
+write("item_bewlr_2", "SignItems.java", sorted_imports(item_bewlr_source(
+    "Minecraft 1.19.3 - 1.21.1", "import net.minecraft.world.item.ItemDisplayContext;", "ItemDisplayContext",
+    BUILT_IN_OLD, SHAPER_METHODS_OLD, SHAPER_IMPORTS_OLD)))
+write("item_bewlr_3", "SignItems.java", sorted_imports(item_bewlr_source(
+    "Minecraft 1.21.2 - 1.21.3", "import net.minecraft.world.item.ItemDisplayContext;", "ItemDisplayContext",
+    BUILT_IN_NEW, SHAPER_METHODS_NEW, SHAPER_IMPORTS_NEW)))
+
+# アイテムが持っているブロックエンティティのデータの取り出し方
+write("item_nbt", "SignItemData.java", """
+package marumasa.marumasa_sign.adapter;
+
+import net.minecraft.nbt.CompoundTag;
+import net.minecraft.world.item.ItemStack;
+
+/**
+ * アイテムが持っているブロックエンティティのデータ。(Minecraft 1.20.4 まで: アイテムのタグの中にある)
+ */
+final class SignItemData {
+
+    private SignItemData() {
+    }
+
+    // データがなければ null
+    static CompoundTag blockEntityTag(ItemStack stack) {
+        final CompoundTag tag = stack.getTag();
+        // 10 は複合タグの種類
+        return tag != null && tag.contains("BlockEntityTag", 10) ? tag.getCompound("BlockEntityTag") : null;
+    }
+}
+""")
+write("item_components", "SignItemData.java", """
+package marumasa.marumasa_sign.adapter;
+
+import net.minecraft.core.component.DataComponents;
+import net.minecraft.nbt.CompoundTag;
+import net.minecraft.world.item.ItemStack;
+import net.minecraft.world.item.component.CustomData;
+
+/**
+ * アイテムが持っているブロックエンティティのデータ。(Minecraft 1.20.5 以降: アイテムのコンポーネントになっている)
+ */
+final class SignItemData {
+
+    private SignItemData() {
+    }
+
+    // データがなければ null
+    static CompoundTag blockEntityTag(ItemStack stack) {
+        final CustomData data = stack.get(DataComponents.BLOCK_ENTITY_DATA);
+        // 読むだけなので、写しを作らずに中身をそのまま使う
+        return data == null ? null : data.getUnsafe();
+    }
+}
+""")
 
 # 26.x 共通の画面とレンダラーの受け口
 write("v26", "UiScreen.java", SCREEN_EXTRACTOR)
