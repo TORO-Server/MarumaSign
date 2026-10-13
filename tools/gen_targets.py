@@ -50,11 +50,11 @@ ERAS = {
     "v1_21_4": {"sources": modern_sources("modern", "classic", "classic_ber", "tex_3", "v1_21_2", "item_model_1")},
     "v1_21_5": {"sources": modern_sources("modern", "classic", "classic_ber", "tex_4", "v1_21_5", "item_model_2")},
     "v1_21_6": {"sources": modern_sources("modern", "classic", "classic_ber", "tex_4", "v1_21_6", "item_model_3")},
-    "v1_21_9": {"sources": modern_sources("modern", "renderstate", "tex_4", "v1_21_9")},
-    "v1_21_11": {"sources": modern_sources("modern", "renderstate", "tex_5", "v1_21_9")},
-    "v26_1": {"sources": modern_sources("modern", "renderstate", "tex_5", "v26", "v26_1")},
-    "v26_2": {"sources": modern_sources("modern", "renderstate", "tex_5", "v26", "v26_2")},
-    "v26_3": {"sources": modern_sources("modern", "renderstate", "tex_5", "v26", "v26_3")},
+    "v1_21_9": {"sources": modern_sources("modern", "renderstate", "tex_4", "v1_21_9", "board_none")},
+    "v1_21_11": {"sources": modern_sources("modern", "renderstate", "tex_5", "v1_21_9", "board_none")},
+    "v26_1": {"sources": modern_sources("modern", "renderstate", "tex_5", "v26", "v26_1", "board_none")},
+    "v26_2": {"sources": modern_sources("modern", "renderstate", "tex_5", "v26", "v26_2", "board_model")},
+    "v26_3": {"sources": modern_sources("modern", "renderstate", "tex_5", "v26", "v26_3", "board_model")},
 }
 
 # Minecraft 1.14 以降。1 つのビルドが、API の同じ複数のバージョンを受け持つ。
