@@ -94,7 +94,8 @@ final class SelfTest {
             return;
         }
         if (step == FINISHED) return;
-        if (++ticksInStep > STEP_TIMEOUT) {
+        // ワールドに入るまでは、影 Mod のシェーダーの準備などで時間がかかることがあるので、長めに待つ
+        if (++ticksInStep > (step == WAIT_WORLD ? STEP_TIMEOUT * 3 : STEP_TIMEOUT)) {
             finish(false, "Timed out at step " + STEP_NAMES[step]);
             return;
         }

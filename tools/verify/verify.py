@@ -805,7 +805,7 @@ def run(args):
     }
     shader_setup = None
     if shaders:
-        shader_setup = shadermods.resolve(args.loader, args.minecraft)
+        shader_setup = shadermods.resolve(args.loader, args.minecraft, root / "shadermods")
         if shader_setup is None:
             result["detail"] = "No shader mod is available for this combination"
             return result
