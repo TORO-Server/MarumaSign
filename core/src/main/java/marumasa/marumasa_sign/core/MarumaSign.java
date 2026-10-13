@@ -80,13 +80,14 @@ public final class MarumaSign {
 
     /**
      * 看板の文字列に対応する画像を返す。MarumaSign の看板でなければ null。
-     * 看板を描画するたびに呼ばれる。
      */
     public static SignImage sign(String text) {
-        if (signs == null) return null;
-        final SignImage image = signs.get(text);
-        if (image != null && image.isLoaded()) loadedRenderCount++;
-        return image;
+        return signs == null ? null : signs.get(text);
+    }
+
+    // 画像を実際に描画したときに呼ぶ (動作確認用の記録)
+    public static void drawn(SignImage image) {
+        if (image.isLoaded()) loadedRenderCount++;
     }
 
     // スレッドを問わず呼べる、MarumaSign の看板かどうかの判定

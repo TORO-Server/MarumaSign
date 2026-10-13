@@ -96,6 +96,10 @@ public final class ImageLoader {
         } catch (Exception e) {
             MarumaSign.LOGGER.info("Failure: " + url + " (" + e + ")");
             request.callback.onFailed();
+        } catch (Throwable e) {
+            // 画像の内容が原因ではない、想定外の失敗。握りつぶさずに記録する
+            MarumaSign.LOGGER.error("Unexpected error while loading " + url, e);
+            request.callback.onFailed();
         }
     }
 

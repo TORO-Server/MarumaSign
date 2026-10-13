@@ -83,22 +83,19 @@ abstract class RelocateJar extends DefaultTask {
 // 「ローダー.バージョン = 実装の名前」の対応表
 def tableLines = []
 def relocateTasks = []
-def includedEras = [] as Set
 
 targets.each { target ->
     ['forge', 'neoforge'].each { loaderName ->
         def loaderSpec = target.loaders[loaderName]
         if (loaderSpec == null) return
-        loaderSpec.versions.each { tableLines << "${loaderName}.${it}=${target.era}" }
+        loaderSpec.versions.each { tableLines << "${loaderName}.${it}=${target.name}" }
 
-        // 同じ実装は 1 回だけ入れる
-        if (!includedEras.add("${loaderName}:${target.era}")) return
         def remapTask = project(":targets:${target.name}").tasks.named("remap${loaderName.capitalize()}Jar")
-        relocateTasks << tasks.register("relocate${loaderName.capitalize()}${target.era.capitalize()}", RelocateJar) {
+        relocateTasks << tasks.register("relocate${loaderName.capitalize()}${target.name.capitalize()}", RelocateJar) {
             input = remapTask.flatMap { it.archiveFile }
-            fromPrefix = "${basePackage}/${target.era}"
-            toPrefix = "${basePackage}/${loaderName}/${target.era}"
-            output = layout.buildDirectory.dir("relocated/${loaderName}/${target.era}")
+            fromPrefix = "${basePackage}/adapter"
+            toPrefix = "${basePackage}/${loaderName}/${target.name}"
+            output = layout.buildDirectory.dir("relocated/${loaderName}/${target.name}")
         }
     }
 }

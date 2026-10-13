@@ -1,5 +1,6 @@
-package marumasa.marumasa_sign.v1_12;
+package marumasa.marumasa_sign.adapter;
 
+import net.minecraftforge.client.event.RenderWorldLastEvent;
 import net.minecraftforge.common.MinecraftForge;
 import net.minecraftforge.fml.common.FMLCommonHandler;
 import net.minecraftforge.fml.common.eventhandler.SubscribeEvent;
@@ -7,7 +8,7 @@ import net.minecraftforge.fml.common.gameevent.TickEvent;
 import net.minecraftforge.fml.relauncher.Side;
 
 /**
- * Forge から起動されたときの入口。
+ * Forge 1.8 - 1.12.2 から起動されたときの入口。
  */
 public final class Entry {
 
@@ -21,5 +22,10 @@ public final class Entry {
     @SubscribeEvent
     public void onClientTick(TickEvent.ClientTickEvent event) {
         if (event.phase == TickEvent.Phase.END) Adapter.tick();
+    }
+
+    @SubscribeEvent
+    public void onRenderWorldLast(RenderWorldLastEvent event) {
+        Adapter.renderWorld();
     }
 }

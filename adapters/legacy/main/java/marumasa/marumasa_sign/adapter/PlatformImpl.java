@@ -1,14 +1,12 @@
-package marumasa.marumasa_sign.v1_12;
+package marumasa.marumasa_sign.adapter;
 
 import marumasa.marumasa_sign.core.Platform;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.GuiScreen;
 import net.minecraft.client.renderer.texture.DynamicTexture;
 import net.minecraft.client.settings.KeyBinding;
-import net.minecraft.init.Items;
 import net.minecraft.realms.RealmsSharedConstants;
 import net.minecraft.util.ResourceLocation;
-import net.minecraft.util.text.TextComponentString;
 
 import java.io.File;
 
@@ -44,7 +42,7 @@ final class PlatformImpl implements Platform {
 
     @Override
     public File gameDirectory() {
-        return mc.gameDir;
+        return Mc.gameDirectory();
     }
 
     @Override
@@ -54,24 +52,22 @@ final class PlatformImpl implements Platform {
 
     @Override
     public void execute(Runnable task) {
-        mc.addScheduledTask(task);
+        Mc.execute(task);
     }
 
     @Override
     public void showMessage(String message) {
-        if (mc.ingameGUI != null) {
-            mc.ingameGUI.getChatGUI().printChatMessage(new TextComponentString(message));
-        }
+        if (mc.ingameGUI != null) Mc.chat(message);
     }
 
     @Override
     public boolean isInWorld() {
-        return mc.world != null && mc.player != null;
+        return Mc.inWorld();
     }
 
     @Override
     public int maxSignLineLength() {
-        return 80;
+        return Mc.MAX_SIGN_LINE_LENGTH;
     }
 
     @Override
@@ -121,17 +117,13 @@ final class PlatformImpl implements Platform {
 
     @Override
     public void selfTestLook(float pitch) {
-        if (mc.player != null) mc.player.rotationPitch = pitch;
+        Mc.look(pitch);
     }
 
     @Override
     public void selfTestUseItem() {
-        if (mc.player == null) return;
-        for (int slot = 0; slot < 9; slot++) {
-            if (mc.player.inventory.mainInventory.get(slot).getItem() == Items.SIGN) {
-                mc.player.inventory.currentItem = slot;
-            }
-        }
+        if (!Mc.inWorld()) return;
+        Mc.selectSign();
         KeyBinding.onTick(mc.gameSettings.keyBindUseItem.getKeyCode());
     }
 

@@ -1,22 +1,25 @@
 // targets.json の 1 項目 (Minecraft のバージョン 1 つ) をビルドするための共通設定。
-// ソースは adapters/<era>/ にあり、複数の項目で共有できる。
+// ソースは adapters/ 以下にあり、世代 (era) の sources で指定したフォルダを重ねて使う。
+// どの項目でもパッケージは marumasa.marumasa_sign.adapter で、jar にまとめるときに項目ごとの名前へ移す。
 
 apply plugin: 'java'
 apply plugin: 'xyz.wagyourtail.unimined'
 
 def spec = project.ext.spec
-def eraDir = rootProject.file("adapters/${spec.era}")
+def sourceDirs = { String sourceSetName, String kind ->
+    (spec.sources[sourceSetName] ?: []).collect { rootProject.file("adapters/${it}/${kind}") }
+}
 
 sourceSets {
     main {
-        java.srcDirs = [new File(eraDir, 'main/java')]
-        resources.srcDirs = [new File(eraDir, 'main/resources')]
+        java.srcDirs = sourceDirs('main', 'java')
+        resources.srcDirs = sourceDirs('main', 'resources')
     }
 }
 spec.loaders.each { loaderName, loaderSpec ->
     sourceSets.create(loaderName) {
-        java.srcDirs = [new File(eraDir, "${loaderName}/java")]
-        resources.srcDirs = [new File(eraDir, "${loaderName}/resources")]
+        java.srcDirs = sourceDirs(loaderName, 'java')
+        resources.srcDirs = sourceDirs(loaderName, 'resources')
     }
 }
 
@@ -43,7 +46,7 @@ tasks.withType(JavaCompile).configureEach {
 
 // ソースに埋め込むバージョン情報
 def generatedDir = layout.buildDirectory.dir('generated/buildinfo')
-def packageName = "marumasa.marumasa_sign.${spec.era}"
+def packageName = 'marumasa.marumasa_sign.adapter'
 def generateBuildInfo = tasks.register('generateBuildInfo') {
     def modVersion = project.version.toString()
     def outputDir = generatedDir

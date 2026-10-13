@@ -31,13 +31,13 @@ public final class Boot {
             MarumaSign.LOGGER.error("Could not detect the Minecraft version. MarumaSign is disabled.");
             return;
         }
-        final String era = loadTable().getProperty(loader + "." + minecraftVersion);
-        if (era == null) {
+        final String target = loadTable().getProperty(loader + "." + minecraftVersion);
+        if (target == null) {
             MarumaSign.LOGGER.error("MarumaSign does not support Minecraft " + minecraftVersion + " on " + loader + ".");
             return;
         }
         try {
-            Class.forName("marumasa.marumasa_sign." + loader + "." + era + ".Entry").getMethod("start").invoke(null);
+            Class.forName("marumasa.marumasa_sign." + loader + "." + target + ".Entry").getMethod("start").invoke(null);
         } catch (ReflectiveOperationException | LinkageError e) {
             MarumaSign.LOGGER.error("Failed to start MarumaSign for Minecraft " + minecraftVersion + " on " + loader, e);
         }
