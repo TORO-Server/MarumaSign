@@ -97,6 +97,7 @@ public final class Adapter {
         SignRendererBase.install(mc);
         SignItems.install(mc);
         MarumaSign.tick();
+        if (mc.player != null && "forge".equals(loaderName)) Mc.avoidExactAngles(mc);
 
         while (openMenu.consumeClick()) {
             if (mc.player != null && Mc.screen(mc) == null) MarumaSign.openMenu();
@@ -1534,8 +1535,41 @@ ERAS.update({
     "v1_14": dict(mc=mc_114(), screen=SCREEN_114),
 })
 
+# Forge の 1.15 - 1.19.4 は、カメラの向きが軸にぴったり沿っているとき (真正面を水平に見ているときなど) に、
+# 看板などの「描く範囲に限りがない」ブロックエンティティを、画面に入っていないものとして扱ってしまう
+# (範囲の判定で 0 と無限大を掛けることになり、結果が数として扱えなくなるため。Mod を入れていなくても起きる)。
+# 看板の絵が突然消えて見えるので、向きがぴったりのときは、見た目に分からない程度だけずらす。
+ANGLES_FIELDS = """
+    // Forge は、カメラの向きが軸にぴったり沿っていると看板を描かないことがあるので、見た目に分からない程度だけずらす
+    static void avoidExactAngles(Minecraft mc) {
+        if (mc.player.xRot == 0f) mc.player.xRot = 0.01f;
+        if (mc.player.yRot % 90f == 0f) mc.player.yRot += 0.01f;
+    }
+"""
+ANGLES_METHODS = """
+    // Forge は、カメラの向きが軸にぴったり沿っていると看板を描かないことがあるので、見た目に分からない程度だけずらす
+    static void avoidExactAngles(Minecraft mc) {
+        if (mc.player.getXRot() == 0f) mc.player.setXRot(0.01f);
+        if (mc.player.getYRot() % 90f == 0f) mc.player.setYRot(mc.player.getYRot() + 0.01f);
+    }
+"""
+ANGLES_NONE = """
+    // このバージョンでは、カメラの向きによって看板が描かれなくなる問題はない
+    static void avoidExactAngles(Minecraft mc) {
+    }
+"""
+ANGLES = {"v1_15": ANGLES_FIELDS, "v1_16": ANGLES_FIELDS, "v1_17": ANGLES_METHODS, "v1_19": ANGLES_METHODS,
+          "v1_19_3": ANGLES_METHODS}
+
+
+def with_angles(era, source):
+    """Mc の最後に、カメラの向きをずらすメソッドを足す。"""
+    end = source.rstrip().rfind("}")
+    return source[:end].rstrip("\n") + "\n" + ANGLES.get(era, ANGLES_NONE) + "}\n"
+
+
 for era, files in ERAS.items():
-    write(era, "Mc.java", files["mc"])
+    write(era, "Mc.java", with_angles(era, files["mc"]))
     if "screen" in files:
         write(era, "UiScreen.java", files["screen"])
     if "wrapper" in files:

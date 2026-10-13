@@ -312,12 +312,6 @@ class Server:
         else:
             self.command(f"gamemode 0 {PLAYER}")
         self.command(f"give {PLAYER} {sign_item(self.minecraft)} 16")
-        # 真南など、軸にぴったり沿った向きを避ける。
-        # 一部のバージョンの Forge は、その向きのときに看板などのブロックエンティティを (Mod がなくても) 描かないため
-        if version_key(self.minecraft) >= (1, 13, 0):
-            self.command(f"execute as {PLAYER} at @s run tp @s ~ ~ ~ 8 0")
-        elif version_key(self.minecraft) >= (1, 8, 0):
-            self.command(f"tp {PLAYER} ~ ~ ~ 8 0")
         self.command("time set 6000" if version_key(self.minecraft) < (1, 13, 0) else "time set noon")
         self.command("weather clear")
 
