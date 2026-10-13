@@ -55,6 +55,7 @@ LiteLoader だけファイルが分かれているのは、LiteLoader が Mod �
 
 [FFmpeg](https://ffmpeg.org/) が読める形式 (`.mp4` `.webm` `.mkv` `.mov` `.avi` `.mp3` `.ogg` `.wav` `.flac` など) を再生できます。
 動画に含まれる音声も再生され、看板から離れるほど小さく聞こえます。音量はウィンドウの「動画と音声の音量」で変えられます。
+WebP や AVIF、TIFF など、上の「画像」にない形式の画像も、FFmpeg を通して表示します。
 
 再生には FFmpeg が必要です。次のどちらかの方法で用意してください。
 
@@ -112,9 +113,9 @@ glTF 2.0 の `.glb` と `.gltf` を表示できます。
 ### 影 Mod (シェーダー) との併用
 
 OptiFine、Iris、Oculus などの影 Mod とシェーダーパックを使っていても表示されます。
-シェーダーは絵や 3D モデルにも光と影を付けるので、色の見え方はシェーダーパックによって変わります
-(日なたでは明るく、日かげや夜は暗くなります)。
-確認した組み合わせは [docs/verification.md](docs/verification.md) にあります。
+絵や 3D モデルは、ブロックと同じようにシェーダーの光と影を受けます。
+そのため、色の見え方はシェーダーパックによって変わります (日なたでは明るく、日かげや夜は暗くなります)。
+確認した影 Mod とシェーダーパックの組み合わせは [docs/verification.md](docs/verification.md) にあります。
 
 ## 注意事項
 
@@ -157,6 +158,15 @@ python tools/verify/matrix.py
 バニラのサーバーを起動し、各ローダーを入れた実際のクライアントで接続して、
 画像・3D モデル・動画を看板に書き込んで表示するまでと、看板の文字を持たせた看板アイテムの見た目を自動で確認します。
 [portablemc](https://github.com/mindstorm38/portablemc)、Pillow、FFmpeg が必要です。
+
+```bash
+# 影 Mod とシェーダーパックを入れた状態で確認する
+python tools/verify/matrix.py --shaders
+# シェーダーパックを変える (Modrinth での名前)。Forge 1.16.5 以降で OptiFine を使うときは --shader-mod optifine
+python tools/verify/matrix.py --shaders --shader-pack complementary-reimagined
+# 結果を docs/verification.md にまとめる
+python tools/verify/report.py
+```
 
 Minecraft を起動せずに確認できるものもあります。
 

@@ -125,8 +125,14 @@ def main():
             verify.log(f"=== baseline {key}")
             baseline = run_one(root, loader, minecraft, loader_version, mod, True, args.timeout, shaders=args.shaders,
                                shader_pack=args.shader_pack, shader_mod=args.shader_mod)
+            if "No shader mod is available" in str(baseline.get("detail")):
+                # この組み合わせで使える影 Mod がない。確認の対象から外す
+                verify.log(f"=== skip {key}: no shader mod")
+                summary.pop(key, None)
+                selected.discard(key)
+                continue
             if not baseline.get("ok"):
-                summary[key] = {"ok": False, "clean": False, "detail": "baseline failed: " + str(baseline.get("detail"))[:300]}
+                summary[key] ={"ok": False, "clean": False, "detail": "baseline failed: " + str(baseline.get("detail"))[:300]}
                 summary_file.write_text(json.dumps(summary, indent=2, ensure_ascii=False), encoding="utf-8")
                 continue
 
@@ -135,7 +141,9 @@ def main():
                              args.shader_pack, args.shader_mod)
         if not result.get("clean"):
             # 他の処理と重なって時間切れになることがあるので、1 回だけやり直す
-            verify.log(f"=== retry {key} ({str(result.get('detail'))[:80]})")
+            verify.log(f"=== retry {key} ({str(result.get('detail'))[:200]} / {result.get('image_detail')}"
+                       f" / {result.get('sign_detail')} / {result.get('item_detail')}"
+                       f" / {(result.get('new_client_findings', []) + result.get('new_server_findings', []))[:3]})")
             result = run_one(root, loader, minecraft, loader_version, mod, False, args.timeout, args.media, args.shaders,
                              args.shader_pack, args.shader_mod)
         summary[key] = {
