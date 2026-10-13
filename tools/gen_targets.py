@@ -37,11 +37,13 @@ ERAS = {
     "v1_11": {"sources": legacy_sources("v1_11", "item_render")},
     "v1_12": {"sources": legacy_sources("v1_12", "item_render")},
     "v1_14": {"sources": modern_sources("modern", "classic", "ber14", "tex_0", "v1_14", "item_static_1", "item_nbt")},
-    "v1_15": {"sources": modern_sources("modern", "classic", "ber16", "tex_1", "v1_15", "item_static_2", "item_nbt")},
+    "v1_15": {"sources": modern_sources("modern", "classic", "ber16", "tex_1r", "v1_15", "item_static_2", "item_nbt")},
     "v1_16": {"sources": modern_sources("modern", "classic", "ber16", "tex_1", "v1_16", "item_static_3", "item_nbt")},
     "v1_17": {"sources": modern_sources("modern", "classic", "classic_ber", "tex_1", "v1_17", "item_bewlr_1", "item_nbt")},
     "v1_19": {"sources": modern_sources("modern", "classic", "classic_ber", "tex_1", "v1_19", "item_bewlr_1", "item_nbt")},
-    "v1_19_3": {"sources": modern_sources("modern", "classic", "classic_ber", "tex_1", "v1_19_3", "item_bewlr_2", "item_nbt")},
+    # 1.19.4 で、アイテムを描くときに渡される「表示のされ方」の型が変わった
+    "v1_19_3": {"sources": modern_sources("modern", "classic", "classic_ber", "tex_1", "v1_19_3", "item_bewlr_1", "item_nbt")},
+    "v1_19_4": {"sources": modern_sources("modern", "classic", "classic_ber", "tex_1", "v1_19_3", "item_bewlr_2", "item_nbt")},
     "v1_20": {"sources": modern_sources("modern", "classic", "classic_ber", "tex_1", "v1_20", "item_bewlr_2", "item_nbt")},
     # 1.20.5 で、アイテムのデータの持ち方が変わった
     "v1_20_5": {"sources": modern_sources("modern", "classic", "classic_ber", "tex_1", "v1_20", "item_bewlr_2", "item_components")},
@@ -103,8 +105,10 @@ MODERN = [
         "1.19.1": ("42.0.9", None),
         "1.19.2": ("43.5.2", None),
     }),
-    ("1.19.4", "v1_19_3", "mojmap", {
+    ("1.19.3", "v1_19_3", "mojmap", {
         "1.19.3": ("44.1.23", None),
+    }),
+    ("1.19.4", "v1_19_4", "mojmap", {
         "1.19.4": ("45.4.5", None),
     }),
     ("1.20.1", "v1_20", "mojmap", {

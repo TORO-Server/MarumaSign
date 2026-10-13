@@ -333,8 +333,38 @@ write("tex_3", "Tex.java", tex_source(*RL, "ResourceLocation.fromNamespaceAndPat
                                       "new DynamicTexture(image)", PIXEL_ARGB, "Minecraft 1.21.2 - 1.21.4 の作り方。"))
 write("tex_2", "Tex.java", tex_source(*RL, "ResourceLocation.fromNamespaceAndPath", *RT_OLD,
                                       "new DynamicTexture(image)", PIXEL_ABGR, "Minecraft 1.21 - 1.21.1 の作り方。"))
-write("tex_1", "Tex.java", tex_source(*RL, "new ResourceLocation", *RT_OLD,
-                                      "new DynamicTexture(image)", PIXEL_ABGR, "Minecraft 1.20.6 以前の作り方。"))
+TEX_1 = tex_source(*RL, "new ResourceLocation", *RT_OLD,
+                   "new DynamicTexture(image)", PIXEL_ABGR, "Minecraft 1.20.6 以前の作り方。")
+write("tex_1", "Tex.java", TEX_1)
+
+
+def replace_once(source, old, new):
+    if source.count(old) != 1:
+        raise SystemExit(f"expected exactly one {old!r}")
+    return source.replace(old, new)
+
+
+# 1.15 - 1.15.2: テクスチャを登録するメソッドの戻り値の型が 1.15.2 で変わったので、引数の型で探して呼ぶ
+TEX_1R = replace_once(TEX_1, "        mc.getTextureManager().register(id, texture);\n", """        if (register == null) {
+            register = Reflect.methodWithParameters(TextureManager.class, ResourceLocation.class, AbstractTexture.class);
+        }
+        Reflect.invoke(register, mc.getTextureManager(), id, texture);
+""")
+TEX_1R = replace_once(TEX_1R, "    private static final AtomicInteger nextId = new AtomicInteger();\n",
+                      """    private static final AtomicInteger nextId = new AtomicInteger();
+    // テクスチャを登録するメソッド。1.15.2 で戻り値の型が変わったので、どのバージョンでも動くように引数の型で探す
+    private static Method register;
+""")
+TEX_1R = replace_once(TEX_1R, "import net.minecraft.client.renderer.texture.DynamicTexture;\n",
+                      "import net.minecraft.client.renderer.texture.AbstractTexture;\n"
+                      "import net.minecraft.client.renderer.texture.DynamicTexture;\n"
+                      "import net.minecraft.client.renderer.texture.TextureManager;\n")
+TEX_1R = replace_once(TEX_1R, "import marumasa.marumasa_sign.core.MarumaSign;\n",
+                      "import marumasa.marumasa_sign.core.MarumaSign;\nimport marumasa.marumasa_sign.core.util.Reflect;\n")
+TEX_1R = replace_once(TEX_1R, "import java.util.concurrent.atomic.AtomicInteger;\n",
+                      "import java.lang.reflect.Method;\nimport java.util.concurrent.atomic.AtomicInteger;\n")
+TEX_1R = replace_once(TEX_1R, "Minecraft 1.20.6 以前の作り方。", "Minecraft 1.15 - 1.15.2 の作り方。")
+write("tex_1r", "Tex.java", TEX_1R)
 
 # ---------------------------------------------------------------- classic
 
@@ -2290,6 +2320,10 @@ ITEM_DRAW_BUFFERS = """            for (SignImage.Batch batch : image.itemBatche
             }"""
 ITEM_BUFFER_IMPORTS = "import com.mojang.blaze3d.vertex.PoseStack;\nimport net.minecraft.client.renderer.MultiBufferSource;\n"
 BUILT_IN_114 = "new BuiltInModel(model.getTransforms(), ItemOverrides.EMPTY, model.getParticleIcon())"
+# 1.15.2 で「横から光を受けるか」の引数が増えた。1.15 と 1.15.1 でも動くように、引数の数で選ぶ。
+# 絵は平らなアイテムと同じ光の当て方で描くので、増えた引数は false にする
+BUILT_IN_115 = ("Reflect.construct(BuiltInModel.class, model.getTransforms(), ItemOverrides.EMPTY, model.getParticleIcon(), Boolean.FALSE);\n"
+                "                if (replaced == null) replaced = Reflect.construct(BuiltInModel.class, model.getTransforms(), ItemOverrides.EMPTY, model.getParticleIcon())")
 
 write("item_static_1", "SignItems.java", item_static_source(
     "Minecraft 1.14 - 1.14.4", "EntityBlockRenderer", "import net.minecraft.client.renderer.EntityBlockRenderer;",
@@ -2297,7 +2331,7 @@ write("item_static_1", "SignItems.java", item_static_source(
 write("item_static_2", "SignItems.java", item_static_source(
     "Minecraft 1.15 - 1.15.2", "BlockEntityWithoutLevelRenderer", "import net.minecraft.client.renderer.BlockEntityWithoutLevelRenderer;",
     "ItemStack stack, PoseStack poseStack, MultiBufferSource buffers, int light, int overlay",
-    "stack, poseStack, buffers, light, overlay", ITEM_DRAW_BUFFERS, ITEM_BUFFER_IMPORTS, BUILT_IN_OLD))
+    "stack, poseStack, buffers, light, overlay", ITEM_DRAW_BUFFERS, ITEM_BUFFER_IMPORTS, BUILT_IN_115))
 write("item_static_3", "SignItems.java", item_static_source(
     "Minecraft 1.16 - 1.16.5", "BlockEntityWithoutLevelRenderer", "import net.minecraft.client.renderer.BlockEntityWithoutLevelRenderer;",
     "ItemStack stack, ItemTransforms.TransformType context, PoseStack poseStack, MultiBufferSource buffers, int light, int overlay",

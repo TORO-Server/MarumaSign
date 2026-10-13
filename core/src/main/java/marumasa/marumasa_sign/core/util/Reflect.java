@@ -1,6 +1,9 @@
 package marumasa.marumasa_sign.core.util;
 
+import java.lang.reflect.Constructor;
 import java.lang.reflect.Field;
+import java.lang.reflect.InvocationTargetException;
+import java.lang.reflect.Method;
 
 /**
  * 名前に頼らないリフレクション。
@@ -36,6 +39,44 @@ public final class Reflect {
             }
         }
         throw new IllegalStateException("No field holding the value in " + instance.getClass().getName());
+    }
+
+    // owner の public なメソッドのうち、引数の型が parameters と一致する最初のものを返す (戻り値の型は問わない)。
+    // 近いバージョンの間で、戻り値の型だけが違うメソッドを呼ぶのに使う
+    public static Method methodWithParameters(Class<?> owner, Class<?>... parameters) {
+        for (Method method : owner.getMethods()) {
+            if (java.util.Arrays.equals(method.getParameterTypes(), parameters)) return method;
+        }
+        throw new IllegalStateException("No method taking " + java.util.Arrays.toString(parameters) + " in " + owner.getName());
+    }
+
+    public static Object invoke(Method method, Object instance, Object... arguments) {
+        try {
+            return method.invoke(instance, arguments);
+        } catch (InvocationTargetException e) {
+            if (e.getCause() instanceof RuntimeException) throw (RuntimeException) e.getCause();
+            throw new IllegalStateException(e.getCause());
+        } catch (IllegalAccessException e) {
+            throw new IllegalStateException(e);
+        }
+    }
+
+    // 引数の数が arguments と同じ public なコンストラクタで作る。そのようなコンストラクタがなければ null。
+    // 近いバージョンの間で、引数の数が違うコンストラクタを呼ぶのに使う
+    @SuppressWarnings("unchecked")
+    public static <T> T construct(Class<T> type, Object... arguments) {
+        for (Constructor<?> constructor : type.getConstructors()) {
+            if (constructor.getParameterTypes().length != arguments.length) continue;
+            try {
+                return (T) constructor.newInstance(arguments);
+            } catch (InvocationTargetException e) {
+                if (e.getCause() instanceof RuntimeException) throw (RuntimeException) e.getCause();
+                throw new IllegalStateException(e.getCause());
+            } catch (ReflectiveOperationException e) {
+                throw new IllegalStateException(e);
+            }
+        }
+        return null;
     }
 
     public static void set(Field field, Object instance, Object value) {
