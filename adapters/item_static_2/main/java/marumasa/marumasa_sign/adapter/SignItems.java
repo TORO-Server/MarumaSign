@@ -92,7 +92,8 @@ final class SignItems {
             if (model == null || find(stack) == null) return model;
             BakedModel replaced = builtIn.get(model);
             if (replaced == null) {
-                replaced = new BuiltInModel(model.getTransforms(), ItemOverrides.EMPTY, model.getParticleIcon(), model.usesBlockLight());
+                replaced = Reflect.construct(BuiltInModel.class, model.getTransforms(), ItemOverrides.EMPTY, model.getParticleIcon(), Boolean.FALSE);
+                if (replaced == null) replaced = Reflect.construct(BuiltInModel.class, model.getTransforms(), ItemOverrides.EMPTY, model.getParticleIcon());
                 builtIn.put(model, replaced);
             }
             return replaced;

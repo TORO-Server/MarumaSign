@@ -171,6 +171,12 @@ python tools/verify/report.py
 Minecraft を起動せずに確認できるものもあります。
 
 ```bash
+# 配布する jar が、対応しているすべてのバージョンの Minecraft と正しくつながるかを確かめる
+# (1 つのビルドを近いバージョンでも使っているため、バージョン間の細かな違いをここで見つける)
+python tools/check_linkage.py
+```
+
+```bash
 # ゲーム内のウィンドウの見た目を PNG に書き出す
 ./gradlew :core:uiPreview
 # 3D モデルを PNG に描く (出力先, アニメーションの時刻, モデルのファイル...)
