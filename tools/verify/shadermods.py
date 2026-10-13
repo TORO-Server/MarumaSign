@@ -14,6 +14,7 @@ import re
 import shutil
 import urllib.parse
 import urllib.request
+import zipfile
 from pathlib import Path
 
 MODRINTH = "https://api.modrinth.com/v2"
@@ -64,20 +65,105 @@ def modrinth_version(project, loader, minecraft):
     return (releases or versions)[0]
 
 
-def modrinth_files(project, loader, minecraft, seen):
+def numbers(text):
+    """バージョンの文字列の先頭にある数字の並び。比較に使う。"""
+    match = re.match(r"(?:mc[\d.]+-)?v?(\d+(?:\.\d+)*)", text.strip())
+    return tuple(int(part) for part in match.group(1).split(".")) if match else ()
+
+
+def satisfies(version, spec):
+    """Fabric の書き方 (">=0.6.9" や "0.5.x" など) で指定された条件に合うかどうか。"""
+    for part in spec.split():
+        operator = re.match(r"[<>=~^]*", part).group(0)
+        wanted = part[len(operator):]
+        if wanted in ("*", ""):
+            continue
+        prefix = numbers(wanted.replace(".x", "").replace(".*", ""))
+        if "x" in wanted or "*" in wanted or operator in ("~", "^"):
+            # 先頭の数字が同じで、指定以上のもの
+            fixed = prefix[:-1] if operator in ("~", "^") and len(prefix) > 1 else prefix
+            if version[:len(fixed)] != fixed or (operator in ("~", "^") and version < prefix):
+                return False
+        elif operator == ">=" and version < prefix or operator == ">" and version <= prefix:
+            return False
+        elif operator == "<=" and version > prefix or operator == "<" and version >= prefix:
+            return False
+        elif operator in ("", "=") and version[:len(prefix)] != prefix:
+            return False
+    return True
+
+
+def in_range(version, spec):
+    """Forge / NeoForge の書き方 ("[0.3.1,)" など) で指定された範囲に入るかどうか。"""
+    match = re.match(r"\s*([\[\(])([^,\]\)]*),?([^\]\)]*)([\]\)])\s*$", spec)
+    if not match:
+        prefix = numbers(spec)
+        return not prefix or version[:len(prefix)] == prefix
+    low, high = numbers(match.group(2)), numbers(match.group(3))
+    if "," not in spec:
+        return version[:len(low)] == low
+    if low and (version < low or (match.group(1) == "(" and version == low)):
+        return False
+    if high and (version > high or (match.group(4) == ")" and version >= high)):
+        return False
+    return True
+
+
+def declared_requirements(jar):
+    """Mod の jar が、必要とする Mod について指定しているバージョンの条件。{Mod の ID: 判定する関数}"""
+    found = {}
+    try:
+        with zipfile.ZipFile(jar) as archive:
+            names = set(archive.namelist())
+            if "fabric.mod.json" in names:
+                depends = json.loads(archive.read("fabric.mod.json").decode("utf-8")).get("depends", {})
+                for mod, value in depends.items():
+                    specs = [str(item) for item in (value if isinstance(value, list) else [value])]
+                    found[mod] = lambda version, specs=specs: any(satisfies(version, spec) for spec in specs)
+            for name in ("META-INF/neoforge.mods.toml", "META-INF/mods.toml"):
+                if name in names:
+                    text = archive.read(name).decode("utf-8", errors="replace")
+                    for mod, spec in re.findall(r'modId\s*=\s*"([^"]+)"[^\[]*?versionRange\s*=\s*"([^"]*)"', text):
+                        found[mod] = lambda version, spec=spec: in_range(version, spec)
+    except (OSError, ValueError, zipfile.BadZipFile):
+        pass
+    return found
+
+
+def matching_version(project, loader, minecraft, requirements):
+    """jar の中の指定に合う、最も新しい版。指定がないか、合うものがなければ None。"""
+    slug = fetch_json(f"{MODRINTH}/project/{project}").get("slug", "")
+    accepts = requirements.get(slug)
+    if accepts is None:
+        return None
+    query = urllib.parse.urlencode({"loaders": json.dumps([loader]), "game_versions": json.dumps([minecraft])})
+    versions = fetch_json(f"{MODRINTH}/project/{project}/version?{query}")
+    matching = [version for version in versions if accepts(numbers(version.get("version_number", "")))]
+    releases = [version for version in matching if version.get("version_type") == "release"]
+    return (releases or matching or [None])[0]
+
+def modrinth_files(project, loader, minecraft, seen, cache_dir, version=None):
     """Mod と、それが必要とする Mod のファイル (名前, URL) を集める。"""
-    version = modrinth_version(project, loader, minecraft)
+    if version is None:
+        version = modrinth_version(project, loader, minecraft)
     if version is None:
         return None
     files = []
     primary = next((file for file in version["files"] if file.get("primary")), version["files"][0])
     files.append((primary["filename"], primary["url"]))
+    # 必要とする Mod の版は、jar の中の指定に合わせる (最新版同士だと合わないことがある)
+    download(primary["url"], cache_dir / primary["filename"])
+    requirements = declared_requirements(cache_dir / primary["filename"])
     for dependency in version.get("dependencies", []):
         target = dependency.get("project_id")
         if dependency.get("dependency_type") != "required" or not target or target in seen:
             continue
         seen.add(target)
-        required = modrinth_files(target, loader, minecraft, seen)
+        if dependency.get("version_id"):
+            chosen = fetch_json(f"{MODRINTH}/version/{dependency['version_id']}")
+        else:
+            chosen = matching_version(target, loader, minecraft, requirements)
+        required = modrinth_files(target, loader, minecraft, seen, cache_dir, chosen)
         if required is None:
             return None
         files += required
@@ -98,17 +184,17 @@ def optifine_file(minecraft):
     return entry["filename"], f"{OPTIFINE}/{minecraft}/{entry['type']}/{entry['patch']}"
 
 
-def resolve(loader, minecraft):
+def resolve(loader, minecraft, cache_dir):
     """影 Mod の構成を返す。この組み合わせで使える影 Mod がなければ None。
 
     戻り値: {"name": 影 Mod の名前, "mods": [(ファイル名, URL)], "config": 設定ファイルの名前, "pack": (ファイル名, URL)}
     """
     try:
         if loader in ("fabric", "neoforge"):
-            mods = modrinth_files("iris", loader, minecraft, {"iris"})
+            mods = modrinth_files("iris", loader, minecraft, {"iris"}, cache_dir)
             name, config = "Iris", "config/iris.properties"
         elif loader == "forge" and version_key(minecraft) >= (1, 16, 5):
-            mods = modrinth_files("oculus", loader, minecraft, {"oculus"})
+            mods = modrinth_files("oculus", loader, minecraft, {"oculus"}, cache_dir)
             name, config = "Oculus", "config/oculus.properties"
         elif loader == "forge":
             optifine = optifine_file(minecraft)
@@ -157,7 +243,7 @@ if __name__ == "__main__":
 
     for item in sys.argv[1:]:
         loader_name, minecraft_version = item.split(":")
-        result = resolve(loader_name, minecraft_version)
+        result = resolve(loader_name, minecraft_version, Path.home() / ".marumasign-verify" / "shadermods")
         if result is None:
             print(f"{item}: no shader mod")
         else:

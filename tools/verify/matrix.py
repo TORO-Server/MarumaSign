@@ -82,7 +82,7 @@ def main():
                         help="看板に表示して確かめるものの種類。1 回の起動で順に確かめる")
     parser.add_argument("--shaders", action="store_true",
                         help="影 Mod とシェーダーパックを入れた状態で確かめる。結果は「loader:version+shaders」として記録する")
-    parser.add_argument("--timeout", type=int, default=480)
+    parser.add_argument("--timeout", type=int, default=660)
     parser.add_argument("--root", default=str(verify.DEFAULT_ROOT))
     parser.add_argument("--libs", default=str(REPO / "dist" / "build" / "libs"),
                         help="確認する jar があるフォルダ。ビルドを続けながら確認するときは、コピーした先を指定する")
