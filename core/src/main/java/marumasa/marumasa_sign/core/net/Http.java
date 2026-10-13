@@ -26,8 +26,18 @@ public final class Http {
         return System.getProperty("marumasign.uploadUrl", "https://catbox.moe/user/api.php");
     }
 
-    private static String shortenEndpoint() {
-        return System.getProperty("marumasign.shortenUrl", "https://is.gd/create.php");
+    // URL 短縮サービス。先頭から順に試し、最初に成功したものを使う。
+    // どれも「URL を付けて GET すると、短縮した URL だけが本文で返る」形式
+    private static final String[] SHORTENERS = {
+            "https://is.gd/create.php?format=simple&url=",
+            "https://v.gd/create.php?format=simple&url=",
+            "https://tinyurl.com/api-create.php?url=",
+            "https://da.gd/s?url=",
+    };
+
+    private static String[] shorteners() {
+        final String override = System.getProperty("marumasign.shortenUrl");
+        return override == null ? SHORTENERS : new String[]{override + "?format=simple&url="};
     }
 
     private Http() {
@@ -143,12 +153,27 @@ public final class Http {
 
     // URL を短縮する
     public static String shorten(String url) throws IOException {
-        final HttpURLConnection connection = open(
-                shortenEndpoint() + "?format=simple&url=" + URLEncoder.encode(url, "UTF-8"));
+        IOException failure = null;
+        for (String service : shorteners()) {
+            try {
+                return shorten(service, url);
+            } catch (IOException e) {
+                // 次のサービスを試す
+                failure = e;
+            }
+        }
+        throw failure != null ? failure : new IOException("No URL shortener is available");
+    }
+
+    private static String shorten(String service, String url) throws IOException {
+        final HttpURLConnection connection = open(service + URLEncoder.encode(url, "UTF-8"));
         try {
             connection.setRequestMethod("GET");
             final String result = readText(connection);
-            if (!isHttpUrl(result)) throw new IOException("Unexpected response: " + result);
+            // 改行や空白を含むものは URL ではなくエラーメッセージ
+            if (!isHttpUrl(result) || result.length() > 64 || result.indexOf(' ') >= 0 || result.indexOf('\n') >= 0) {
+                throw new IOException("Unexpected response: " + result);
+            }
             return result;
         } finally {
             connection.disconnect();

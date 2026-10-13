@@ -99,7 +99,16 @@ public final class MarumaSign {
     // 次に開かれた看板の編集画面に、文字列を自動で書き込むよう予約する
     public static void requestWrite(String signText) {
         pendingWrite = signText;
-        platform.showMessage(Lang.get("text.write_mode"));
+        chat("text.write_mode");
+    }
+
+    // チャットの色。Mod の名前はオレンジ、本文は黄緑で表示する
+    private static final String CHAT_PREFIX = "§6[MarumaSign] §a";
+
+    // 選択中の言語でチャットにメッセージを表示する
+    public static void chat(String key) {
+        Lang.select(platform.languageCode());
+        platform.showMessage(CHAT_PREFIX + Lang.get(key));
     }
 
     public static boolean hasPendingWrite() {
@@ -112,7 +121,7 @@ public final class MarumaSign {
         pendingWrite = null;
         if (text == null) return null;
         final String[] lines = SignSpec.splitLines(text, platform.maxSignLineLength());
-        if (lines != null) platform.showMessage(Lang.get("text.write_done"));
+        if (lines != null) chat("text.write_done");
         return lines;
     }
 

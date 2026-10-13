@@ -29,6 +29,12 @@ PLAYER = "Tester"
 MANIFEST_URL = "https://piston-meta.mojang.com/mc/game/version_manifest_v2.json"
 
 
+# 一部の配布サーバーは既定の User-Agent を拒否する
+_opener = urllib.request.build_opener()
+_opener.addheaders = [("User-Agent", "MarumaSign-verify/1.0 (+https://github.com/TORO-Server/MarumaSign)")]
+urllib.request.install_opener(_opener)
+
+
 def log(message):
     print(f"[verify] {message}", flush=True)
 
@@ -265,6 +271,116 @@ def launcher_spec(minecraft, loader, loader_version):
     raise RuntimeError(f"Unsupported loader: {loader}")
 
 
+# ---------- LiteLoader ----------
+# ランチャーは LiteLoader を直接扱えないため、公式のバージョン情報から起動用のプロファイルを作る
+
+LITELOADER_VERSIONS_URL = "https://dl.liteloader.com/versions/versions.json"
+MAVEN_CENTRAL = "https://repo1.maven.org/maven2/"
+
+
+def file_md5(path):
+    import hashlib
+    return hashlib.md5(path.read_bytes()).hexdigest()
+
+
+def maven_path(name):
+    group, artifact, version = name.split(":")[:3]
+    return f"{group.replace('.', '/')}/{artifact}/{version}/{artifact}-{version}.jar"
+
+
+def fetch_library(main_dir, name, repositories):
+    """ライブラリをランチャーのフォルダに置く。SNAPSHOT は最新のものを取得する。"""
+    target = main_dir / "libraries" / maven_path(name)
+    if target.is_file():
+        return
+    group, artifact, version = name.split(":")[:3]
+    errors = []
+    for repository in repositories:
+        base = f"{repository.rstrip('/')}/{group.replace('.', '/')}/{artifact}/{version}/"
+        urls = [base + f"{artifact}-{version}.jar"]
+        if version.endswith("-SNAPSHOT"):
+            try:
+                with urllib.request.urlopen(base + "maven-metadata.xml", timeout=60) as response:
+                    metadata = response.read().decode("utf-8", "replace")
+                timestamp = re.search(r"<timestamp>([^<]+)</timestamp>", metadata)
+                build = re.search(r"<buildNumber>([^<]+)</buildNumber>", metadata)
+                if timestamp and build:
+                    resolved = version.replace("SNAPSHOT", f"{timestamp.group(1)}-{build.group(1)}")
+                    urls.insert(0, base + f"{artifact}-{resolved}.jar")
+            except OSError as error:
+                errors.append(f"{base}: {error}")
+        for url in urls:
+            try:
+                download(url, target)
+                return
+            except OSError as error:
+                errors.append(f"{url}: {error}")
+    raise RuntimeError(f"Could not download {name}:\n" + "\n".join(errors))
+
+
+def install_liteloader(main_dir, minecraft, base_command):
+    """LiteLoader の起動用プロファイルを作り、そのバージョン ID を返す。"""
+    versions = fetch_json(LITELOADER_VERSIONS_URL)["versions"]
+    if minecraft not in versions:
+        raise RuntimeError(f"LiteLoader does not support Minecraft {minecraft}")
+    entry = versions[minecraft]
+    stream = entry.get("snapshots") or entry.get("artefacts")
+    build = stream["com.mumfrey:liteloader"]["latest"]
+    repository = entry["repo"]["url"].replace("http://", "https://")
+
+    # バニラのプロファイルが必要なので、先にバニラを用意する
+    subprocess.run(base_command + ["start", "--dry", minecraft, "-u", PLAYER], capture_output=True)
+    vanilla = json.loads((main_dir / "versions" / minecraft / f"{minecraft}.json").read_text(encoding="utf-8"))
+
+    libraries = [{"name": f"com.mumfrey:liteloader:{build['version']}"}]
+    libraries += list(build.get("libraries", [])) + list(stream.get("libraries", []))
+    seen = set()
+    unique = []
+    for library in libraries:
+        if library["name"] in seen:
+            continue
+        seen.add(library["name"])
+        unique.append({"name": library["name"]})
+        if library["name"].startswith("com.mumfrey:liteloader:"):
+            target = main_dir / "libraries" / maven_path(library["name"])
+            if not target.is_file() or file_md5(target) != build["md5"]:
+                if build["version"].endswith("-SNAPSHOT"):
+                    # 実環境用 (難読化された名前) の jar は release という種別で配布されている
+                    base = f"{repository.rstrip('/')}/com/mumfrey/liteloader/{build['version']}/"
+                    with urllib.request.urlopen(base + "maven-metadata.xml", timeout=60) as response:
+                        metadata = response.read().decode("utf-8", "replace")
+                    timestamp = re.search(r"<timestamp>([^<]+)</timestamp>", metadata).group(1)
+                    number = re.search(r"<buildNumber>([^<]+)</buildNumber>", metadata).group(1)
+                    resolved = build["version"].replace("SNAPSHOT", f"{timestamp}-{number}")
+                    download(base + f"liteloader-{resolved}-release.jar", target)
+                else:
+                    # リリース版は Minecraft のバージョンごとのフォルダに置かれている
+                    download(f"{repository.rstrip('/')}/com/mumfrey/liteloader/{minecraft}/{build['file']}", target)
+                if file_md5(target) != build["md5"]:
+                    raise RuntimeError(f"Checksum mismatch: {target}")
+        else:
+            fetch_library(main_dir, library["name"], [
+                "https://libraries.minecraft.net/", library.get("url", MAVEN_CENTRAL), MAVEN_CENTRAL,
+                "https://repo.spongepowered.org/maven/",
+            ])
+
+    version_id = f"{minecraft}-LiteLoader"
+    profile = {
+        "id": version_id,
+        "inheritsFrom": minecraft,
+        "type": "release",
+        "time": vanilla.get("time", ""),
+        "releaseTime": vanilla.get("releaseTime", ""),
+        "mainClass": "net.minecraft.launchwrapper.Launch",
+        "minecraftArguments": vanilla["minecraftArguments"] + " --tweakClass " + build["tweakClass"],
+        "libraries": unique,
+    }
+    directory = main_dir / "versions" / version_id
+    directory.mkdir(parents=True, exist_ok=True)
+    (directory / f"{version_id}.json").write_text(json.dumps(profile, indent=2), encoding="utf-8")
+    return version_id
+
+
 OPTIONS = """\
 pauseOnLostFocus:false
 tutorialStep:none
@@ -289,8 +405,8 @@ def prepare_work_dir(work_dir, mod, lang):
     (work_dir / "options.txt").write_text(OPTIONS.format(lang=lang))
 
 
-def minecraft_window_box():
-    """Minecraft のウィンドウの位置を返す。見つからなければ None。"""
+def minecraft_windows():
+    """Minecraft のウィンドウを (ハンドル, 位置) の一覧で返す。"""
     import ctypes
     from ctypes import wintypes
 
@@ -306,11 +422,25 @@ def minecraft_window_box():
                 rect = wintypes.RECT()
                 user32.GetWindowRect(window, ctypes.byref(rect))
                 if rect.right - rect.left > 200:
-                    found.append((rect.left, rect.top, rect.right, rect.bottom))
+                    found.append((window, (rect.left, rect.top, rect.right, rect.bottom)))
         return True
 
     user32.EnumWindows(visit, 0)
-    return found[0] if found else None
+    return found
+
+
+def minecraft_window_box():
+    """Minecraft のウィンドウの位置を返す。見つからなければ None。"""
+    windows = minecraft_windows()
+    return windows[0][1] if windows else None
+
+
+def close_minecraft_window():
+    """ウィンドウの閉じるボタンを押したのと同じ方法で、ゲームを通常どおり終了させる。"""
+    import ctypes
+
+    for window, _ in minecraft_windows():
+        ctypes.windll.user32.PostMessageW(window, 0x0010, 0, 0)  # WM_CLOSE
 
 
 def grab_screen(path):
@@ -342,6 +472,34 @@ def scan_log(path):
     return findings
 
 
+def load_known_noise():
+    """Mod 由来でないと分かっている行の正規表現を読み込む。"""
+    patterns = []
+    for line in Path(__file__).with_name("known-noise.txt").read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if line and not line.startswith("#"):
+            patterns.append(re.compile(line))
+    return patterns
+
+
+def normalize(line):
+    """時刻や数値の違いを無視して比較できる形にする。"""
+    line = re.sub(r"^\[[^\]]*\d\d:\d\d:\d\d[^\]]*\]\s*", "", line)
+    return re.sub(r"\d+", "N", line)
+
+
+def unique(lines):
+    """同じ内容の行をまとめる。"""
+    seen = set()
+    result = []
+    for line in lines:
+        key = normalize(line)
+        if key not in seen:
+            seen.add(key)
+            result.append(line)
+    return result
+
+
 def find_client_log(work_dir):
     for candidate in (work_dir / "logs" / "latest.log", work_dir / "logs" / "fml-client-latest.log", work_dir / "output-client.log"):
         if candidate.is_file():
@@ -352,7 +510,9 @@ def find_client_log(work_dir):
 def run(args):
     root = Path(args.root)
     main_dir = root / "main"
-    name = f"{args.loader}-{args.minecraft}" + ("-nomod" if args.mod is None else "")
+    if args.baseline:
+        args.mod = None
+    name = f"{args.loader}-{args.minecraft}" + ("-baseline" if args.baseline else "")
     work_dir = root / "runs" / name
     result_dir = work_dir / "selftest"
     mod = Path(args.mod).resolve() if args.mod else None
@@ -365,8 +525,13 @@ def run(args):
     }
 
     host = MockHost()
-    spec = args.spec or launcher_spec(args.minecraft, args.loader, args.loader_version)
     base = ["portablemc", "--main-dir", str(main_dir), "--work-dir", str(work_dir), "--output", "human"]
+    if args.spec:
+        spec = args.spec
+    elif args.loader == "liteloader":
+        spec = install_liteloader(main_dir, args.minecraft, base)
+    else:
+        spec = launcher_spec(args.minecraft, args.loader, args.loader_version)
 
     # 先にクライアントのファイルを揃える (サーバー用の Java もここで手に入る)
     log(f"installing {spec}")
@@ -397,12 +562,14 @@ def run(args):
 
         deadline = time.time() + args.timeout
         joined_handled = False
+        joined_at = 0.0
         captured = False
         while time.time() < deadline:
             if client.poll() is not None:
                 break
             if server.joined.is_set() and not joined_handled:
                 joined_handled = True
+                joined_at = time.time()
                 log("player joined")
                 threading.Thread(target=server.on_join, daemon=True).start()
             if (result_dir / "result.txt").is_file() and not captured:
@@ -410,10 +577,21 @@ def run(args):
                 time.sleep(0.5)
                 if grab_screen(work_dir / "screenshot.png"):
                     result["screenshot"] = str(work_dir / "screenshot.png")
+            if args.baseline and joined_handled and time.time() - joined_at > 25:
+                # 基準の取得では、ワールドに入ってしばらくしたら終了する
+                result["detail"] = "baseline"
+                break
             time.sleep(0.5)
         else:
             result["detail"] = "Timed out"
 
+        if client.poll() is None and sys.platform == "win32":
+            # 終了時に出る警告も記録できるよう、まず通常の方法で閉じる
+            close_minecraft_window()
+            try:
+                client.wait(45)
+            except subprocess.TimeoutExpired:
+                pass
         if client.poll() is None:
             # クライアントが自分で終了しなかった
             subprocess.run(["taskkill", "/F", "/T", "/PID", str(client.pid)], capture_output=True)
@@ -435,9 +613,37 @@ def run(args):
 
     client_findings = scan_log(find_client_log(work_dir))
     result["client_log"] = str(find_client_log(work_dir))
-    result["client_findings"] = client_findings if client_findings is not None else ["(no client log)"]
-    result["server_findings"] = [line[:400] for line in server.lines if LEVEL_PATTERN.search(line) or "Exception" in line]
+    client_findings = unique(client_findings) if client_findings is not None else ["(no client log)"]
+    server_findings = unique(line[:400] for line in server.lines if LEVEL_PATTERN.search(line) or "Exception" in line)
     (work_dir / "server-output.log").write_text("\n".join(server.lines), encoding="utf-8")
+
+    # Mod を入れていない状態 (基準) でも出る警告は、ローダーや Minecraft 自体のもの
+    baseline_file = root / "baselines" / f"{args.loader}-{args.minecraft}.json"
+    if args.baseline:
+        result["ok"] = server.joined.is_set()
+        baseline_file.parent.mkdir(parents=True, exist_ok=True)
+        baseline_file.write_text(json.dumps({
+            "client": sorted({normalize(line) for line in client_findings}),
+            "server": sorted({normalize(line) for line in server_findings}),
+        }, indent=2, ensure_ascii=False), encoding="utf-8")
+        result["baseline_client_count"] = len(client_findings)
+        result["baseline_server_count"] = len(server_findings)
+    elif baseline_file.is_file():
+        baseline = json.loads(baseline_file.read_text(encoding="utf-8"))
+        noise = load_known_noise()
+
+        def is_new(line, known):
+            return normalize(line) not in known and not any(pattern.search(line) for pattern in noise)
+
+        result["baseline"] = True
+        result["new_client_findings"] = [line for line in client_findings if is_new(line, baseline["client"])]
+        result["new_server_findings"] = [line for line in server_findings if is_new(line, baseline["server"])]
+        result["clean"] = result["ok"] and not result["new_client_findings"] and not result["new_server_findings"]
+    else:
+        result["baseline"] = False
+        result["client_findings"] = client_findings
+        result["server_findings"] = server_findings
+
     (work_dir / "result.json").write_text(json.dumps(result, indent=2, ensure_ascii=False), encoding="utf-8")
     return result
 
@@ -449,6 +655,8 @@ def main():
     parser.add_argument("--loader-version", default="")
     parser.add_argument("--spec", default="", help="ランチャーに渡すバージョン指定を直接指定する")
     parser.add_argument("--mod", default=None, help="mods フォルダに入れるファイル。省略すると Mod なしで起動する")
+    parser.add_argument("--baseline", action="store_true",
+                        help="Mod を入れずに起動し、ローダーや Minecraft 自体が出す警告を基準として記録する")
     parser.add_argument("--image", default=str(REPO / "tools" / "verify" / "test-image.png"))
     parser.add_argument("--lang", default="en_us")
     parser.add_argument("--port", type=int, default=25570)
@@ -458,7 +666,7 @@ def main():
 
     result = run(args)
     print(json.dumps(result, indent=2, ensure_ascii=False))
-    sys.exit(0 if result["ok"] else 1)
+    sys.exit(0 if result.get("clean", result["ok"]) else 1)
 
 
 if __name__ == "__main__":

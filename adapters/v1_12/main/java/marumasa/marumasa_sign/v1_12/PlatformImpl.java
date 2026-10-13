@@ -6,6 +6,7 @@ import net.minecraft.client.gui.GuiScreen;
 import net.minecraft.client.renderer.texture.DynamicTexture;
 import net.minecraft.client.settings.KeyBinding;
 import net.minecraft.init.Items;
+import net.minecraft.realms.RealmsSharedConstants;
 import net.minecraft.util.ResourceLocation;
 import net.minecraft.util.text.TextComponentString;
 
@@ -33,7 +34,7 @@ final class PlatformImpl implements Platform {
 
     @Override
     public String minecraftVersion() {
-        return mc.getVersion();
+        return RealmsSharedConstants.VERSION_STRING;
     }
 
     @Override

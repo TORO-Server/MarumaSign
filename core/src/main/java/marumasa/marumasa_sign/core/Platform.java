@@ -23,7 +23,7 @@ public interface Platform {
     // クライアントのメインスレッドで実行する
     void execute(Runnable task);
 
-    // チャット欄にクライアント側だけのメッセージを表示する
+    // チャット欄にクライアント側だけのメッセージを表示する (§ による色指定を含む)
     void showMessage(String message);
 
     // ワールドに入っているかどうか

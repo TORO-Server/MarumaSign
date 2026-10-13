@@ -1,0 +1,10 @@
+# Mod を入れていなくても Minecraft 本体やローダーが出す、警告・エラー扱いの行。
+# 基準 (Mod なしでの起動) との差分で大半は除外できるが、基準側では通らない経路
+# (ゲームの正常終了など) で出るものだけをここに書く。
+# 1 行に 1 つの正規表現。なぜ Mod 由来でないと言えるのかを必ず添えること。
+
+# Minecraft 1.12.2 以前: サウンドライブラリが終了時に必ず WARN で出す署名
+Author: Paul Lamb, www\.paulscode\.com
+
+# 検証ではクライアントを一方的に終了させるため、サーバー側に切断の例外が記録される (INFO)
+lost connection: Internal Exception: java\.io\.IOException

@@ -16,6 +16,8 @@ public final class Lang {
     private static final String DEFAULT_LANGUAGE = "en_us";
 
     private static final Properties fallback = load(DEFAULT_LANGUAGE);
+    // チャットに表示するメッセージの、全言語分の翻訳
+    private static final Properties chat = load("chat");
     private static Properties current = fallback;
     private static String currentCode = DEFAULT_LANGUAGE;
 
@@ -44,12 +46,20 @@ public final class Lang {
         if (code.equals(currentCode)) return;
         currentCode = code;
         final Properties loaded = load(code);
-        current = loaded != null ? loaded : fallback;
+        // 画面の翻訳がない言語でも、チャットのメッセージだけは chat から引けるように空の表にする
+        current = loaded != null ? loaded : new Properties();
     }
 
     public static synchronized String get(String key) {
         String value = current.getProperty(key);
+        if (value == null) value = chat.getProperty(currentCode + "." + key);
+        if (value == null) {
+            // 翻訳がない言語は、近い言語の翻訳を使う
+            final String alias = chat.getProperty("alias." + currentCode);
+            if (alias != null) value = chat.getProperty(alias + "." + key);
+        }
         if (value == null) value = fallback.getProperty(key);
+        if (value == null) value = chat.getProperty(DEFAULT_LANGUAGE + "." + key);
         return value != null ? value : key;
     }
 
