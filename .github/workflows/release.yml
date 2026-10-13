@@ -28,21 +28,16 @@ jobs:
       - name: Make gradle wrapper executable
         run: chmod +x gradlew
 
+      # 対応するすべてのバージョンの Minecraft を取得するため、時間がかかる
       - name: Build with Gradle
-        run: ./gradlew build
-
-      - name: Get version from gradle.properties
-        id: get_version
-        run: |
-          VERSION=$(grep "mod_version" gradle.properties | cut -d'=' -f2 | tr -d '[:space:]')
-          echo "version=${VERSION}" >> $GITHUB_OUTPUT
-        shell: bash
+        run: ./gradlew :dist:assemble
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           files: |
-            build/libs/marumasa_sign-${{ steps.get_version.outputs.version }}.jar
+            dist/build/libs/*.jar
+            dist/build/libs/*.litemod
           draft: false
           prerelease: false
         env:
