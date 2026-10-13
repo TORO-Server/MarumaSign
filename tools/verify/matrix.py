@@ -16,6 +16,8 @@ import sys
 from pathlib import Path
 from types import SimpleNamespace
 
+import shadermods
+
 import verify
 
 REPO = Path(__file__).resolve().parents[2]
@@ -60,10 +62,12 @@ MEDIA = {
 }
 
 
-def run_one(root, loader, minecraft, loader_version, mod, baseline, timeout, media=("image",), shaders=False):
+def run_one(root, loader, minecraft, loader_version, mod, baseline, timeout, media=("image",), shaders=False,
+            shader_pack=None, shader_mod=None):
     args = SimpleNamespace(
         minecraft=minecraft, loader=loader, loader_version=loader_version, spec="",
-        mod=None if baseline else str(mod), baseline=baseline, shaders=shaders,
+        mod=None if baseline else str(mod), baseline=baseline, shaders=shaders, shader_pack=shader_pack,
+        shader_mod=shader_mod,
         image="|".join(str(REPO / "tools" / "verify" / MEDIA[kind]) for kind in media), lang="en_us",
         port=25570, timeout=timeout, root=str(root),
     )
@@ -82,6 +86,11 @@ def main():
                         help="看板に表示して確かめるものの種類。1 回の起動で順に確かめる")
     parser.add_argument("--shaders", action="store_true",
                         help="影 Mod とシェーダーパックを入れた状態で確かめる。結果は「loader:version+shaders」として記録する")
+    parser.add_argument("--shader-pack", default=shadermods.SHADER_PACK,
+                        help="--shaders で使うシェーダーパック (Modrinth での名前)。"
+                             "既定以外を指定すると「loader:version+shaders:名前」として記録する")
+    parser.add_argument("--shader-mod", choices=["optifine"], default=None,
+                        help="--shaders で使う影 Mod を、ローダーごとの既定のものから変える (Forge 1.16.5 以降で OptiFine を使う)")
     parser.add_argument("--timeout", type=int, default=660)
     parser.add_argument("--root", default=str(verify.DEFAULT_ROOT))
     parser.add_argument("--libs", default=str(REPO / "dist" / "build" / "libs"),
@@ -89,6 +98,8 @@ def main():
     args = parser.parse_args()
 
     root = Path(args.root)
+    variant = shadermods.variant(args.shader_pack, args.shader_mod)
+    suffix = "" if not args.shaders else "+shaders" + (":" + variant if variant else "")
     summary_file = root / "summary.json"
     summary = json.loads(summary_file.read_text(encoding="utf-8")) if summary_file.is_file() else {}
 
@@ -97,8 +108,7 @@ def main():
         key = f"{loader}:{minecraft}"
         if args.only and key not in args.only:
             continue
-        if args.shaders:
-            key += "+shaders"
+        key += suffix
         selected.add(key)
         if not mod.is_file():
             summary[key] = {"ok": False, "clean": False, "detail": f"missing {mod.name}"}
@@ -110,21 +120,24 @@ def main():
                 and set(args.media) <= set(previous.get("media", []))):
             continue
 
-        baseline_file = root / "baselines" / (f"{loader}-{minecraft}" + ("-shaders" if args.shaders else "") + ".json")
+        baseline_file = root / "baselines" / (f"{loader}-{minecraft}" + suffix.replace("+", "-").replace(":", "-") + ".json")
         if args.rebaseline or not baseline_file.is_file():
             verify.log(f"=== baseline {key}")
-            baseline = run_one(root, loader, minecraft, loader_version, mod, True, args.timeout, shaders=args.shaders)
+            baseline = run_one(root, loader, minecraft, loader_version, mod, True, args.timeout, shaders=args.shaders,
+                               shader_pack=args.shader_pack, shader_mod=args.shader_mod)
             if not baseline.get("ok"):
                 summary[key] = {"ok": False, "clean": False, "detail": "baseline failed: " + str(baseline.get("detail"))[:300]}
                 summary_file.write_text(json.dumps(summary, indent=2, ensure_ascii=False), encoding="utf-8")
                 continue
 
         verify.log(f"=== verify {key}")
-        result = run_one(root, loader, minecraft, loader_version, mod, False, args.timeout, args.media, args.shaders)
+        result = run_one(root, loader, minecraft, loader_version, mod, False, args.timeout, args.media, args.shaders,
+                             args.shader_pack, args.shader_mod)
         if not result.get("clean"):
             # 他の処理と重なって時間切れになることがあるので、1 回だけやり直す
             verify.log(f"=== retry {key} ({str(result.get('detail'))[:80]})")
-            result = run_one(root, loader, minecraft, loader_version, mod, False, args.timeout, args.media, args.shaders)
+            result = run_one(root, loader, minecraft, loader_version, mod, False, args.timeout, args.media, args.shaders,
+                             args.shader_pack, args.shader_mod)
         summary[key] = {
             "ok": bool(result.get("ok")),
             "clean": bool(result.get("clean")),
@@ -136,6 +149,8 @@ def main():
             "mod": mod.name,
             "mod_sha256": digest,
             "media": list(args.media),
+            "shader_mod": result.get("shader_mod"),
+            "shader_pack": result.get("shader_pack"),
             "new_client_findings": result.get("new_client_findings", [])[:8],
             "new_server_findings": result.get("new_server_findings", [])[:8],
         }

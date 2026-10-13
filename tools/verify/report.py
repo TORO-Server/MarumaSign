@@ -21,6 +21,15 @@ def version_key(version):
 
 
 MEDIA_NAMES = {"image": "画像", "model": "3D モデル", "video": "動画"}
+# シェーダーパックの、表に書く名前
+PACK_NAMES = {
+    "bsl-shaders": "BSL",
+    "complementary-reimagined": "Complementary Reimagined",
+    "complementary-unbound": "Complementary Unbound",
+    "sildurs-vibrant-shaders": "Sildur's Vibrant",
+    "makeup-ultra-fast-shaders": "MakeUp Ultra Fast",
+    "photon-shader": "Photon",
+}
 
 
 def cell(entry, digest):
@@ -88,22 +97,26 @@ def main():
     for minecraft in sorted((key for key in supported if isinstance(key, str)), key=version_key, reverse=True):
         cells = []
         for loader in LOADERS:
-            entry = summary.get(f"{loader}:{minecraft}+shaders")
-            text = cell(entry, supported.get((minecraft, loader))) if loader in supported[minecraft] else ""
-            if text and entry.get("detail"):
-                # どの影 Mod で確認したかを添える
-                name = re.search(r"shaders \(([^)]*)\)", entry["detail"])
-                text += f" ({name.group(1)})" if name else ""
-            cells.append(text)
+            # シェーダーパックごとの結果を、1 つのマスにまとめる
+            prefix = f"{loader}:{minecraft}+shaders"
+            parts = []
+            for key in sorted(key for key in summary if key == prefix or key.startswith(prefix + ":")):
+                entry = summary[key]
+                text = cell(entry, supported.get((minecraft, loader))) if loader in supported[minecraft] else ""
+                if not text:
+                    continue
+                pack = entry.get("shader_pack") or "bsl-shaders"
+                parts.append(f"{entry.get('shader_mod') or '?'} + {PACK_NAMES.get(pack, pack)}: {text}")
+            cells.append("<br>".join(parts))
         if any(cells):
             shader_rows.append(f"| {minecraft} | " + " | ".join(cells) + " |")
     if shader_rows:
         lines += [
             "## 影 Mod を入れた状態",
             "",
-            "影 Mod (シェーダーを使えるようにする Mod) とシェーダーパック (BSL Shaders) を入れて、同じ確認を行った結果です。",
-            "影 Mod は、Fabric と NeoForge では Iris (と Sodium)、Forge 1.16.5 以降では Oculus (と Rubidium / Embeddium)、",
-            "Forge 1.12.2 以前では OptiFine を使っています。空欄は、確認していない組み合わせです。",
+            "影 Mod (シェーダーを使えるようにする Mod) とシェーダーパックを入れて、同じ確認を行った結果です。",
+            "マスの中は「影 Mod + シェーダーパック: 結果」です。",
+            "Iris は Sodium と、Oculus は Rubidium または Embeddium と一緒に入れています。空欄は、確認していない組み合わせです。",
             "シェーダーは絵にも影や空の色を付けるので、色そのものではなく、絵が正しい場所に正しい向きで写っていることを確認しています。",
             "",
             "| Minecraft | " + " | ".join(LOADER_NAMES[loader] for loader in LOADERS) + " |",

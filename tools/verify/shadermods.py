@@ -184,16 +184,38 @@ def optifine_file(minecraft):
     return entry["filename"], f"{OPTIFINE}/{minecraft}/{entry['type']}/{entry['patch']}"
 
 
-def resolve(loader, minecraft, cache_dir):
+def pack_version(pack, loader, minecraft):
+    """シェーダーパックの、指定したバージョン向けの最新版。その表記がなければ、パックの最新版。"""
+    version = modrinth_version(pack, loader, minecraft)
+    if version is None:
+        # シェーダーパックは Minecraft のバージョンにあまり依存しないので、対応表にないだけのことが多い
+        query = urllib.parse.urlencode({"loaders": json.dumps([loader])})
+        versions = fetch_json(f"{MODRINTH}/project/{pack}/version?{query}")
+        releases = [item for item in versions if item.get("version_type") == "release"]
+        version = (releases or versions or [None])[0]
+    return version
+
+
+def variant(pack_slug=None, shader_mod=None):
+    """既定と違う構成で確認するときに、結果の名前に付ける文字列。既定どおりなら空。"""
+    parts = [shader_mod or "", "" if (pack_slug or SHADER_PACK) == SHADER_PACK else pack_slug]
+    return "-".join(part for part in parts if part)
+
+
+def resolve(loader, minecraft, cache_dir, pack_slug=SHADER_PACK, shader_mod=None):
     """影 Mod の構成を返す。この組み合わせで使える影 Mod がなければ None。
+
+    shader_mod に "optifine" を指定すると、Forge 1.16.5 以降でも OptiFine を使う。
 
     戻り値: {"name": 影 Mod の名前, "mods": [(ファイル名, URL)], "config": 設定ファイルの名前, "pack": (ファイル名, URL)}
     """
     try:
+        if shader_mod == "optifine" and loader != "forge":
+            return None
         if loader in ("fabric", "neoforge"):
             mods = modrinth_files("iris", loader, minecraft, {"iris"}, cache_dir)
             name, config = "Iris", "config/iris.properties"
-        elif loader == "forge" and version_key(minecraft) >= (1, 16, 5):
+        elif loader == "forge" and version_key(minecraft) >= (1, 16, 5) and shader_mod != "optifine":
             mods = modrinth_files("oculus", loader, minecraft, {"oculus"}, cache_dir)
             name, config = "Oculus", "config/oculus.properties"
         elif loader == "forge":
@@ -204,10 +226,10 @@ def resolve(loader, minecraft, cache_dir):
             return None
         if not mods:
             return None
-        pack = modrinth_version(SHADER_PACK, "optifine" if name == "OptiFine" else "iris", minecraft)
+        pack = pack_version(pack_slug, "optifine" if name == "OptiFine" else "iris", minecraft)
         if pack is None:
             return None
-        return {"name": name, "mods": mods, "config": config,
+        return {"name": name, "mods": mods, "config": config, "pack_slug": pack_slug,
                 "pack": (pack["files"][0]["filename"], pack["files"][0]["url"])}
     except OSError:
         return None
@@ -241,9 +263,10 @@ def is_active(log_text):
 if __name__ == "__main__":
     import sys
 
+    # 引数: loader:version または loader:version:シェーダーパックの名前 または loader:version:シェーダーパックの名前:optifine
     for item in sys.argv[1:]:
-        loader_name, minecraft_version = item.split(":")
-        result = resolve(loader_name, minecraft_version, Path.home() / ".marumasign-verify" / "shadermods")
+        loader_name, minecraft_version, *rest = item.split(":")
+        result = resolve(loader_name, minecraft_version, Path.home() / ".marumasign-verify" / "shadermods", *rest)
         if result is None:
             print(f"{item}: no shader mod")
         else:
