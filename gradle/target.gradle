@@ -131,6 +131,32 @@ dependencies {
     implementation project(':core')
 }
 
+// Fabric 用のメタデータ。統合 jar の中に入れ子で入り、対応するバージョンのときだけ読み込まれる。
+// ビルドツールが設定時にこのファイルを読むため、タスクではなくその場で書き出す
+if (spec.loaders.fabric != null) {
+    def versions = spec.loaders.fabric.versions
+    def label = versions.size() == 1 ? versions[0] : "${versions.first()} - ${versions.last()}"
+    def metadataDir = layout.buildDirectory.dir('generated/fabric-resources').get().asFile
+    def metadata = groovy.json.JsonOutput.prettyPrint(groovy.json.JsonOutput.toJson([
+            schemaVersion: 1,
+            id           : "marumasa_sign_${spec.name}".toString(),
+            version      : project.version.toString(),
+            name         : "MarumaSign (${label})".toString(),
+            description  : "MarumaSign for Minecraft ${label}.".toString(),
+            license      : 'MIT',
+            environment  : 'client',
+            entrypoints  : [client: ['marumasa.marumasa_sign.adapter.FabricEntry']],
+            depends      : [marumasa_sign: '*', minecraft: versions],
+            custom       : [modmenu: [parent: 'marumasa_sign', badges: ['library']]],
+    ])) + '\n'
+    def metadataFile = new File(metadataDir, 'fabric.mod.json')
+    if (!metadataFile.exists() || metadataFile.getText('UTF-8') != metadata) {
+        metadataDir.mkdirs()
+        metadataFile.setText(metadata, 'UTF-8')
+    }
+    sourceSets.fabric.resources.srcDir(metadataDir)
+}
+
 jar {
     enabled = false
 }

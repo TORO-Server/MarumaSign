@@ -36,7 +36,7 @@ public final class Adapter {
         active = true;
 
         // キーバインド登録 (48 は B キー)
-        openMenu = new KeyBinding("key." + MarumaSign.MOD_ID + ".open_menu", 48, "key.categories.misc");
+        openMenu = new KeyBinding("MarumaSign", 48, "key.categories.misc");
         mc.gameSettings.keyBindings = ArrayUtils.add(mc.gameSettings.keyBindings, openMenu);
         // 保存されているキーの割り当てを読み直す
         mc.gameSettings.loadOptions();

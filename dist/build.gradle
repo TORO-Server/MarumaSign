@@ -100,6 +100,39 @@ targets.each { target ->
     }
 }
 
+// Fabric は jar の中の jar を扱えるので、バージョンごとの実装をそのまま同梱し、
+// 実行中のバージョンに合うものだけを Fabric Loader に選ばせる
+def fabricJars = [:]
+targets.each { target ->
+    if (target.loaders.fabric == null) return
+    fabricJars["marumasa_sign-fabric-${target.name}.jar".toString()] =
+            project(":targets:${target.name}").tasks.named('remapFabricJar')
+}
+
+def generateFabricMetadata = tasks.register('generateFabricMetadata') {
+    def outputDir = layout.buildDirectory.dir('generated/fabric')
+    def json = groovy.json.JsonOutput.prettyPrint(groovy.json.JsonOutput.toJson([
+            schemaVersion: 1,
+            id           : 'marumasa_sign',
+            version      : project.version.toString(),
+            name         : 'MarumaSign',
+            description  : 'Display images on signs.',
+            authors      : ['marumasa'],
+            contact      : [repo: 'https://github.com/TORO-Server/MarumaSign'],
+            license      : 'MIT',
+            icon         : 'assets/marumasa_sign/icon.png',
+            environment  : 'client',
+            jars         : fabricJars.keySet().sort().collect { [file: "META-INF/jars/${it}".toString()] },
+    ]))
+    inputs.property('json', json)
+    outputs.dir(outputDir)
+    doLast {
+        def file = new File(outputDir.get().asFile, 'fabric.mod.json')
+        file.parentFile.mkdirs()
+        file.setText(json + '\n', 'UTF-8')
+    }
+}
+
 def generateTable = tasks.register('generateTable') {
     def lines = tableLines.sort()
     def outputDir = layout.buildDirectory.dir('generated/table')
@@ -123,10 +156,17 @@ def universalJar = tasks.register('universalJar', Jar) {
     from(project(':bootstrap').sourceSets.main.output)
     relocateTasks.each { from(it) }
     from(generateTable)
+    from(generateFabricMetadata)
+    fabricJars.each { name, task ->
+        from(task.flatMap { it.archiveFile }) {
+            into 'META-INF/jars'
+            rename { name }
+        }
+    }
 
     from('src/main/resources') {
         inputs.properties(resourceProperties)
-        filesMatching(['mcmod.info', 'fabric.mod.json', 'META-INF/mods.toml', 'META-INF/neoforge.mods.toml']) {
+        filesMatching(['mcmod.info', 'META-INF/mods.toml', 'META-INF/neoforge.mods.toml']) {
             expand(resourceProperties)
         }
     }
