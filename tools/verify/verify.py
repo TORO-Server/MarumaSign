@@ -348,22 +348,30 @@ def install_liteloader(main_dir, minecraft, base_command):
         if library["name"].startswith("com.mumfrey:liteloader:"):
             target = main_dir / "libraries" / maven_path(library["name"])
             if not target.is_file() or file_md5(target) != build["md5"]:
+                # 配布の形式がバージョンによって違うので、候補を順に試してチェックサムが合うものを使う。
+                # 実環境用 (難読化された名前) の jar は release という種別になっていることが多い
+                base = f"{repository.rstrip('/')}/com/mumfrey/liteloader/{build['version']}/"
+                names = [build["version"]]
                 if build["version"].endswith("-SNAPSHOT"):
-                    # 実環境用 (難読化された名前) の jar は release という種別で配布されている
-                    base = f"{repository.rstrip('/')}/com/mumfrey/liteloader/{build['version']}/"
                     with urllib.request.urlopen(base + "maven-metadata.xml", timeout=60) as response:
                         metadata = response.read().decode("utf-8", "replace")
                     timestamp = re.search(r"<timestamp>([^<]+)</timestamp>", metadata).group(1)
                     number = re.search(r"<buildNumber>([^<]+)</buildNumber>", metadata).group(1)
-                    resolved = build["version"].replace("SNAPSHOT", f"{timestamp}-{number}")
-                    download(base + f"liteloader-{resolved}-release.jar", target)
-                elif entry["repo"].get("type") == "m2":
-                    download(f"{repository.rstrip('/')}/{maven_path(library['name'])}", target)
+                    names.insert(0, build["version"].replace("SNAPSHOT", f"{timestamp}-{number}"))
+                candidates = []
+                for name in names:
+                    candidates += [base + f"liteloader-{name}-release.jar", base + f"liteloader-{name}.jar"]
+                # 古いリリース版は Minecraft のバージョンごとのフォルダに置かれている
+                candidates.append(f"{repository.rstrip('/')}/com/mumfrey/liteloader/{minecraft}/{build['file']}")
+                for url in candidates:
+                    try:
+                        download(url, target)
+                    except OSError:
+                        continue
+                    if file_md5(target) == build["md5"]:
+                        break
                 else:
-                    # 古いリリース版は Minecraft のバージョンごとのフォルダに置かれている
-                    download(f"{repository.rstrip('/')}/com/mumfrey/liteloader/{minecraft}/{build['file']}", target)
-                if file_md5(target) != build["md5"]:
-                    raise RuntimeError(f"Checksum mismatch: {target}")
+                    raise RuntimeError(f"No LiteLoader download matches the official checksum for {minecraft}")
         else:
             fetch_library(main_dir, library["name"], [
                 "https://libraries.minecraft.net/", library.get("url", MAVEN_CENTRAL), MAVEN_CENTRAL,

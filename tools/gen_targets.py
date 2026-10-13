@@ -17,9 +17,9 @@ def legacy_sources(era, forge="legacy/forge"):
     return {"main": ["legacy/main", f"{era}/main"], "forge": [forge], "liteloader": ["legacy/liteloader"]}
 
 
-def modern_sources(family, era):
-    """Minecraft 1.14 以降の世代で使うソースフォルダ。入口はどのバージョンでも共通。"""
-    return {"main": [f"{family}/main", f"{era}/main"], "fabric": ["common/fabric"], "forge": ["common/forge"],
+def modern_sources(*layers):
+    """Minecraft 1.14 以降の世代で使うソースフォルダ。共通のものから順に重ねる。入口はどのバージョンでも共通。"""
+    return {"main": [f"{layer}/main" for layer in layers], "fabric": ["common/fabric"], "forge": ["common/forge"],
             "neoforge": ["common/neoforge"]}
 
 
@@ -31,13 +31,15 @@ ERAS = {
     "v1_10": {"sources": legacy_sources("v1_10")},
     "v1_11": {"sources": legacy_sources("v1_11")},
     "v1_12": {"sources": legacy_sources("v1_12")},
-    "v26_1": {"sources": modern_sources("v26", "v26_1")},
-    "v26_2": {"sources": modern_sources("v26", "v26_2")},
-    "v26_3": {"sources": modern_sources("v26", "v26_3")},
+    "v1_21_9": {"sources": modern_sources("renderstate", "v1_21_9")},
+    "v26_1": {"sources": modern_sources("renderstate", "v26", "v26_1")},
+    "v26_2": {"sources": modern_sources("renderstate", "v26", "v26_2")},
+    "v26_3": {"sources": modern_sources("renderstate", "v26", "v26_3")},
 }
 
 # (Minecraft, 世代, マッピング, Fabric Loader, Forge, NeoForge)
 MODERN = [
+    ("1.21.11", "v1_21_9", "mojmap", "0.19.5", "61.2.3", "21.11.45"),
     ("26.1", "v26_1", "none", "0.19.5", "62.0.9", "26.1.0.19-beta"),
     ("26.1.1", "v26_1", "none", "0.19.5", "63.0.2", "26.1.1.15-beta"),
     ("26.1.2", "v26_1", "none", "0.19.5", "64.1.4", "26.1.2.116"),

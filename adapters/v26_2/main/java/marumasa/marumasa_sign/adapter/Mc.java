@@ -3,8 +3,8 @@ package marumasa.marumasa_sign.adapter;
 import com.mojang.blaze3d.platform.InputConstants;
 import net.minecraft.client.KeyMapping;
 import net.minecraft.client.Minecraft;
-import net.minecraft.client.gui.components.ChatComponent;
 import net.minecraft.client.gui.screens.Screen;
+import net.minecraft.network.chat.Component;
 import net.minecraft.world.level.block.entity.BlockEntityType;
 import net.minecraft.world.level.block.entity.SignBlockEntity;
 import net.minecraft.world.level.block.entity.BlockEntityTypes;
@@ -29,8 +29,8 @@ final class Mc {
         mc.gui.setScreen(screen);
     }
 
-    static ChatComponent chat(Minecraft mc) {
-        return mc.gui.hud.getChat();
+    static void chat(Minecraft mc, Component message) {
+        mc.gui.hud.getChat().addClientSystemMessage(message);
     }
 
     static KeyMapping newKey(String name, int keyCode) {

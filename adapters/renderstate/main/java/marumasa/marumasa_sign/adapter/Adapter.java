@@ -13,7 +13,7 @@ import java.util.TimerTask;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
- * Minecraft 26.x 向けの実装の入口。バージョンによって違う部分は Mc クラスにまとめてある。
+ * Minecraft 1.21.9 以降向けの実装の入口。バージョンによって違う部分は Mc クラスにまとめてある。
  * ローダーの API を使わずに済むよう、タイマーから定期的にメインスレッドへ処理を渡している。
  */
 public final class Adapter {
@@ -65,7 +65,7 @@ public final class Adapter {
         }
         if (!active) return;
 
-        SignRendererWrapper.install(mc);
+        SignRendererBase.install(mc);
         MarumaSign.tick();
 
         while (openMenu.consumeClick()) {
