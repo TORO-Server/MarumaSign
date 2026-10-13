@@ -1,0 +1,18 @@
+[
+  {
+    "name": "mc1_12_2",
+    "era": "v1_12",
+    "minecraft": "1.12.2",
+    "mappings": "mcp:stable:39-1.12",
+    "loaders": {
+      "forge": {
+        "loader": "14.23.5.2860",
+        "versions": ["1.12.2"]
+      },
+      "liteloader": {
+        "loader": "1.12.2-SNAPSHOT",
+        "versions": ["1.12.2"]
+      }
+    }
+  }
+]

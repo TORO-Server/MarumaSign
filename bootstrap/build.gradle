@@ -1,0 +1,40 @@
+plugins {
+    id 'java'
+}
+
+// 各ローダーが Mod を見つけるための入口クラスだけを置くモジュール。
+// ローダーのアノテーションは stubs に最小限の定義を置き、コンパイルにだけ使う (jar には入れない)。
+sourceSets {
+    stubs
+}
+
+repositories {
+    mavenCentral()
+}
+
+dependencies {
+    compileOnly sourceSets.stubs.output
+    compileOnly project(':core')
+    compileOnly 'org.apache.logging.log4j:log4j-api:2.0-beta9'
+}
+
+tasks.withType(JavaCompile).configureEach {
+    options.release = 8
+}
+
+// ソースに埋め込むバージョン情報
+def generatedDir = layout.buildDirectory.dir('generated/bootinfo')
+def generateBootInfo = tasks.register('generateBootInfo') {
+    def modVersion = project.version.toString()
+    def outputDir = generatedDir
+    inputs.property('version', modVersion)
+    outputs.dir(outputDir)
+    doLast {
+        def file = new File(outputDir.get().asFile, 'marumasa/marumasa_sign/boot/BootInfo.java')
+        file.parentFile.mkdirs()
+        file.setText("package marumasa.marumasa_sign.boot;\n\npublic final class BootInfo {\n" +
+                "    public static final String VERSION = \"${modVersion}\";\n\n" +
+                "    private BootInfo() {\n    }\n}\n", 'UTF-8')
+    }
+}
+sourceSets.main.java.srcDir(generateBootInfo)
