@@ -617,8 +617,8 @@ def analyze_item_view(path):
 
     image = Image.open(path).convert("RGB")
     width, height = image.size
-    # ホットバーは画面の下の中央にある。手に持ったアイテム (右下) は範囲に入れない
-    region = image.crop((int(width * 0.28), int(height * 0.86), int(width * 0.72), height))
+    # ホットバーは画面の下の中央にある。手に持ったアイテム (右下) と、すぐ上にある体力の表示 (赤) は範囲に入れない
+    region = image.crop((int(width * 0.28), int(height * 0.905), int(width * 0.72), height))
     pixels = region.load()
     sums = {name: [0, 0, 0] for name in TEST_COLORS}
     for y in range(region.height):
