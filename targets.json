@@ -1,40 +1,26 @@
 {
   "eras": {
-    "v1_7": {
-      "sources": {
-        "main": ["legacy/main", "v1_7/main"],
-        "forge": ["v1_7/forge"],
-        "liteloader": ["legacy/liteloader"]
-      }
-    },
-    "v1_12": {
-      "sources": {
-        "main": ["legacy/main", "v1_12/main"],
-        "forge": ["legacy/forge"],
-        "liteloader": ["legacy/liteloader"]
-      }
-    }
+    "v1_7": {"sources": {"main": ["legacy/main", "v1_7/main"], "forge": ["v1_7/forge"], "liteloader": ["legacy/liteloader"]}},
+    "v1_8_0": {"sources": {"main": ["legacy/main", "v1_8_0/main"], "forge": ["legacy/forge"], "liteloader": ["legacy/liteloader"]}},
+    "v1_8": {"sources": {"main": ["legacy/main", "v1_8/main"], "forge": ["legacy/forge"], "liteloader": ["legacy/liteloader"]}},
+    "v1_9": {"sources": {"main": ["legacy/main", "v1_9/main"], "forge": ["legacy/forge"], "liteloader": ["legacy/liteloader"]}},
+    "v1_10": {"sources": {"main": ["legacy/main", "v1_10/main"], "forge": ["legacy/forge"], "liteloader": ["legacy/liteloader"]}},
+    "v1_11": {"sources": {"main": ["legacy/main", "v1_11/main"], "forge": ["legacy/forge"], "liteloader": ["legacy/liteloader"]}},
+    "v1_12": {"sources": {"main": ["legacy/main", "v1_12/main"], "forge": ["legacy/forge"], "liteloader": ["legacy/liteloader"]}}
   },
   "targets": [
-    {
-      "name": "mc1_7_10",
-      "era": "v1_7",
-      "minecraft": "1.7.10",
-      "mappings": "mcp:stable:12-1.7.10",
-      "loaders": {
-        "forge": {"loader": "10.13.4.1614-1.7.10", "versions": ["1.7.10"]},
-        "liteloader": {"loader": "1.7.10_04"}
-      }
-    },
-    {
-      "name": "mc1_12_2",
-      "era": "v1_12",
-      "minecraft": "1.12.2",
-      "mappings": "mcp:stable:39-1.12",
-      "loaders": {
-        "forge": {"loader": "14.23.5.2860", "versions": ["1.12.2"]},
-        "liteloader": {"loader": "1.12.2-SNAPSHOT"}
-      }
-    }
+    {"name": "mc1_7_10", "era": "v1_7", "minecraft": "1.7.10", "mappings": "mcp:stable:12-1.7.10", "loaders": {"forge": {"loader": "10.13.4.1614-1.7.10", "versions": ["1.7.10"]}, "liteloader": {"loader": "1.7.10_04"}}},
+    {"name": "mc1_8", "era": "v1_8_0", "minecraft": "1.8", "mappings": "mcp:stable:18-1.8", "loaders": {"forge": {"loader": "11.14.4.1577", "versions": ["1.8"]}, "liteloader": {"loader": "1.8"}}},
+    {"name": "mc1_8_8", "era": "v1_8", "minecraft": "1.8.8", "mappings": "mcp:stable:20-1.8.8", "loaders": {"forge": {"loader": "11.15.0.1655", "versions": ["1.8.8"]}}},
+    {"name": "mc1_8_9", "era": "v1_8", "minecraft": "1.8.9", "mappings": "mcp:stable:22-1.8.9", "loaders": {"forge": {"loader": "11.15.1.2318-1.8.9", "versions": ["1.8.9"]}, "liteloader": {"loader": "1.8.9-SNAPSHOT"}}},
+    {"name": "mc1_9", "era": "v1_9", "minecraft": "1.9", "mappings": "mcp:stable:24-1.9", "loaders": {"forge": {"loader": "12.16.1.1938-1.9.0", "versions": ["1.9"]}, "liteloader": {"loader": "1.9-SNAPSHOT"}}},
+    {"name": "mc1_9_4", "era": "v1_9", "minecraft": "1.9.4", "mappings": "mcp:stable:26-1.9.4", "loaders": {"forge": {"loader": "12.17.0.2317-1.9.4", "versions": ["1.9.4"]}, "liteloader": {"loader": "1.9.4-SNAPSHOT"}}},
+    {"name": "mc1_10", "era": "v1_10", "minecraft": "1.10", "mappings": "mcp:stable:29-1.10.2", "loaders": {"forge": {"loader": "12.18.0.2000-1.10.0", "versions": ["1.10"]}, "liteloader": {"loader": "1.10-SNAPSHOT"}}},
+    {"name": "mc1_10_2", "era": "v1_10", "minecraft": "1.10.2", "mappings": "mcp:stable:29-1.10.2", "loaders": {"forge": {"loader": "12.18.3.2511", "versions": ["1.10.2"]}, "liteloader": {"loader": "1.10.2-SNAPSHOT"}}},
+    {"name": "mc1_11", "era": "v1_11", "minecraft": "1.11", "mappings": "mcp:stable:32-1.11", "loaders": {"forge": {"loader": "13.19.1.2199", "versions": ["1.11"]}, "liteloader": {"loader": "1.11-SNAPSHOT"}}},
+    {"name": "mc1_11_2", "era": "v1_11", "minecraft": "1.11.2", "mappings": "mcp:stable:32-1.11", "loaders": {"forge": {"loader": "13.20.1.2588", "versions": ["1.11.2"]}, "liteloader": {"loader": "1.11.2-SNAPSHOT"}}},
+    {"name": "mc1_12", "era": "v1_12", "minecraft": "1.12", "mappings": "mcp:stable:39-1.12", "loaders": {"forge": {"loader": "14.21.1.2443", "versions": ["1.12"]}, "liteloader": {"loader": "1.12-SNAPSHOT"}}},
+    {"name": "mc1_12_1", "era": "v1_12", "minecraft": "1.12.1", "mappings": "mcp:stable:39-1.12", "loaders": {"forge": {"loader": "14.22.1.2485", "versions": ["1.12.1"]}, "liteloader": {"loader": "1.12.1-SNAPSHOT"}}},
+    {"name": "mc1_12_2", "era": "v1_12", "minecraft": "1.12.2", "mappings": "mcp:stable:39-1.12", "loaders": {"forge": {"loader": "14.23.5.2860", "versions": ["1.12.2"]}, "liteloader": {"loader": "1.12.2-SNAPSHOT"}}}
   ]
 }

@@ -324,9 +324,13 @@ def install_liteloader(main_dir, minecraft, base_command):
     if minecraft not in versions:
         raise RuntimeError(f"LiteLoader does not support Minecraft {minecraft}")
     entry = versions[minecraft]
-    stream = entry.get("snapshots") or entry.get("artefacts")
+    # スナップショットしかないバージョンと、リリース版があるバージョンがある
+    snapshot = "artefacts" not in entry
+    stream = entry["snapshots"] if snapshot else entry["artefacts"]
     build = stream["com.mumfrey:liteloader"]["latest"]
     repository = entry["repo"]["url"].replace("http://", "https://")
+    if snapshot:
+        repository = "https://repo.mumfrey.com/content/repositories/snapshots/"
 
     # バニラのプロファイルが必要なので、先にバニラを用意する
     subprocess.run(base_command + ["start", "--dry", minecraft, "-u", PLAYER], capture_output=True)
@@ -353,8 +357,10 @@ def install_liteloader(main_dir, minecraft, base_command):
                     number = re.search(r"<buildNumber>([^<]+)</buildNumber>", metadata).group(1)
                     resolved = build["version"].replace("SNAPSHOT", f"{timestamp}-{number}")
                     download(base + f"liteloader-{resolved}-release.jar", target)
+                elif entry["repo"].get("type") == "m2":
+                    download(f"{repository.rstrip('/')}/{maven_path(library['name'])}", target)
                 else:
-                    # リリース版は Minecraft のバージョンごとのフォルダに置かれている
+                    # 古いリリース版は Minecraft のバージョンごとのフォルダに置かれている
                     download(f"{repository.rstrip('/')}/com/mumfrey/liteloader/{minecraft}/{build['file']}", target)
                 if file_md5(target) != build["md5"]:
                     raise RuntimeError(f"Checksum mismatch: {target}")

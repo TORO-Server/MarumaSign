@@ -27,11 +27,10 @@ def mod_version():
     raise RuntimeError("mod_version was not found in gradle.properties")
 
 
-def combinations():
+def combinations(libs):
     """(ローダー, Minecraft のバージョン, ローダーのバージョン, Mod のファイル) を列挙する。"""
     table = json.loads((REPO / "targets.json").read_text(encoding="utf-8"))
     version = mod_version()
-    libs = REPO / "dist" / "build" / "libs"
     universal = libs / f"MarumaSign-{version}.jar"
     for target in table["targets"]:
         for loader, spec in target["loaders"].items():
@@ -64,13 +63,15 @@ def main():
     parser.add_argument("--rebaseline", action="store_true", help="基準のログを取り直す")
     parser.add_argument("--timeout", type=int, default=420)
     parser.add_argument("--root", default=str(verify.DEFAULT_ROOT))
+    parser.add_argument("--libs", default=str(REPO / "dist" / "build" / "libs"),
+                        help="確認する jar があるフォルダ。ビルドを続けながら確認するときは、コピーした先を指定する")
     args = parser.parse_args()
 
     root = Path(args.root)
     summary_file = root / "summary.json"
     summary = json.loads(summary_file.read_text(encoding="utf-8")) if summary_file.is_file() else {}
 
-    for loader, minecraft, loader_version, mod in combinations():
+    for loader, minecraft, loader_version, mod in combinations(Path(args.libs)):
         key = f"{loader}:{minecraft}"
         if args.only and key not in args.only:
             continue

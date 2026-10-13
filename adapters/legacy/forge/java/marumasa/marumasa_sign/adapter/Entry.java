@@ -16,7 +16,10 @@ public final class Entry {
         // クライアント専用
         if (FMLCommonHandler.instance().getSide() != Side.CLIENT) return;
         if (!Adapter.init("forge")) return;
-        MinecraftForge.EVENT_BUS.register(new Entry());
+        // 古いバージョンでは tick のイベントが FML のバスに流れる。同じバスなら 2 回目の登録は無視される
+        final Entry entry = new Entry();
+        MinecraftForge.EVENT_BUS.register(entry);
+        FMLCommonHandler.instance().bus().register(entry);
     }
 
     @SubscribeEvent
