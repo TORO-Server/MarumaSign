@@ -84,7 +84,8 @@ final class VanillaInstaller {
                 guiIngameItemRendererField = Reflect.fieldOfType(GuiIngame.class, RenderItem.class);
             }
             if (Reflect.get(guiIngameItemRendererField, mc.ingameGUI) != customRenderItem) {
-                Reflect.set(guiIngameItemRendererField, mc.ingameGUI, customRenderItem);
+                // このフィールドも書き換えられない指定 (static final) になっている
+                Reflect.setStaticFinal(guiIngameItemRendererField, customRenderItem);
             }
         }
     }

@@ -47,7 +47,14 @@ final class SignItemModelMesher extends ItemModelMesher {
         }
         if (signModel == null || cachedBaseModel != base) {
             cachedBaseModel = base;
-            signModel = new BuiltInModel(base.getItemCameraTransforms());
+            // 専用の描画に回すモデルは、枠の中でブロックのように斜めから見た向きになる。
+            // 看板のアイテムは平らな絵なので、正面から見た向きのままにする
+            signModel = new BuiltInModel(base.getItemCameraTransforms()) {
+                @Override
+                public boolean isGui3d() {
+                    return false;
+                }
+            };
         }
         return signModel;
     }
