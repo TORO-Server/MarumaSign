@@ -1,6 +1,9 @@
 {
   "pack": {
     "description": "MarumaSign",
-    "pack_format": 3
+    "pack_format": 3,
+    "supported_formats": [1, 9999],
+    "min_format": 1,
+    "max_format": 9999
   }
 }
