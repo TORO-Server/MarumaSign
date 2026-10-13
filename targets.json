@@ -7,9 +7,10 @@
     "v1_10": {"sources": {"main": ["legacy/main", "v1_10/main"], "forge": ["legacy/forge"], "liteloader": ["legacy/liteloader"]}},
     "v1_11": {"sources": {"main": ["legacy/main", "v1_11/main"], "forge": ["legacy/forge"], "liteloader": ["legacy/liteloader"]}},
     "v1_12": {"sources": {"main": ["legacy/main", "v1_12/main"], "forge": ["legacy/forge"], "liteloader": ["legacy/liteloader"]}},
-    "v26_1": {"sources": {"main": ["v26/main", "v26_1/main"], "fabric": ["common/fabric"], "forge": ["common/forge"], "neoforge": ["common/neoforge"]}},
-    "v26_2": {"sources": {"main": ["v26/main", "v26_2/main"], "fabric": ["common/fabric"], "forge": ["common/forge"], "neoforge": ["common/neoforge"]}},
-    "v26_3": {"sources": {"main": ["v26/main", "v26_3/main"], "fabric": ["common/fabric"], "forge": ["common/forge"], "neoforge": ["common/neoforge"]}}
+    "v1_21_9": {"sources": {"main": ["renderstate/main", "v1_21_9/main"], "fabric": ["common/fabric"], "forge": ["common/forge"], "neoforge": ["common/neoforge"]}},
+    "v26_1": {"sources": {"main": ["renderstate/main", "v26/main", "v26_1/main"], "fabric": ["common/fabric"], "forge": ["common/forge"], "neoforge": ["common/neoforge"]}},
+    "v26_2": {"sources": {"main": ["renderstate/main", "v26/main", "v26_2/main"], "fabric": ["common/fabric"], "forge": ["common/forge"], "neoforge": ["common/neoforge"]}},
+    "v26_3": {"sources": {"main": ["renderstate/main", "v26/main", "v26_3/main"], "fabric": ["common/fabric"], "forge": ["common/forge"], "neoforge": ["common/neoforge"]}}
   },
   "targets": [
     {"name": "mc1_7_10", "era": "v1_7", "minecraft": "1.7.10", "mappings": "mcp:stable:12-1.7.10", "loaders": {"forge": {"loader": "10.13.4.1614-1.7.10", "versions": ["1.7.10"]}, "liteloader": {"loader": "1.7.10_04"}}},
@@ -25,6 +26,7 @@
     {"name": "mc1_12", "era": "v1_12", "minecraft": "1.12", "mappings": "mcp:stable:39-1.12", "loaders": {"forge": {"loader": "14.21.1.2443", "versions": ["1.12"]}, "liteloader": {"loader": "1.12-SNAPSHOT"}}},
     {"name": "mc1_12_1", "era": "v1_12", "minecraft": "1.12.1", "mappings": "mcp:stable:39-1.12", "loaders": {"forge": {"loader": "14.22.1.2485", "versions": ["1.12.1"]}, "liteloader": {"loader": "1.12.1-SNAPSHOT"}}},
     {"name": "mc1_12_2", "era": "v1_12", "minecraft": "1.12.2", "mappings": "mcp:stable:39-1.12", "loaders": {"forge": {"loader": "14.23.5.2860", "versions": ["1.12.2"]}, "liteloader": {"loader": "1.12.2-SNAPSHOT"}}},
+    {"name": "mc1_21_11", "era": "v1_21_9", "minecraft": "1.21.11", "mappings": "mojmap", "loaders": {"fabric": {"loader": "0.19.5", "versions": ["1.21.11"]}, "forge": {"loader": "61.2.3", "versions": ["1.21.11"]}, "neoforge": {"loader": "45", "launch": "21.11.45", "versions": ["1.21.11"]}}},
     {"name": "mc26_1", "era": "v26_1", "minecraft": "26.1", "mappings": "none", "loaders": {"fabric": {"loader": "0.19.5", "versions": ["26.1"]}, "forge": {"loader": "62.0.9", "versions": ["26.1"]}, "neoforge": {"loader": "19-beta", "launch": "26.1.0.19-beta", "versions": ["26.1"]}}},
     {"name": "mc26_1_1", "era": "v26_1", "minecraft": "26.1.1", "mappings": "none", "loaders": {"fabric": {"loader": "0.19.5", "versions": ["26.1.1"]}, "forge": {"loader": "63.0.2", "versions": ["26.1.1"]}, "neoforge": {"loader": "15-beta", "launch": "26.1.1.15-beta", "versions": ["26.1.1"]}}},
     {"name": "mc26_1_2", "era": "v26_1", "minecraft": "26.1.2", "mappings": "none", "loaders": {"fabric": {"loader": "0.19.5", "versions": ["26.1.2"]}, "forge": {"loader": "64.1.4", "versions": ["26.1.2"]}, "neoforge": {"loader": "116", "launch": "26.1.2.116", "versions": ["26.1.2"]}}},

@@ -67,7 +67,7 @@ final class PlatformImpl implements Platform {
 
     @Override
     public void showMessage(String message) {
-        Mc.chat(mc).addClientSystemMessage(Component.literal(message));
+        Mc.chat(mc, Component.literal(message));
     }
 
     @Override
