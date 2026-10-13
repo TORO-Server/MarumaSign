@@ -84,7 +84,9 @@ public final class MarumaSign {
      * 看板の文字列に対応する画像を返す。MarumaSign の看板でなければ null。
      */
     public static SignImage sign(String text) {
-        return signs == null ? null : signs.get(text);
+        final SignImage image = signs == null ? null : signs.get(text);
+        if (selfTest != null) selfTest.onLookup(image != null);
+        return image;
     }
 
     // 画像を実際に描画したときに呼ぶ (動作確認用の記録)

@@ -61,6 +61,12 @@ public interface Platform {
     // 看板を手に持ち、見ているブロックに使用する
     void selfTestUseItem();
 
+    // タイトル画面が出ていれば、サーバーへの接続を始めて true を返す。まだ始められないか、対応していなければ false。
+    // 起動と同時に接続すると入れないバージョンがあるので、そのバージョンの確認では、起動が済んでからここで接続する
+    default boolean selfTestJoin(String host, int port) {
+        return false;
+    }
+
     // ゲームを終了する
     void quit();
 }

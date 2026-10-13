@@ -245,11 +245,67 @@ final class PlatformImpl implements Platform {
     }
 
     @Override
+    public boolean selfTestJoin(String host, int port) {
+        return Join.start(mc, host, port);
+    }
+
+    @Override
     public void quit() {
         mc.stop();
     }
 }
 ''')
+
+JOIN_REAL = r'''
+package marumasa.marumasa_sign.adapter;
+
+import net.minecraft.client.Minecraft;
+import net.minecraft.client.gui.screens.ConnectScreen;
+import net.minecraft.client.gui.screens.DisconnectedScreen;
+import net.minecraft.client.gui.screens.Screen;
+import net.minecraft.client.gui.screens.TitleScreen;
+
+/**
+ * 動作確認のときの、サーバーへの接続。
+ * Minecraft 1.14 - 1.15.1 には、起動と同時に接続すると入れない組み合わせがあるので、起動が済んでから接続する。
+ */
+final class Join {
+
+    private Join() {
+    }
+
+    // タイトル画面 (または、接続に失敗したあとの画面) が出ていて、リソースの読み込みが終わっていれば、接続を始める
+    static boolean start(Minecraft mc, String host, int port) {
+        final Screen screen = mc.screen;
+        if (mc.getOverlay() != null || !(screen instanceof TitleScreen || screen instanceof DisconnectedScreen)) return false;
+        mc.setScreen(new ConnectScreen(new TitleScreen(), mc, host, port));
+        return true;
+    }
+}
+'''
+JOIN_NONE = r'''
+package marumasa.marumasa_sign.adapter;
+
+import net.minecraft.client.Minecraft;
+
+/**
+ * 動作確認のときの、サーバーへの接続。このバージョンでは起動時の指定で接続できるので、何もしない。
+ */
+final class Join {
+
+    private Join() {
+    }
+
+    static boolean start(Minecraft mc, String host, int port) {
+        return false;
+    }
+}
+'''
+# 描画の層は世代ごとに 1 つだけ入るので、接続の実装もそこに置く
+write("ber14", "Join.java", JOIN_REAL)
+write("ber16", "Join.java", JOIN_REAL)
+write("classic_ber", "Join.java", JOIN_NONE)
+write("renderstate", "Join.java", JOIN_NONE)
 
 # ---------------------------------------------------------------- tex
 
