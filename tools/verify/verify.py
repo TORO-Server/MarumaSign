@@ -800,11 +800,15 @@ def load_known_noise():
 def normalize(line):
     """時刻や数値の違いを無視して比較できる形にする。"""
     line = re.sub(r"^\[[^\]]*\d\d:\d\d:\d\d[^\]]*\]\s*", "", line)
+    # 同じ処理でも、どのスレッドが先に行うかは起動ごとに変わる ("[Render thread/WARN]" -> "[WARN]")
+    line = re.sub(r"^\[[^\]/]*/(\w+)\]", r"[\1]", line)
     # 基準の取得と本番では作業フォルダの名前が違う
     line = line.replace("-baseline\\", "\\").replace("-baseline/", "/")
     # オブジェクトのハッシュ値 (ModConfig@110dc235 など) は実行のたびに変わる
-    line = re.sub(r"@[0-9a-fA-F]{4,16}\b", "@H", line)
-    return re.sub(r"\d+", "N", line)
+    # (古い規則で数字だけを N にして保存した基準 ("@NaN" など) とも比べられるように、N も含める)
+    line = re.sub(r"@(?=[0-9a-fA-FN]*[0-9N])[0-9a-fA-FN]{2,16}\b", "@H", line)
+    # 記録する行は長さで切っているので、行頭の長さの違いで末尾が変わらないよう、比べる長さもそろえる
+    return re.sub(r"\d+", "N", line)[:300]
 
 
 def unique(lines):
@@ -1055,10 +1059,12 @@ def run(args):
     if args.baseline:
         result["ok"] = server.joined.is_set() or title_only
         baseline_file.parent.mkdir(parents=True, exist_ok=True)
-        baseline_file.write_text(json.dumps({
-            "client": sorted({normalize(line) for line in client_findings}),
-            "server": sorted({normalize(line) for line in server_findings}),
-        }, indent=2, ensure_ascii=False), encoding="utf-8")
+        # 途中で終わってしまった起動の記録は、基準として残さない (警告が足りない基準になる)
+        if result["ok"]:
+            baseline_file.write_text(json.dumps({
+                "client": sorted({normalize(line) for line in client_findings}),
+                "server": sorted({normalize(line) for line in server_findings}),
+            }, indent=2, ensure_ascii=False), encoding="utf-8")
         result["baseline_client_count"] = len(client_findings)
         result["baseline_server_count"] = len(server_findings)
     elif baseline_file.is_file():

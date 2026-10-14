@@ -24,3 +24,6 @@ An exception occurred processing Appender File
 Error writing to RandomAccessFile logs/latest\.log
 java\.io\.IOException: Stream Closed
 Exception in thread "Server Shutdown Thread"
+
+# 確認用のアカウントは実在しないので、Minecraft 自体がスキンの情報を取りに行って失敗することがある (通信の状況によって出たり出なかったりする)
+Couldn't look up profile properties for
