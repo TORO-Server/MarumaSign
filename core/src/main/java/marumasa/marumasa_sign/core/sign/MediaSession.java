@@ -82,7 +82,7 @@ final class MediaSession {
         width = videoWidth;
         height = videoHeight;
         if (videoWidth > 0) {
-            if (texture != null) platform.releaseTexture(texture);
+            MarumaSign.releaseTexture(platform, texture);
             pixels = new int[videoWidth * videoHeight];
             texture = platform.createTexture(videoWidth, videoHeight, pixels);
         }
@@ -131,7 +131,7 @@ final class MediaSession {
             player = null;
         }
         if (texture != null) {
-            platform.releaseTexture(texture);
+            MarumaSign.releaseTexture(platform, texture);
             texture = null;
         }
     }

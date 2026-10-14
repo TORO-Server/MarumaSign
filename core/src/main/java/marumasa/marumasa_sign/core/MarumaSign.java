@@ -66,8 +66,43 @@ public final class MarumaSign {
     }
 
     // クライアントの tick ごとに呼ぶ
+    // 消すのを待っているテクスチャ ({実装, テクスチャ, 残りの tick 数})
+    private static final java.util.List<Object[]> pendingReleases = new java.util.ArrayList<Object[]>();
+    private static final int RELEASE_DELAY = 20;
+
+    /**
+     * テクスチャを、少し後で (約 1 秒後に) 消す。
+     * 影 Mod (Iris / Oculus) は、直前まで使われていたテクスチャを、描画の状態を元に戻すときにもう一度使うことがある。
+     * 使い終わった直後に消すと、存在しないテクスチャを使うことになって OpenGL のエラーが出るので、すぐには消さない。
+     */
+    public static void releaseTexture(Platform owner, Object texture) {
+        if (texture == null) return;
+        synchronized (pendingReleases) {
+            pendingReleases.add(new Object[] {owner, texture, RELEASE_DELAY});
+        }
+    }
+
+    private static void releasePending() {
+        final java.util.List<Object[]> due = new java.util.ArrayList<Object[]>();
+        synchronized (pendingReleases) {
+            for (java.util.Iterator<Object[]> it = pendingReleases.iterator(); it.hasNext(); ) {
+                final Object[] item = it.next();
+                final int left = (Integer) item[2] - 1;
+                item[2] = left;
+                if (left <= 0) {
+                    due.add(item);
+                    it.remove();
+                }
+            }
+        }
+        for (Object[] item : due) {
+            ((Platform) item[0]).releaseTexture(item[1]);
+        }
+    }
+
     public static void tick() {
         if (platform == null) return;
+        releasePending();
         if (platform.isInWorld()) loader.pump(config.getMaxThreads());
         signs.tick();
         ui.tick();
