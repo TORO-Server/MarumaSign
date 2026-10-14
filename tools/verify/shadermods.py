@@ -261,6 +261,8 @@ def install(setup, cache_dir, work_dir):
     config.parent.mkdir(parents=True, exist_ok=True)
     if setup["name"] == "OptiFine":
         config.write_text(f"shaderPack={pack_name}\n")
+        # 一部の版 (1.8.8 など) は「高速レンダリング」が最初から有効で、そのままではシェーダーを読み込まない
+        (work_dir / "optionsof.txt").write_text("ofFastRender:false\n")
     else:
         config.write_text(f"enableShaders=true\nshaderPack={pack_name}\n")
 

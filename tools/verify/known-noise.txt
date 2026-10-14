@@ -27,3 +27,10 @@ Exception in thread "Server Shutdown Thread"
 
 # 確認用のアカウントは実在しないので、Minecraft 自体がスキンの情報を取りに行って失敗することがある (通信の状況によって出たり出なかったりする)
 Couldn't look up profile properties for
+
+# 影 Mod がシェーダーパックを組み立てるときに出す、パックの内容についての知らせ。
+# ワールドに入ったときに出るので、ワールドに入れない基準の取得 (起動が済んでから接続するバージョン) では基準に入らない
+\] Unsupported uniform:
+Failed to resolve uniform
+The following uniforms won't work
+Error while parsing the block ID map entry

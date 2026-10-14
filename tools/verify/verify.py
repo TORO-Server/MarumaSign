@@ -782,7 +782,9 @@ def scan_log(path):
         return None
     findings = []
     for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
-        if LEVEL_PATTERN.search(line) or "Exception" in line or "marumasa" in line.lower() and "error" in line.lower():
+        # OpenGL のエラーは、ログには INFO として出る (Minecraft 1.17 以降、GL のデバッグ出力から)
+        gl_error = "OpenGL debug message" in line and "type=ERROR" in line
+        if LEVEL_PATTERN.search(line) or gl_error or "Exception" in line or "marumasa" in line.lower() and "error" in line.lower():
             findings.append(line[:400])
     return findings
 

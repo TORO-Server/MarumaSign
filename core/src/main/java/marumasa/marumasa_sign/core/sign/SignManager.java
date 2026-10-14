@@ -153,7 +153,7 @@ public final class SignManager {
         } catch (RuntimeException | Error e) {
             MarumaSign.LOGGER.error("Failed to register model: " + url, e);
             for (Object texture : created) {
-                if (texture != null) platform.releaseTexture(texture);
+                MarumaSign.releaseTexture(platform, texture);
             }
             fail(url, entry);
         }
@@ -261,7 +261,7 @@ public final class SignManager {
         sessions.clear();
         for (TextureEntry entry : textures.values()) {
             for (Object frame : entry.ownedTextures()) {
-                platform.releaseTexture(frame);
+                MarumaSign.releaseTexture(platform, frame);
             }
         }
         signs.clear();

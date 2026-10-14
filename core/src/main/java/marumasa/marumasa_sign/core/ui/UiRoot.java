@@ -70,7 +70,7 @@ public final class UiRoot {
     public void closed() {
         open = false;
         if (texture != null) {
-            platform.releaseTexture(texture);
+            MarumaSign.releaseTexture(platform, texture);
             texture = null;
         }
         surface = null;
@@ -146,7 +146,7 @@ public final class UiRoot {
         final int width = pixelWidth();
         final int height = pixelHeight();
         if (texture != null && (textureWidth != width || textureHeight != height)) {
-            platform.releaseTexture(texture);
+            MarumaSign.releaseTexture(platform, texture);
             texture = null;
         }
         if (dirty || texture == null) {
