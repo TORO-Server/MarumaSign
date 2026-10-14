@@ -18,3 +18,9 @@ Removing unused function \w+ and omitting further such messages
 Can't keep up! Is the server overloaded\?
 # Forge 1.14 - 1.15 が、初回の起動で設定ファイルを書き直したことを自分で検知して出す (出る時点が起動ごとに違う)
 Forge config just got changed on the file system!
+
+# 古いバージョンのサーバーが、終了の途中でログのファイルを閉じたあとに書こうとして出す (Mod はサーバーに入っていない)
+An exception occurred processing Appender File
+Error writing to RandomAccessFile logs/latest\.log
+java\.io\.IOException: Stream Closed
+Exception in thread "Server Shutdown Thread"
