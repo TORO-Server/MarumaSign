@@ -11,8 +11,10 @@
 
 import argparse
 import hashlib
+import io
 import json
 import sys
+import zipfile
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -32,6 +34,71 @@ def mod_version():
 
 def file_digest(path):
     return hashlib.sha256(Path(path).read_bytes()).hexdigest()
+
+
+ADAPTERS = "marumasa/marumasa_sign/"
+NESTED = "META-INF/jars/marumasa_sign-fabric-"
+_jar_entries = {}
+
+
+def _entries(path):
+    """jar の中身を {名前: 内容のハッシュ} にする。入れ子の jar は、その中身ごとに分ける。"""
+    key = (str(path), Path(path).stat().st_mtime_ns)
+    if key not in _jar_entries:
+        entries = {}
+        with zipfile.ZipFile(path) as archive:
+            for name in archive.namelist():
+                if name.endswith("/"):
+                    continue
+                data = archive.read(name)
+                if name.startswith(NESTED):
+                    # 入れ子の jar は、作り直すたびに中の日時が変わるので、中身で比べる
+                    with zipfile.ZipFile(io.BytesIO(data)) as nested:
+                        for inner in nested.namelist():
+                            if not inner.endswith("/"):
+                                entries[f"{name}!{inner}"] = hashlib.sha256(nested.read(inner)).hexdigest()
+                else:
+                    entries[name] = hashlib.sha256(data).hexdigest()
+        _jar_entries.clear()
+        _jar_entries[key] = entries
+    return _jar_entries[key]
+
+
+def target_of(loader, minecraft):
+    """その組み合わせで使われる実装。(ビルド対象の名前, jar の中での置き場所のローダー名)"""
+    table = json.loads((REPO / "targets.json").read_text(encoding="utf-8"))
+    for target in table["targets"]:
+        spec = target["loaders"].get(loader, {})
+        if minecraft in spec.get("versions", []) or (loader == "liteloader" and spec and target["minecraft"] == minecraft):
+            return target["name"], loader
+        # Forge 用の実装で動く、Forge 互換の NeoForge
+        if loader == "neoforge" and minecraft in target["loaders"].get("forge", {}).get("neoforge_launch", {}):
+            return target["name"], "forge"
+    raise KeyError(f"{loader}:{minecraft}")
+
+
+def combination_digest(mod, loader, minecraft):
+    """確認した内容を表すハッシュ。その組み合わせで使われる部分だけから求める。
+
+    1 つの jar にすべてのバージョン向けの実装が入っているので、jar 全体で比べると、
+    あるバージョン向けの実装だけを直したときにも、他のバージョンの確認結果まで無効になってしまう。
+    """
+    mod = Path(mod)
+    if mod.suffix != ".jar":
+        return file_digest(mod)
+    target, directory = target_of(loader, minecraft)
+    own_classes = f"{ADAPTERS}{directory}/{target}/"
+    own_nested = f"{NESTED}{target}.jar!"
+    digest = hashlib.sha256()
+    for name, value in sorted(_entries(mod).items()):
+        if name.startswith(NESTED):
+            if loader != "fabric" or not name.startswith(own_nested):
+                continue
+        elif name.startswith((ADAPTERS + "forge/", ADAPTERS + "neoforge/")):
+            if not name.startswith(own_classes):
+                continue
+        digest.update(f"{name}={value}\n".encode("utf-8"))
+    return digest.hexdigest()
 
 
 def combinations(libs):
@@ -114,7 +181,7 @@ def main():
             summary[key] = {"ok": False, "clean": False, "detail": f"missing {mod.name}"}
             continue
         # 確認済みかどうかは、ファイルの内容で判断する (ビルドし直すと名前は同じでも中身が変わる)
-        digest = file_digest(mod)
+        digest = combination_digest(mod, loader, minecraft)
         previous = summary.get(key, {})
         if (args.skip_passed and previous.get("clean") and previous.get("mod_sha256") == digest
                 and set(args.media) <= set(previous.get("media", []))):
@@ -132,7 +199,12 @@ def main():
                 selected.discard(key)
                 continue
             if not baseline.get("ok"):
-                summary[key] ={"ok": False, "clean": False, "detail": "baseline failed: " + str(baseline.get("detail"))[:300]}
+                # 初回の起動では、ローダーの準備などでクライアントがそのまま終了することがあるので、1 回だけやり直す
+                verify.log(f"=== baseline again {key} ({str(baseline.get('detail'))[:120]})")
+                baseline = run_one(root, loader, minecraft, loader_version, mod, True, args.timeout, shaders=args.shaders,
+                                   shader_pack=args.shader_pack, shader_mod=args.shader_mod)
+            if not baseline.get("ok"):
+                summary[key] = {"ok": False, "clean": False, "detail": "baseline failed: " + str(baseline.get("detail"))[:300]}
                 summary_file.write_text(json.dumps(summary, indent=2, ensure_ascii=False), encoding="utf-8")
                 continue
 

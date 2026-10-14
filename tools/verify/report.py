@@ -50,12 +50,10 @@ def main():
     summary = json.loads(summary_file.read_text(encoding="utf-8")) if summary_file.is_file() else {}
 
     supported = {}
-    digests = {}
     for loader, minecraft, _, mod in matrix.combinations(REPO / "dist" / "build" / "libs"):
         supported.setdefault(minecraft, set()).add(loader)
-        if mod not in digests:
-            digests[mod] = matrix.file_digest(mod) if mod.is_file() else None
-        supported.setdefault((minecraft, loader), digests[mod])
+        supported.setdefault((minecraft, loader),
+                             matrix.combination_digest(mod, loader, minecraft) if mod.is_file() else None)
 
     lines = [
         "# 動作確認の結果",
