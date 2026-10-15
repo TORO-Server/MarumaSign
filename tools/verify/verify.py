@@ -839,6 +839,10 @@ def find_client_log(work_dir):
     return work_dir / "logs" / "latest.log"
 
 
+def is_url(item):
+    return isinstance(item, str) and item.startswith(("http://", "https://"))
+
+
 def run(args):
     root = Path(args.root)
     main_dir = root / "main"
@@ -856,7 +860,8 @@ def run(args):
     result_dir = work_dir / "selftest"
     mod = Path(args.mod).resolve() if args.mod else None
     # 看板に表示して確かめるファイル。| で区切って複数指定できる
-    images = [Path(item).resolve() for item in str(args.image).split("|") if item]
+    # http:// で始まるものは、ファイルではなく URL (ライブ配信など) として、そのまま入力欄に入れる
+    images = [item if is_url(item) else Path(item).resolve() for item in str(args.image).split("|") if item]
 
     prepare_work_dir(work_dir, mod, args.lang)
     result = {
@@ -947,7 +952,7 @@ def run(args):
         joined_at = 0.0
         captured = False
         # ファイルごとの結果と、次に待つ合図
-        media = [{"name": image.name} for image in images]
+        media = [{"name": image if is_url(image) else image.name} for image in images]
         current = 0
         stage = "view"
         item_stage = "request"
@@ -991,7 +996,8 @@ def run(args):
                     stage = "view"
             if not args.baseline and item_stage == "request" and (result_dir / "item-request.txt").is_file():
                 # 看板の文字を持たせた看板アイテムを渡す。置いた看板と区別できるように、別の URL にする
-                host.files["item.png"] = images[0].read_bytes()
+                item_image = next((image for image in images if not is_url(image)), REPO / "tools" / "verify" / "test-image.png")
+                host.files["item.png"] = item_image.read_bytes()
                 url = f"http://127.0.0.1:{host.port}/i/item.png"
                 text = url + "|0|0|0|1|1|0|0|0"
                 server.give_sign_item([text[i:i + 15] for i in range(0, 60, 15)])
