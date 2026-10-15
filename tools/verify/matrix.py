@@ -204,7 +204,11 @@ def main():
                 baseline = run_one(root, loader, minecraft, loader_version, mod, True, args.timeout, shaders=args.shaders,
                                    shader_pack=args.shader_pack, shader_mod=args.shader_mod)
             if not baseline.get("ok"):
-                summary[key] = {"ok": False, "clean": False, "detail": "baseline failed: " + str(baseline.get("detail"))[:300]}
+                # Mod を入れなくても起動しない組み合わせ。Mod の結果ではないので、報告書では対象外として扱う
+                summary[key] = {"ok": False, "clean": False, "baseline_failed": True,
+                                "detail": "baseline failed: " + str(baseline.get("detail"))[:300],
+                                "mod": mod.name, "mod_sha256": digest,
+                                "shader_mod": baseline.get("shader_mod"), "shader_pack": baseline.get("shader_pack")}
                 summary_file.write_text(json.dumps(summary, indent=2, ensure_ascii=False), encoding="utf-8")
                 continue
 

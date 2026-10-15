@@ -36,6 +36,9 @@ def cell(entry, digest):
     # 別のビルドで確認した結果は、いまのファイルの結果としては数えない
     if entry is None or entry.get("mod_sha256") != digest:
         return ""
+    if entry.get("baseline_failed"):
+        # Mod を入れなくても起動しなかった。Mod の結果ではない
+        return "対象外"
     if entry.get("clean"):
         missing = [name for kind, name in MEDIA_NAMES.items() if kind not in entry.get("media", [])]
         return "OK" if not missing else "OK (" + "・".join(missing) + "は未確認)"
@@ -69,6 +72,7 @@ def main():
         "  Mod を入れていない状態と比べて新しい警告やエラーが出なかった",
         "- **要確認**: 動作はしたが、新しい警告が出たか、表示を確認できなかった",
         "- **失敗**: 動作しなかった",
+        "- **対象外**: Mod を入れていない状態でもゲームが起動しないか、サーバーに入れなかった (ローダーや影 Mod 側の問題)",
         "- 空欄: そのローダーはこのバージョンに対応していない",
         "- **未確認**: 対応しているが、配布するファイルの現在の内容ではまだ確認していない",
         "",
@@ -77,7 +81,7 @@ def main():
         "| Minecraft | " + " | ".join(LOADER_NAMES[loader] for loader in LOADERS) + " |",
         "| --- | " + " | ".join("---" for _ in LOADERS) + " |",
     ]
-    counts = {"OK": 0, "要確認": 0, "失敗": 0, "未確認": 0}
+    counts = {"OK": 0, "要確認": 0, "失敗": 0, "対象外": 0, "未確認": 0}
     for minecraft in sorted((key for key in supported if isinstance(key, str)), key=version_key, reverse=True):
         cells = []
         for loader in LOADERS:
@@ -116,6 +120,12 @@ def main():
             "マスの中は「影 Mod + シェーダーパック: 結果」です。",
             "Iris は Sodium と、Oculus は Rubidium または Embeddium と一緒に入れています。空欄は、確認していない組み合わせです。",
             "シェーダーは絵にも影や空の色を付けるので、色そのものではなく、絵が正しい場所に正しい向きで写っていることを確認しています。",
+            "",
+            "次の組み合わせは、この Mod を入れなくても影 Mod が動かないため、確認の対象から外しています。",
+            "",
+            "- Forge 1.21.1 + OptiFine 1.21.1 HD U J1: OptiFine の読み込み中にゲームが終了する",
+            "- Forge 1.14.2 + OptiFine 1.14.2 HD U F1: ゲームが起動しない",
+            "- OptiFine 1.8.9 + MakeUp Ultra Fast: 画面が真っ黒になる",
             "",
             "| Minecraft | " + " | ".join(LOADER_NAMES[loader] for loader in LOADERS) + " |",
             "| --- | " + " | ".join("---" for _ in LOADERS) + " |",

@@ -564,7 +564,7 @@ lang:{lang}
 
 def prepare_work_dir(work_dir, mod, lang):
     shutil.rmtree(work_dir, ignore_errors=True)
-    (work_dir / "mods").mkdir(parents=True)
+    (work_dir / "mods").mkdir(parents=True, exist_ok=True)
     if mod is not None:
         shutil.copy2(mod, work_dir / "mods" / mod.name)
     (work_dir / "options.txt").write_text(OPTIONS.format(lang=lang))
@@ -627,9 +627,15 @@ def grab_screen(path):
     window, box = windows[0]
     ctypes.windll.user32.ShowWindow(window, 9)  # SW_RESTORE
     ctypes.windll.user32.SetForegroundWindow(window)
-    time.sleep(0.7)
-    ImageGrab.grab(bbox=box, all_screens=True).save(path)
-    return True
+    try:
+        ImageGrab.grab(bbox=box, all_screens=True).save(path)
+        return True
+    except Exception:
+        try:
+            ImageGrab.grab(bbox=box).save(path)
+            return True
+        except Exception:
+            return False
 
 
 # テスト画像の 4 つの領域の色 (左上, 右上, 左下, 右下)
