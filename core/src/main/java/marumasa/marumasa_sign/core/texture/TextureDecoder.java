@@ -33,7 +33,13 @@ public final class TextureDecoder {
 
         // 2. KTX2 (後で追加)
         // 3. WebP (後で追加)
-        // 4. AVIF (後で追加)
+
+        // 4. AVIF
+        if (AvifDecoder.isAvif(data) || "image/avif".equalsIgnoreCase(mimeType)) {
+            final BufferedImage avif = AvifDecoder.decode(data);
+            if (avif != null) return avif;
+        }
+
 
         // 5. 標準形式 (PNG, JPEG 等)
         try {
