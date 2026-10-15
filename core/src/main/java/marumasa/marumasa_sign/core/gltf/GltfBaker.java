@@ -646,17 +646,10 @@ final class GltfBaker {
                 final int sample = sample(input.thickness, surface, corner, u, v, w0, w1, w2);
                 thick *= ((sample >> 8) & 0xFF) / 255f;
             }
-            if (thick > 0 && !Float.isInfinite(input.attenuationDistance) && input.attenuationDistance > 0) {
-                final float attR = (float) Math.exp(-thick / input.attenuationDistance * (float) -Math.log(Math.max(1e-4f, input.attenuationColor[0])));
-                final float attG = (float) Math.exp(-thick / input.attenuationDistance * (float) -Math.log(Math.max(1e-4f, input.attenuationColor[1])));
-                final float attB = (float) Math.exp(-thick / input.attenuationDistance * (float) -Math.log(Math.max(1e-4f, input.attenuationColor[2])));
-                r *= attR; g *= attG; b *= attB;
-            } else if (thick > 0) {
-                r *= input.attenuationColor[0];
-                g *= input.attenuationColor[1];
-                b *= input.attenuationColor[2];
-            }
-            a *= (1f - trans * 0.75f);
+            r *= GltfLight.volumeTint(input.attenuationColor[0], thick, input.attenuationDistance);
+            g *= GltfLight.volumeTint(input.attenuationColor[1], thick, input.attenuationDistance);
+            b *= GltfLight.volumeTint(input.attenuationColor[2], thick, input.attenuationDistance);
+            a = GltfLight.transmittedAlpha(a, trans);
         }
 
         if (input.alphaMode == GltfModel.ALPHA_OPAQUE) a = 1;

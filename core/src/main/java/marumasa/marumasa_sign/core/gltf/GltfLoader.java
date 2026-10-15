@@ -30,7 +30,7 @@ public final class GltfLoader {
     }
 
     // 三角形の数の上限
-    public static final int MAX_TRIANGLES = 300000;
+    public static final int MAX_TRIANGLES = 150000;
     // テクスチャの大きさの上限
     private static final int MAX_TEXTURE_SIZE = 2048;
     // 繰り返しを並べたテクスチャの大きさと枚数の上限
@@ -716,6 +716,25 @@ public final class GltfLoader {
 
         final float[] base = {gamma(baseFactor[0]), gamma(baseFactor[1]), gamma(baseFactor[2]),
                 Math.max(0, Math.min(1, baseFactor[3]))};
+        // 焼き込まない場合の、厚みのある透過の材質の色 (焼き込む場合はピクセルごとに GltfBaker で計算する)
+        final float[] volumeTint = {1, 1, 1};
+        if (transmissionFactor > 0) {
+            // 厚みのテクスチャがあれば、その平均 (G) を全体の厚みとして使う
+            float averageThickness = thicknessFactor;
+            if (thickImage != null && thickImage.argb.length > 0) {
+                long green = 0;
+                int samples = 0;
+                final int step = Math.max(1, thickImage.argb.length / 4096);
+                for (int i = 0; i < thickImage.argb.length; i += step) {
+                    green += (thickImage.argb[i] >> 8) & 0xFF;
+                    samples++;
+                }
+                averageThickness *= green / (255f * samples);
+            }
+            for (int i = 0; i < 3; i++) {
+                volumeTint[i] = gamma(GltfLight.volumeTint(attenuationColor[i], averageThickness, attenuationDistance));
+            }
+        }
 
         final Pixels baseImage = textureImage(baseRef);
         final Pixels emissiveImage = textureImage(emissiveRef);
@@ -744,12 +763,12 @@ public final class GltfLoader {
         if (mapping == null) {
             // テクスチャがない材質は、頂点の色だけで表す
             float alpha = base[3];
-            if (transmissionFactor > 0) alpha *= (1f - transmissionFactor * 0.75f);
+            if (transmissionFactor > 0) alpha = GltfLight.transmittedAlpha(alpha, transmissionFactor);
             if (material.alphaMode == GltfModel.ALPHA_OPAQUE) alpha = 1;
             else if (material.alphaMode == GltfModel.ALPHA_MASK) alpha = alpha >= alphaCutoff ? 1 : 0;
-            material.color[0] = base[0];
-            material.color[1] = base[1];
-            material.color[2] = base[2];
+            material.color[0] = base[0] * volumeTint[0];
+            material.color[1] = base[1] * volumeTint[1];
+            material.color[2] = base[2] * volumeTint[2];
             material.color[3] = alpha;
             if (glows && emissiveRef == null) System.arraycopy(emissive, 0, material.emissive, 0, 3);
             return draft;
@@ -793,7 +812,10 @@ public final class GltfLoader {
                     b += emissive[2];
                 }
 
-                if (transmissionFactor > 0) a *= (1f - transmissionFactor * 0.75f);
+                if (transmissionFactor > 0) a = GltfLight.transmittedAlpha(a, transmissionFactor);
+                r *= volumeTint[0];
+                g *= volumeTint[1];
+                b *= volumeTint[2];
                 if (material.alphaMode == GltfModel.ALPHA_OPAQUE) a = 1;
                 else if (material.alphaMode == GltfModel.ALPHA_MASK) a = a >= alphaCutoff ? 1 : 0;
 

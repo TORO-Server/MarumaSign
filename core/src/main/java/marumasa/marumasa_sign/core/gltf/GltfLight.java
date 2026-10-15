@@ -282,7 +282,8 @@ final class GltfLight {
         // シーン (微細繊維による散乱)
         if (ctx != null && (ctx.sheenR > 0 || ctx.sheenG > 0 || ctx.sheenB > 0)) {
             final float sheenRough = ctx.sheenRoughness < 0.04f ? 0.04f : ctx.sheenRoughness > 1f ? 1f : ctx.sheenRoughness;
-            final float grazingSheen = (float) Math.pow(1f - facing, sheenRough * 3.5f + 0.5f);
+            // 法線マップで向きを変えた法線は長さが 1 を少し超えることがあり、負の数の累乗は NaN (黒い点) になるので 0 で止める
+            final float grazingSheen = (float) Math.pow(Math.max(0f, 1f - facing), sheenRough * 3.5f + 0.5f);
             final float sheenLight = (ambientR + ambientG + ambientB) * 0.3333f + SUN * nl;
             diffuseR += ctx.sheenR * sheenLight * grazingSheen;
             diffuseG += ctx.sheenG * sheenLight * grazingSheen;
@@ -344,6 +345,22 @@ final class GltfLight {
         out[0] = outR;
         out[1] = outG;
         out[2] = outB;
+    }
+
+    // 透過 (transmission) の材質の不透明度。屈折して見える奥の景色は描けないので、半透明で代わりにする。
+    // 透けすぎると形が分からなくなるため、完全に透過する材質でも半分は残す
+    static float transmittedAlpha(float alpha, float transmission) {
+        return alpha * (1f - Math.max(0f, Math.min(1f, transmission)) * 0.5f);
+    }
+
+    // 厚みのある透過の材質 (KHR_materials_volume) を通った光の色の割合 (0 - 1)。
+    // 減衰の距離が無限なら色は変わらない。屈折や奥行きは描けないので、光が通る長さは減衰の距離までとし、
+    // 厚い部分でも attenuationColor (その材質らしい色) より濃くはしない (濃くすると 1 色だけが残って色合いが変わる)
+    static float volumeTint(float attenuationColor, float thickness, float attenuationDistance) {
+        final float color = Math.max(1e-4f, Math.min(1f, attenuationColor));
+        if (Float.isInfinite(attenuationDistance) || attenuationDistance <= 0) return 1f;
+        final float depth = thickness > 0 ? Math.min(1f, thickness / attenuationDistance) : 1f;
+        return (float) Math.pow(color, depth);
     }
 
     private static float ggx(float nh, float nl, float nv, float roughness) {
