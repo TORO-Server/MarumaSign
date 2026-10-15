@@ -1052,8 +1052,9 @@ public final class GltfLoader {
     private void readNodes(GltfModel model) throws IOException {
         final List<Object> list = Json.array(root, "nodes");
         if (list.size() > MAX_NODES) throw new IOException("Model exceeds safety limits (max " + MAX_NODES + " nodes)");
-        final GltfModel.Node[] nodes = new GltfModel.Node[list.size()];
-        for (int i = 0; i < nodes.length; i++) {
+        final List<GltfModel.Node> nodeList = new ArrayList<GltfModel.Node>();
+        final List<List<Integer>> childrenList = new ArrayList<List<Integer>>();
+        for (int i = 0; i < list.size(); i++) {
             final Map<String, Object> json = Json.object(list.get(i));
             final GltfModel.Node node = new GltfModel.Node();
             if (json.containsKey("matrix")) {
@@ -1069,21 +1070,92 @@ public final class GltfLoader {
             if (mesh >= 0 && mesh < model.meshes.length) node.mesh = mesh;
             node.skin = Json.integer(json, "skin", -1);
             if (json.containsKey("weights")) node.weights = Json.numbers(json.get("weights"));
-            nodes[i] = node;
+            nodeList.add(node);
+            childrenList.add(new ArrayList<Integer>());
         }
+
         // 親子関係。親は 1 つだけなので、2 つ目以降の指定は無視する
-        for (int i = 0; i < nodes.length; i++) {
+        for (int i = 0; i < list.size(); i++) {
             final List<Object> children = Json.array(Json.object(list.get(i)), "children");
-            final List<Integer> valid = new ArrayList<Integer>();
             for (Object item : children) {
                 if (!(item instanceof Double)) continue;
                 final int child = (int) Math.round((Double) item);
-                if (child < 0 || child >= nodes.length || child == i || nodes[child].parent >= 0) continue;
-                nodes[child].parent = i;
-                valid.add(child);
+                if (child < 0 || child >= list.size() || child == i || nodeList.get(child).parent >= 0) continue;
+                nodeList.get(child).parent = i;
+                childrenList.get(i).add(child);
             }
-            nodes[i].children = new int[valid.size()];
-            for (int k = 0; k < valid.size(); k++) nodes[i].children[k] = valid.get(k);
+        }
+
+        // EXT_mesh_gpu_instancing: 各インスタンスを子ノードとして展開する
+        for (int i = 0; i < list.size(); i++) {
+            final Map<String, Object> json = Json.object(list.get(i));
+            final Map<String, Object> extensions = Json.object(json, "extensions");
+            final Map<String, Object> instancing = Json.object(extensions, "EXT_mesh_gpu_instancing");
+            if (instancing.isEmpty()) continue;
+            final GltfModel.Node parentNode = nodeList.get(i);
+            if (parentNode.mesh < 0) continue;
+
+            final Map<String, Object> attributes = Json.object(instancing, "attributes");
+            final int transAcc = Json.integer(attributes, "TRANSLATION", -1);
+            final int rotAcc = Json.integer(attributes, "ROTATION", -1);
+            final int scaleAcc = Json.integer(attributes, "SCALE", -1);
+
+            int instanceCount = -1;
+            if (transAcc >= 0) instanceCount = accessorCount(transAcc);
+            if (rotAcc >= 0) {
+                final int count = accessorCount(rotAcc);
+                if (instanceCount >= 0 && instanceCount != count) throw new IOException("Instancing accessor count mismatch");
+                instanceCount = count;
+            }
+            if (scaleAcc >= 0) {
+                final int count = accessorCount(scaleAcc);
+                if (instanceCount >= 0 && instanceCount != count) throw new IOException("Instancing accessor count mismatch");
+                instanceCount = count;
+            }
+            if (instanceCount <= 0) continue;
+
+            if ((long) nodeList.size() + instanceCount > MAX_NODES) {
+                throw new IOException("Model exceeds safety limits (max " + MAX_NODES + " nodes)");
+            }
+
+            final float[] translations = transAcc >= 0 ? floats(transAcc) : null;
+            final float[] rotations = rotAcc >= 0 ? floats(rotAcc) : null;
+            final float[] scales = scaleAcc >= 0 ? floats(scaleAcc) : null;
+
+            final int origMesh = parentNode.mesh;
+            final int origSkin = parentNode.skin;
+            final float[] origWeights = parentNode.weights;
+            // 元のノード自体は描画しない (各インスタンスが描画する)
+            parentNode.mesh = -1;
+
+            for (int k = 0; k < instanceCount; k++) {
+                final GltfModel.Node instNode = new GltfModel.Node();
+                instNode.parent = i;
+                instNode.mesh = origMesh;
+                instNode.skin = origSkin;
+                instNode.weights = origWeights;
+                if (translations != null) {
+                    instNode.translation = new float[]{translations[k * 3], translations[k * 3 + 1], translations[k * 3 + 2]};
+                }
+                if (rotations != null) {
+                    instNode.rotation = new float[]{rotations[k * 4], rotations[k * 4 + 1], rotations[k * 4 + 2], rotations[k * 4 + 3]};
+                    Mat4.normalize4(instNode.rotation);
+                }
+                if (scales != null) {
+                    instNode.scale = new float[]{scales[k * 3], scales[k * 3 + 1], scales[k * 3 + 2]};
+                }
+                final int instIndex = nodeList.size();
+                nodeList.add(instNode);
+                childrenList.add(new ArrayList<Integer>());
+                childrenList.get(i).add(instIndex);
+            }
+        }
+
+        final GltfModel.Node[] nodes = nodeList.toArray(new GltfModel.Node[0]);
+        for (int i = 0; i < nodes.length; i++) {
+            final List<Integer> ch = childrenList.get(i);
+            nodes[i].children = new int[ch.size()];
+            for (int k = 0; k < ch.size(); k++) nodes[i].children[k] = ch.get(k);
         }
 
         // 表示するシーン
