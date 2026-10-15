@@ -1,0 +1,184 @@
+// targets.json の 1 項目 (Minecraft のバージョン 1 つ) をビルドするための共通設定。
+// ソースは adapters/ 以下にあり、世代 (era) の sources で指定したフォルダを重ねて使う。
+// どの項目でもパッケージは marumasa.marumasa_sign.adapter で、jar にまとめるときに項目ごとの名前へ移す。
+
+apply plugin: 'java'
+apply plugin: 'xyz.wagyourtail.unimined'
+
+def spec = project.ext.spec
+def sourceDirs = { String sourceSetName, String kind ->
+    (spec.sources[sourceSetName] ?: []).collect { rootProject.file("adapters/${it}/${kind}") }
+}
+
+sourceSets {
+    main {
+        java.srcDirs = sourceDirs('main', 'java')
+        resources.srcDirs = sourceDirs('main', 'resources')
+    }
+}
+spec.loaders.each { loaderName, loaderSpec ->
+    sourceSets.create(loaderName) {
+        java.srcDirs = sourceDirs(loaderName, 'java')
+        resources.srcDirs = sourceDirs(loaderName, 'resources')
+    }
+}
+
+repositories {
+    // LiteLoader のスナップショットは公式のリダイレクタが停止しているため、配布元を直接指定する
+    exclusiveContent {
+        forRepository {
+            maven {
+                name = 'LiteLoader snapshots'
+                url = 'https://repo.mumfrey.com/content/repositories/snapshots/'
+            }
+        }
+        filter {
+            includeVersionByRegex('com\\.mumfrey', 'liteloader', '.*-SNAPSHOT')
+        }
+    }
+    mavenCentral()
+}
+
+tasks.withType(JavaCompile).configureEach {
+    sourceCompatibility = '8'
+    targetCompatibility = '8'
+}
+
+// ソースに埋め込むバージョン情報
+def generatedDir = layout.buildDirectory.dir('generated/buildinfo')
+def packageName = 'marumasa.marumasa_sign.adapter'
+def generateBuildInfo = tasks.register('generateBuildInfo') {
+    def modVersion = project.version.toString()
+    def outputDir = generatedDir
+    inputs.property('version', modVersion)
+    inputs.property('package', packageName)
+    outputs.dir(outputDir)
+    doLast {
+        def file = new File(outputDir.get().asFile, packageName.replace('.', '/') + '/BuildInfo.java')
+        file.parentFile.mkdirs()
+        file.setText("package ${packageName};\n\npublic final class BuildInfo {\n" +
+                "    public static final String VERSION = \"${modVersion}\";\n\n" +
+                "    private BuildInfo() {\n    }\n}\n", 'UTF-8')
+    }
+}
+sourceSets.main.java.srcDir(generateBuildInfo)
+
+def applyMappings = { mappingsConfig ->
+    def parts = spec.mappings.split(':')
+    switch (parts[0]) {
+        case 'mcp':
+            mappingsConfig.searge()
+            mappingsConfig.mcp(parts[1], parts[2])
+            break
+        case 'mojmap':
+            mappingsConfig.mojmap()
+            break
+        case 'none':
+            // 26.1 以降は難読化されていないため不要
+            break
+        default:
+            throw new GradleException("Unknown mappings: ${spec.mappings}")
+    }
+}
+
+unimined.minecraft {
+    version spec.minecraft
+
+    mappings {
+        applyMappings(delegate)
+    }
+
+    defaultRemapJar = false
+}
+
+spec.loaders.each { loaderName, loaderSpec ->
+    unimined.minecraft(sourceSets[loaderName]) {
+        combineWith(sourceSets.main)
+
+        switch (loaderName) {
+            case 'forge':
+                minecraftForge {
+                    loader loaderSpec.loader
+                }
+                break
+            case 'neoforge':
+                neoForge {
+                    loader loaderSpec.loader
+                }
+                break
+            case 'fabric':
+                fabric {
+                    loader loaderSpec.loader
+                }
+                break
+            case 'liteloader':
+                side 'client'
+                liteloader {
+                    loader loaderSpec.loader
+                }
+                break
+            default:
+                throw new GradleException("Unknown loader: ${loaderName}")
+        }
+
+        // ローダーが足したメソッドと同じ名前になってしまうメソッドに、別の名前を付ける。
+        // [クラス, "メソッド;シグネチャ", 新しい名前] の組で、名前は SRG のもの
+        if (loaderSpec.stubs) {
+            mappings {
+                stubs(['searge', 'mojmap']) {
+                    loaderSpec.stubs.each { stub ->
+                        c([stub[0]]) {
+                            m([stub[1], stub[2]])
+                        }
+                    }
+                }
+            }
+        }
+
+        if (spec.mappings == 'mojmap' && loaderName in ['forge', 'neoforge']) {
+            // ローダーが足したメソッドと Minecraft のメソッドの名前がぶつかるバージョンがある。
+            // 名前を付け直した結果が同じになるだけで動作には影響しないため、無視して進める
+            minecraftRemapper.config {
+                ignoreConflicts(true)
+            }
+        }
+
+        defaultRemapJar = true
+    }
+
+    dependencies.add("${loaderName}Implementation", project(':core'))
+}
+
+dependencies {
+    implementation project(':core')
+}
+
+// Fabric 用のメタデータ。統合 jar の中に入れ子で入り、対応するバージョンのときだけ読み込まれる。
+// ビルドツールが設定時にこのファイルを読むため、タスクではなくその場で書き出す
+if (spec.loaders.fabric != null) {
+    def versions = spec.loaders.fabric.versions
+    def label = versions.size() == 1 ? versions[0] : "${versions.first()} - ${versions.last()}"
+    def metadataDir = layout.buildDirectory.dir('generated/fabric-resources').get().asFile
+    def metadata = groovy.json.JsonOutput.prettyPrint(groovy.json.JsonOutput.toJson([
+            schemaVersion: 1,
+            id           : "marumasa_sign_${spec.name}".toString(),
+            version      : project.version.toString(),
+            name         : "MarumaSign (${label})".toString(),
+            description  : "MarumaSign for Minecraft ${label}.".toString(),
+            license      : 'MIT',
+            environment  : 'client',
+            entrypoints  : [client: ['marumasa.marumasa_sign.adapter.FabricEntry']],
+            depends      : [marumasa_sign: '*', minecraft: versions],
+            custom       : [modmenu: [parent: 'marumasa_sign', badges: ['library']]],
+    ])) + '\n'
+    def metadataFile = new File(metadataDir, 'fabric.mod.json')
+    if (!metadataFile.exists() || metadataFile.getText('UTF-8') != metadata) {
+        metadataDir.mkdirs()
+        metadataFile.setText(metadata, 'UTF-8')
+    }
+    sourceSets.fabric.resources.srcDir(metadataDir)
+}
+
+jar {
+    enabled = false
+}

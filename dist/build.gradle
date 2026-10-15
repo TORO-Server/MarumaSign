@@ -1,0 +1,246 @@
+import org.objectweb.asm.ClassReader
+import org.objectweb.asm.ClassWriter
+import org.objectweb.asm.commons.ClassRemapper
+import org.objectweb.asm.commons.Remapper
+
+import java.util.zip.ZipFile
+
+buildscript {
+    repositories {
+        mavenCentral()
+    }
+    dependencies {
+        classpath 'org.ow2.asm:asm-commons:9.8'
+    }
+}
+
+plugins {
+    id 'base'
+}
+
+base {
+    archivesName = 'MarumaSign'
+}
+
+def basePackage = 'marumasa/marumasa_sign'
+def targets = rootProject.marumaTargets
+targets.each { evaluationDependsOn(":targets:${it.name}") }
+evaluationDependsOn(':core')
+evaluationDependsOn(':bootstrap')
+
+/**
+ * jar の中のクラスを、パッケージ名を変えて取り出す。
+ * 同じ実装でもローダーごとに実行時の名前 (SRG / 公式 / intermediary) が違うため、
+ * 1 つの jar に同居させるにはローダーごとに別のパッケージへ移す必要がある。
+ */
+abstract class RelocateJar extends DefaultTask {
+    @InputFile
+    abstract RegularFileProperty getInput()
+
+    @Input
+    abstract Property<String> getFromPrefix()
+
+    @Input
+    abstract Property<String> getToPrefix()
+
+    @OutputDirectory
+    abstract DirectoryProperty getOutput()
+
+    @TaskAction
+    void relocate() {
+        def outputDir = output.get().asFile
+        project.delete(outputDir)
+        outputDir.mkdirs()
+
+        def from = fromPrefix.get()
+        def to = toPrefix.get()
+        def remapper = new Remapper() {
+            @Override
+            String map(String internalName) {
+                if (internalName == from || internalName.startsWith(from + '/')) {
+                    return to + internalName.substring(from.length())
+                }
+                return internalName
+            }
+        }
+
+        new ZipFile(input.get().asFile).withCloseable { zip ->
+            zip.entries().each { entry ->
+                if (entry.directory || !entry.name.startsWith(from + '/') || !entry.name.endsWith('.class')) return
+                def reader = new ClassReader(zip.getInputStream(entry).bytes)
+                def writer = new ClassWriter(0)
+                reader.accept(new ClassRemapper(writer, remapper), 0)
+                def file = new File(outputDir, to + entry.name.substring(from.length()))
+                file.parentFile.mkdirs()
+                file.bytes = writer.toByteArray()
+            }
+        }
+    }
+}
+
+// ---------- 統合 jar (Forge / NeoForge / Fabric) ----------
+
+// 「ローダー.バージョン = 実装の名前」の対応表
+def tableLines = []
+def relocateTasks = []
+
+targets.each { target ->
+    ['forge', 'neoforge'].each { loaderName ->
+        def loaderSpec = target.loaders[loaderName]
+        if (loaderSpec == null) return
+        loaderSpec.versions.each { tableLines << "${loaderName}.${it}=${target.name}" }
+
+        def remapTask = project(":targets:${target.name}").tasks.named("remap${loaderName.capitalize()}Jar")
+        relocateTasks << tasks.register("relocate${loaderName.capitalize()}${target.name.capitalize()}", RelocateJar) {
+            input = remapTask.flatMap { it.archiveFile }
+            fromPrefix = "${basePackage}/adapter"
+            toPrefix = "${basePackage}/${loaderName}/${target.name}"
+            output = layout.buildDirectory.dir("relocated/${loaderName}/${target.name}")
+        }
+    }
+}
+
+// Fabric は jar の中の jar を扱えるので、バージョンごとの実装をそのまま同梱し、
+// 実行中のバージョンに合うものだけを Fabric Loader に選ばせる
+def fabricJars = [:]
+targets.each { target ->
+    if (target.loaders.fabric == null) return
+    fabricJars["marumasa_sign-fabric-${target.name}.jar".toString()] =
+            project(":targets:${target.name}").tasks.named('remapFabricJar')
+}
+
+def generateFabricMetadata = tasks.register('generateFabricMetadata') {
+    def outputDir = layout.buildDirectory.dir('generated/fabric')
+    def json = groovy.json.JsonOutput.prettyPrint(groovy.json.JsonOutput.toJson([
+            schemaVersion: 1,
+            id           : 'marumasa_sign',
+            version      : project.version.toString(),
+            name         : 'MarumaSign',
+            description  : 'Display images on signs.',
+            authors      : ['marumasa'],
+            contact      : [repo: 'https://github.com/TORO-Server/MarumaSign'],
+            license      : 'MIT',
+            icon         : 'assets/marumasa_sign/icon.png',
+            environment  : 'client',
+            jars         : fabricJars.keySet().sort().collect { [file: "META-INF/jars/${it}".toString()] },
+    ]))
+    inputs.property('json', json)
+    outputs.dir(outputDir)
+    doLast {
+        def file = new File(outputDir.get().asFile, 'fabric.mod.json')
+        file.parentFile.mkdirs()
+        file.setText(json + '\n', 'UTF-8')
+    }
+}
+
+def generateTable = tasks.register('generateTable') {
+    def lines = tableLines.sort()
+    def outputDir = layout.buildDirectory.dir('generated/table')
+    inputs.property('lines', lines)
+    outputs.dir(outputDir)
+    doLast {
+        def file = new File(outputDir.get().asFile, 'marumasa_sign/targets.properties')
+        file.parentFile.mkdirs()
+        file.setText(lines.join('\n') + '\n', 'UTF-8')
+    }
+}
+
+def resourceProperties = [version: project.version.toString()]
+
+def universalJar = tasks.register('universalJar', Jar) {
+    archiveVersion = project.version.toString()
+    destinationDirectory = layout.buildDirectory.dir('libs')
+    duplicatesStrategy = DuplicatesStrategy.FAIL
+
+    from(project(':core').sourceSets.main.output)
+    from(project(':bootstrap').sourceSets.main.output)
+    relocateTasks.each { from(it) }
+    from(generateTable)
+    from(generateFabricMetadata)
+    fabricJars.each { name, task ->
+        from(task.flatMap { it.archiveFile }) {
+            into 'META-INF/jars'
+            rename { name }
+        }
+    }
+
+    from('src/main/resources') {
+        inputs.properties(resourceProperties)
+        filesMatching(['mcmod.info', 'META-INF/mods.toml', 'META-INF/neoforge.mods.toml']) {
+            expand(resourceProperties)
+        }
+    }
+    // Minecraft 1.10.2 以前は言語ファイルの名前に大文字を使う
+    from('src/main/resources/assets/marumasa_sign/lang') {
+        include '*.lang'
+        into 'assets/marumasa_sign/lang'
+        rename { String name ->
+            def parts = name.replace('.lang', '').split('_')
+            "${parts[0]}_${parts[1].toUpperCase()}.lang"
+        }
+    }
+    from(rootProject.file('LICENSE')) {
+        rename { "${it}_marumasa_sign" }
+    }
+}
+
+// ---------- LiteLoader 用 (.litemod はバージョンごとに 1 つ) ----------
+
+def litemodTasks = []
+targets.each { target ->
+    def loaderSpec = target.loaders.liteloader
+    if (loaderSpec == null) return
+    def remapTask = project(":targets:${target.name}").tasks.named('remapLiteloaderJar')
+
+    def metadata = tasks.register("litemodJson${target.name.capitalize()}") {
+        def outputDir = layout.buildDirectory.dir("generated/litemod/${target.name}")
+        def json = groovy.json.JsonOutput.prettyPrint(groovy.json.JsonOutput.toJson([
+                name       : 'MarumaSign',
+                mcversion  : target.minecraft,
+                version    : project.version.toString(),
+                revision   : '1',
+                author     : 'marumasa',
+                description: 'Display images on signs.',
+                url        : 'https://github.com/TORO-Server/MarumaSign'
+        ]))
+        inputs.property('json', json)
+        outputs.dir(outputDir)
+        doLast {
+            def file = new File(outputDir.get().asFile, 'litemod.json')
+            file.parentFile.mkdirs()
+            file.setText(json + '\n', 'UTF-8')
+        }
+    }
+
+    litemodTasks << tasks.register("litemod${target.name.capitalize()}", Jar) {
+        archiveVersion = project.version.toString()
+        archiveClassifier = "liteloader-mc${target.minecraft}"
+        archiveExtension = 'litemod'
+        destinationDirectory = layout.buildDirectory.dir('libs')
+        duplicatesStrategy = DuplicatesStrategy.FAIL
+
+        from(project(':core').sourceSets.main.output)
+        from(remapTask.map { zipTree(it.archiveFile) }) {
+            include "${basePackage}/**"
+        }
+        from(metadata)
+        from('src/main/resources') {
+            include 'assets/**'
+            include 'pack.mcmeta'
+        }
+        from('src/main/resources/assets/marumasa_sign/lang') {
+            include '*.lang'
+            into 'assets/marumasa_sign/lang'
+            rename { String name ->
+                def parts = name.replace('.lang', '').split('_')
+                "${parts[0]}_${parts[1].toUpperCase()}.lang"
+            }
+        }
+        from(rootProject.file('LICENSE')) {
+            rename { "${it}_marumasa_sign" }
+        }
+    }
+}
+
+assemble.dependsOn(universalJar)
+litemodTasks.each { assemble.dependsOn(it) }
