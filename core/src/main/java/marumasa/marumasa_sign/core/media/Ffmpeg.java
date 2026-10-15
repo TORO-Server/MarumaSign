@@ -31,7 +31,7 @@ public final class Ffmpeg {
     }
 
     // 見つからなければ例外を投げる (null のまま使って落ちないように)
-    static synchronized File requireFfmpeg() throws IOException {
+    public static synchronized File requireFfmpeg() throws IOException {
         search();
         if (ffmpeg == null) throw new IOException("FFmpeg was not found");
         return ffmpeg;
