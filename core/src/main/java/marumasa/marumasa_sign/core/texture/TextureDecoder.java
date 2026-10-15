@@ -31,7 +31,11 @@ public final class TextureDecoder {
             return DdsDecoder.decode(data);
         }
 
-        // 2. KTX2 (後で追加)
+        // 2. KTX2
+        if (Ktx2Decoder.isKtx2(data) || "image/ktx2".equalsIgnoreCase(mimeType)) {
+            return Ktx2Decoder.decode(data);
+        }
+
 
         // 3. WebP
         if (WebpDecoder.isWebp(data) || "image/webp".equalsIgnoreCase(mimeType)) {
