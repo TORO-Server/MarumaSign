@@ -1,5 +1,6 @@
 package marumasa.marumasa_sign.core.gltf;
 
+import marumasa.marumasa_sign.core.gltf.meshopt.MeshoptDecoder;
 import marumasa.marumasa_sign.core.util.Json;
 
 import javax.imageio.ImageIO;
@@ -53,7 +54,7 @@ public final class GltfLoader {
     private static final float INVERSE_GAMMA = 1f / 2.2f;
 
     // 対応していない圧縮形式。これが必須のファイルは形を読み取れない
-    private static final String[] UNSUPPORTED = {"KHR_draco_mesh_compression", "EXT_meshopt_compression"};
+    private static final String[] UNSUPPORTED = {"KHR_draco_mesh_compression"};
 
     // 先頭のバイト列が GLB かどうか
     public static boolean isGlb(byte[] head, int length) {
@@ -130,6 +131,7 @@ public final class GltfLoader {
     private List<Object> imageList;
     private Pixels[] images;
     private boolean[] imageTried;
+    private byte[][] decompressedViews;
 
     private GltfLoader(Resources resources) {
         this.resources = resources;
@@ -152,6 +154,7 @@ public final class GltfLoader {
         }
 
         bufferViews = Json.array(root, "bufferViews");
+        decompressedViews = new byte[bufferViews.size()][];
         accessors = Json.array(root, "accessors");
         textureList = Json.array(root, "textures");
         samplerList = Json.array(root, "samplers");
@@ -347,16 +350,80 @@ public final class GltfLoader {
         }
     }
 
+    // EXT_meshopt_compression / KHR_meshopt_compression の展開バッファを取得する
+    private byte[] getDecompressedView(int viewIndex) throws IOException {
+        if (viewIndex < 0 || viewIndex >= bufferViews.size()) return null;
+        if (decompressedViews[viewIndex] != null) return decompressedViews[viewIndex];
+        final Map<String, Object> view = Json.object(bufferViews.get(viewIndex));
+        final Map<String, Object> extensions = Json.object(view, "extensions");
+        Map<String, Object> meshopt = Json.object(extensions, "EXT_meshopt_compression");
+        if (meshopt.isEmpty()) meshopt = Json.object(extensions, "KHR_meshopt_compression");
+        if (meshopt.isEmpty()) return null;
+
+        final int bufferIndex = Json.integer(meshopt, "buffer", 0);
+        if (bufferIndex < 0 || bufferIndex >= buffers.length) {
+            throw new IOException("Invalid meshopt buffer index: " + bufferIndex);
+        }
+        final byte[] sourceBuffer = buffers[bufferIndex];
+        final int byteOffset = Json.integer(meshopt, "byteOffset", 0);
+        final int byteLength = Json.integer(meshopt, "byteLength", 0);
+        final int byteStride = Json.integer(meshopt, "byteStride", 0);
+        final int count = Json.integer(meshopt, "count", 0);
+        final String mode = Json.string(meshopt, "mode", "ATTRIBUTES");
+        final String filter = Json.string(meshopt, "filter", "NONE");
+
+        if (byteStride <= 0 || count < 0) {
+            throw new IOException("Invalid meshopt parameters: stride=" + byteStride + ", count=" + count);
+        }
+        final long totalBytes = (long) count * byteStride;
+        if (totalBytes > 1 << 28) {
+            throw new IOException("Meshopt decompressed size exceeds safety limit: " + totalBytes);
+        }
+        final byte[] decompressed = new byte[(int) totalBytes];
+
+        if ("ATTRIBUTES".equals(mode)) {
+            MeshoptDecoder.decodeVertexBuffer(decompressed, 0, count, byteStride, sourceBuffer, byteOffset, byteLength);
+        } else if ("TRIANGLES".equals(mode)) {
+            MeshoptDecoder.decodeIndexBuffer(decompressed, 0, count, byteStride, sourceBuffer, byteOffset, byteLength);
+        } else if ("INDICES".equals(mode)) {
+            MeshoptDecoder.decodeIndexSequence(decompressed, 0, count, byteStride, sourceBuffer, byteOffset, byteLength);
+        } else {
+            throw new IOException("Unsupported meshopt compression mode: " + mode);
+        }
+
+        if ("OCTAHEDRAL".equals(filter)) {
+            MeshoptDecoder.decodeFilterOct(decompressed, 0, count, byteStride);
+        } else if ("QUATERNION".equals(filter)) {
+            MeshoptDecoder.decodeFilterQuat(decompressed, 0, count, byteStride);
+        } else if ("EXPONENTIAL".equals(filter)) {
+            MeshoptDecoder.decodeFilterExp(decompressed, 0, count, byteStride);
+        } else if ("COLOR".equals(filter)) {
+            MeshoptDecoder.decodeFilterColor(decompressed, 0, count, byteStride);
+        } else if (!"NONE".equals(filter) && filter != null) {
+            throw new IOException("Unsupported meshopt filter: " + filter);
+        }
+
+        decompressedViews[viewIndex] = decompressed;
+        return decompressed;
+    }
+
     // バッファビューから count 個の要素を読んで out に入れる
     private void readView(int viewIndex, int byteOffset, int componentType, boolean normalized,
                           int components, int count, double[] out) throws IOException {
         final Map<String, Object> view = Json.object(bufferViews.get(viewIndex));
-        if (Json.object(view, "extensions").containsKey("EXT_meshopt_compression")) {
-            throw new IOException("Unsupported glTF extension: EXT_meshopt_compression");
+        final byte[] decomp = getDecompressedView(viewIndex);
+        final byte[] data;
+        final int viewOffset;
+        final int viewLength;
+        if (decomp != null) {
+            data = decomp;
+            viewOffset = 0;
+            viewLength = decomp.length;
+        } else {
+            data = buffers[Json.integer(view, "buffer", 0)];
+            viewOffset = Json.integer(view, "byteOffset", 0);
+            viewLength = Json.integer(view, "byteLength", 0);
         }
-        final byte[] data = buffers[Json.integer(view, "buffer", 0)];
-        final int viewOffset = Json.integer(view, "byteOffset", 0);
-        final int viewLength = Json.integer(view, "byteLength", 0);
         final int size = componentSize(componentType);
         final int elementSize = size * components;
         int stride = Json.integer(view, "byteStride", 0);
@@ -394,13 +461,15 @@ public final class GltfLoader {
 
         final double[] out;
         if (accessor.containsKey("bufferView")) {
-            // 配列を確保する前に、実際のデータの量で要素数を確かめる
-            final Map<String, Object> view = Json.object(bufferViews.get(Json.integer(accessor, "bufferView", 0)));
-            if ((long) count * components * componentSize(componentType) > Json.integer(view, "byteLength", 0)) {
+            final int viewIndex = Json.integer(accessor, "bufferView", 0);
+            final byte[] decomp = getDecompressedView(viewIndex);
+            final Map<String, Object> view = Json.object(bufferViews.get(viewIndex));
+            final int viewLength = decomp != null ? decomp.length : Json.integer(view, "byteLength", 0);
+            if ((long) count * components * componentSize(componentType) > viewLength) {
                 throw new IOException("Accessor is out of range");
             }
             out = new double[count * components];
-            readView(Json.integer(accessor, "bufferView", 0), Json.integer(accessor, "byteOffset", 0),
+            readView(viewIndex, Json.integer(accessor, "byteOffset", 0),
                     componentType, normalized, components, count, out);
         } else {
             if ((long) count * components > MAX_EMPTY_ACCESSOR) throw new IOException("Accessor is too large");
@@ -468,13 +537,19 @@ public final class GltfLoader {
             if (uri != null) {
                 data = resource(uri);
             } else {
-                final Map<String, Object> view = Json.object(bufferViews.get(Json.integer(json, "bufferView", -1)));
-                final byte[] buffer = buffers[Json.integer(view, "buffer", 0)];
-                final int offset = Json.integer(view, "byteOffset", 0);
-                final int length = Json.integer(view, "byteLength", 0);
-                if (offset < 0 || length < 0 || (long) offset + length > buffer.length) return null;
-                data = new byte[length];
-                System.arraycopy(buffer, offset, data, 0, length);
+                final int viewIndex = Json.integer(json, "bufferView", -1);
+                final byte[] decomp = getDecompressedView(viewIndex);
+                if (decomp != null) {
+                    data = decomp;
+                } else {
+                    final Map<String, Object> view = Json.object(bufferViews.get(viewIndex));
+                    final byte[] buffer = buffers[Json.integer(view, "buffer", 0)];
+                    final int offset = Json.integer(view, "byteOffset", 0);
+                    final int length = Json.integer(view, "byteLength", 0);
+                    if (offset < 0 || length < 0 || (long) offset + length > buffer.length) return null;
+                    data = new byte[length];
+                    System.arraycopy(buffer, offset, data, 0, length);
+                }
             }
             BufferedImage decoded = ImageIO.read(new ByteArrayInputStream(data));
             if (decoded == null) return null;
