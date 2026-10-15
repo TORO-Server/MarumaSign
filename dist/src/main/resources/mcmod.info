@@ -1,0 +1,16 @@
+[
+  {
+    "modid": "marumasa_sign",
+    "name": "MarumaSign",
+    "description": "Display images on signs.",
+    "version": "${version}",
+    "mcversion": "",
+    "url": "https://github.com/TORO-Server/MarumaSign",
+    "updateUrl": "",
+    "authorList": ["marumasa"],
+    "credits": "",
+    "logoFile": "assets/marumasa_sign/icon.png",
+    "screenshots": [],
+    "dependencies": []
+  }
+]

@@ -1,13 +1,19 @@
 name: Release Mod
 
+# main に入った時点で、gradle.properties の mod_version と同じ名前のタグ (v4.0.0 など) がまだなければ、
+# ビルドして GitHub Release を作る。バージョンを上げずに main へ入れた場合は何もしない。
 on:
   push:
-    tags:
-      - 'v*'
-      - '[0-9]+.[0-9]+.[0-9]+*'
+    branches:
+      - main
+  workflow_dispatch:
 
 permissions:
   contents: write
+
+concurrency:
+  group: release
+  cancel-in-progress: false
 
 jobs:
   build-and-release:
@@ -16,33 +22,60 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
+      - name: Read version from gradle.properties
+        id: version
+        shell: bash
+        run: |
+          VERSION=$(grep -E '^mod_version' gradle.properties | cut -d'=' -f2 | tr -d '[:space:]')
+          if [ -z "$VERSION" ]; then
+            echo "::error::gradle.properties に mod_version がありません"
+            exit 1
+          fi
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+          if git ls-remote --exit-code --tags origin "refs/tags/v${VERSION}" >/dev/null 2>&1; then
+            echo "Tag v${VERSION} already exists. Skipping release."
+            echo "release=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "release=true" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Set up JDK 25
+        if: steps.version.outputs.release == 'true'
         uses: actions/setup-java@v4
         with:
           java-version: '25'
           distribution: 'temurin'
 
       - name: Setup Gradle
+        if: steps.version.outputs.release == 'true'
         uses: gradle/actions/setup-gradle@v4
 
       - name: Make gradle wrapper executable
+        if: steps.version.outputs.release == 'true'
         run: chmod +x gradlew
 
+      # 対応するすべてのバージョンの Minecraft を取得するため、時間がかかる
       - name: Build with Gradle
-        run: ./gradlew build
+        if: steps.version.outputs.release == 'true'
+        run: ./gradlew :dist:assemble
 
-      - name: Get version from gradle.properties
-        id: get_version
-        run: |
-          VERSION=$(grep "mod_version" gradle.properties | cut -d'=' -f2 | tr -d '[:space:]')
-          echo "version=${VERSION}" >> $GITHUB_OUTPUT
-        shell: bash
+      # FFmpeg は jar に入れない (利用者が自分で用意する)
+      - name: Check that FFmpeg is not bundled
+        if: steps.version.outputs.release == 'true'
+        run: bash .github/scripts/check-no-ffmpeg.sh dist/build/libs
 
       - name: Create GitHub Release
+        if: steps.version.outputs.release == 'true'
         uses: softprops/action-gh-release@v2
         with:
+          tag_name: v${{ steps.version.outputs.version }}
+          target_commitish: ${{ github.sha }}
+          name: MarumaSign ${{ steps.version.outputs.version }}
+          generate_release_notes: true
           files: |
-            build/libs/marumasa_sign-${{ steps.get_version.outputs.version }}.jar
+            dist/build/libs/*.jar
+            dist/build/libs/*.litemod
+          fail_on_unmatched_files: true
           draft: false
           prerelease: false
         env:

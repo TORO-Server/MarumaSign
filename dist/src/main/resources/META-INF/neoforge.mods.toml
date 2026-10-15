@@ -1,0 +1,14 @@
+modLoader="javafml"
+loaderVersion="[1,)"
+license="MIT"
+issueTrackerURL="https://github.com/TORO-Server/MarumaSign/issues"
+
+[[mods]]
+modId="marumasa_sign"
+version="${version}"
+displayName="MarumaSign"
+displayURL="https://github.com/TORO-Server/MarumaSign"
+authors="marumasa"
+description='''
+Display images on signs.
+'''

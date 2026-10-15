@@ -121,3 +121,7 @@ run/
 
 # Decompiled Minecraft/mapping sources (generated locally by Loom, not project source)
 decompiled/
+
+# Generated per-target Gradle project directories
+/targets/
+
