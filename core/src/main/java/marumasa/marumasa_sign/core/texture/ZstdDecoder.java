@@ -1,864 +1,657 @@
 package marumasa.marumasa_sign.core.texture;
 
-import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.util.Arrays;
 
 /**
- * Zstandard (RFC 8878) デコーダ。
- * KTX2 の UASTC supercompression (scheme 2) 解凍に必要な機能を提供する。
+ * Zstandard (RFC 8878) の展開。KTX2 の超圧縮 (supercompressionScheme 2) に使う。
+ * 辞書は使わない (KTX2 では使われない)。
  */
-public final class ZstdDecoder {
+final class ZstdDecoder {
 
-    private static final int ZSTD_MAGIC = 0xFD2FB528;
+    private static final int MAGIC = 0xFD2FB528;
+
+    // 長さの符号ごとの、基準の値と追加のビット数
+    private static final int[] LL_BASE = {0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15,
+            16, 18, 20, 22, 24, 28, 32, 40, 48, 64, 128, 256, 512, 1024, 2048, 4096, 8192, 16384, 32768, 65536};
+    private static final int[] LL_BITS = {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+            1, 1, 1, 1, 2, 2, 3, 3, 4, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16};
+    private static final int[] ML_BASE = {3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18,
+            19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34,
+            35, 37, 39, 41, 43, 47, 51, 59, 67, 83, 99, 131, 259, 515, 1027, 2051, 4099, 8195, 16387, 32771, 65539};
+    private static final int[] ML_BITS = {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+            0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+            1, 1, 1, 1, 2, 2, 3, 3, 4, 4, 5, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16};
+
+    // 既定の分布
+    private static final short[] LL_DEFAULT = {4, 3, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 1, 1, 1,
+            2, 2, 2, 2, 2, 2, 2, 2, 2, 3, 2, 1, 1, 1, 1, 1, -1, -1, -1, -1};
+    private static final short[] ML_DEFAULT = {1, 4, 3, 2, 2, 2, 2, 2, 2, 1, 1, 1, 1, 1, 1, 1,
+            1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
+            1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, -1, -1, -1, -1, -1, -1, -1};
+    private static final short[] OF_DEFAULT = {1, 1, 1, 1, 1, 1, 2, 2, 2, 1, 1, 1, 1, 1, 1, 1,
+            1, 1, 1, 1, 1, 1, 1, 1, -1, -1, -1, -1, -1};
 
     private ZstdDecoder() {
     }
 
-    public static byte[] decompress(byte[] src, int srcOffset, int srcLength, int maxOutputSize) throws IOException {
-        if (src == null || srcOffset < 0 || srcLength < 4 || srcOffset + srcLength > src.length) {
-            throw new IOException("Invalid Zstd input data");
-        }
-
-        int pos = srcOffset;
-        final int end = srcOffset + srcLength;
-
-        final int magic = readIntLE(src, pos);
-        pos += 4;
-        if (magic != ZSTD_MAGIC) {
-            throw new IOException("Not a valid Zstandard frame: magic=" + Integer.toHexString(magic));
-        }
-
-        if (pos >= end) throw new IOException("Zstd frame header truncated");
-        final int fhd = src[pos++] & 0xFF;
-        final int fcsFlag = fhd >>> 6;
-        final int singleSeg = (fhd >>> 5) & 1;
-        final int contentChecksum = (fhd >>> 2) & 1;
-        final int dictIdFlag = fhd & 3;
-
-        int windowSize = 0;
-        if (singleSeg == 0) {
-            if (pos >= end) throw new IOException("Zstd window descriptor truncated");
-            final int winDesc = src[pos++] & 0xFF;
-            final int windowExponent = winDesc >>> 3;
-            final int windowMantissa = winDesc & 7;
-            final int windowBase = 1 << (10 + windowExponent);
-            windowSize = windowBase + (windowBase / 8) * windowMantissa;
-        }
-
-        if (dictIdFlag != 0) {
-            final int dictBytes = (dictIdFlag == 3) ? 4 : dictIdFlag;
-            pos += dictBytes;
-            if (pos > end) throw new IOException("Zstd dictionary ID truncated");
-        }
-
-        int frameContentSize = -1;
-        if (fcsFlag != 0 || singleSeg != 0) {
-            if (fcsFlag == 0 && singleSeg != 0) {
-                if (pos >= end) throw new IOException("Zstd FCS truncated");
-                frameContentSize = src[pos++] & 0xFF;
-            } else if (fcsFlag == 1) {
-                if (pos + 2 > end) throw new IOException("Zstd FCS truncated");
-                frameContentSize = (readUShortLE(src, pos) & 0xFFFF) + 256;
-                pos += 2;
-            } else if (fcsFlag == 2) {
-                if (pos + 4 > end) throw new IOException("Zstd FCS truncated");
-                frameContentSize = readIntLE(src, pos);
-                pos += 4;
-            } else if (fcsFlag == 3) {
-                if (pos + 8 > end) throw new IOException("Zstd FCS truncated");
-                final long fcs64 = readLongLE(src, pos);
-                pos += 8;
-                if (fcs64 > maxOutputSize || fcs64 > Integer.MAX_VALUE) {
-                    throw new IOException("Frame content size too large: " + fcs64);
-                }
-                frameContentSize = (int) fcs64;
-            }
-        }
-
-        if (singleSeg != 0 && frameContentSize >= 0) {
-            windowSize = frameContentSize;
-        }
-
-        final int initialCap = (frameContentSize > 0) ? Math.min(frameContentSize, maxOutputSize) : 65536;
-        final FastByteArrayBuffer out = new FastByteArrayBuffer(initialCap);
-
-        final Context ctx = new Context();
-        final int limit = end - (contentChecksum != 0 ? 4 : 0);
-
-        while (pos < limit) {
-            if (pos + 3 > limit) throw new IOException("Block header truncated");
-            final int bh = (src[pos] & 0xFF) | ((src[pos + 1] & 0xFF) << 8) | ((src[pos + 2] & 0xFF) << 16);
-            pos += 3;
-            final boolean lastBlock = (bh & 1) != 0;
-            final int blockType = (bh >>> 1) & 3;
-            final int blockSize = bh >>> 3;
-
-            if (pos + blockSize > limit) {
-                throw new IOException("Block data exceeds stream boundary");
-            }
-
-            switch (blockType) {
-                case 0: // Raw
-                    out.write(src, pos, blockSize);
-                    pos += blockSize;
-                    break;
-                case 1: // RLE
-                    final byte val = src[pos++];
-                    for (int i = 0; i < blockSize; i++) {
-                        out.writeByte(val);
-                    }
-                    break;
-                case 2: // Compressed
-                    decodeCompressedBlock(src, pos, blockSize, ctx, out, maxOutputSize);
-                    pos += blockSize;
-                    break;
-                default:
-                    throw new IOException("Reserved block type: " + blockType);
-            }
-
-            if (out.size() > maxOutputSize) {
-                throw new IOException("Decompressed size exceeds limit: " + out.size() + " > " + maxOutputSize);
-            }
-
-            if (lastBlock) break;
-        }
-
-        return out.toByteArray();
-    }
-
-    private static final class Context {
-        final int[] repeatOffsets = {1, 4, 8};
-        final FseTable llTable = new FseTable();
-        final FseTable ofTable = new FseTable();
-        final FseTable mlTable = new FseTable();
-        final HuffmanTable huffTable = new HuffmanTable();
-    }
-
-    private static void decodeCompressedBlock(byte[] src, int blockOffset, int blockSize, Context ctx,
-                                              FastByteArrayBuffer out, int maxOutputSize) throws IOException {
-        int pos = blockOffset;
-        final int blockEnd = blockOffset + blockSize;
-        if (pos >= blockEnd) throw new IOException("Empty compressed block");
-
-        // 1. Literals Section
-        final int litHdr = src[pos++] & 0xFF;
-        final int litType = litHdr & 3;
-        final int sizeFmt = (litHdr >>> 2) & 3;
-
-        int regenSize;
-        int compSize = 0;
-        int numStreams = 1;
-
-        if (litType == 0 || litType == 1) { // Raw or RLE
-            if (sizeFmt == 0 || sizeFmt == 2) {
-                regenSize = litHdr >>> 3;
-            } else if (sizeFmt == 1) {
-                if (pos >= blockEnd) throw new IOException("Literals header truncated");
-                regenSize = (litHdr >>> 4) | ((src[pos++] & 0xFF) << 4);
-            } else {
-                if (pos + 1 >= blockEnd) throw new IOException("Literals header truncated");
-                regenSize = (litHdr >>> 4) | ((src[pos++] & 0xFF) << 4) | ((src[pos++] & 0xFF) << 12);
-            }
-        } else { // Compressed (2) or Treeless (3)
-            numStreams = (sizeFmt == 0) ? 1 : 4;
-            if (sizeFmt == 0 || sizeFmt == 1) {
-                if (pos + 1 >= blockEnd) throw new IOException("Literals header truncated");
-                final int b1 = src[pos++] & 0xFF;
-                final int b2 = src[pos++] & 0xFF;
-                regenSize = (litHdr >>> 4) | ((b1 & 0x3F) << 4);
-                compSize = (b1 >>> 6) | (b2 << 2);
-            } else if (sizeFmt == 2) {
-                if (pos + 2 >= blockEnd) throw new IOException("Literals header truncated");
-                final int b1 = src[pos++] & 0xFF;
-                final int b2 = src[pos++] & 0xFF;
-                final int b3 = src[pos++] & 0xFF;
-                regenSize = (litHdr >>> 4) | (b1 << 4) | ((b2 & 0x03) << 12);
-                compSize = (b2 >>> 2) | (b3 << 6);
-            } else {
-                if (pos + 3 >= blockEnd) throw new IOException("Literals header truncated");
-                final int b1 = src[pos++] & 0xFF;
-                final int b2 = src[pos++] & 0xFF;
-                final int b3 = src[pos++] & 0xFF;
-                final int b4 = src[pos++] & 0xFF;
-                regenSize = (litHdr >>> 4) | (b1 << 4) | ((b2 & 0x3F) << 12);
-                compSize = (b2 >>> 6) | (b3 << 2) | (b4 << 10);
-            }
-        }
-
-        if (regenSize > maxOutputSize) {
-            throw new IOException("Regenerated size too large: " + regenSize);
-        }
-
-        final byte[] literals = new byte[regenSize];
-
-        if (litType == 0) { // Raw
-            if (pos + regenSize > blockEnd) throw new IOException("Raw literals truncated");
-            System.arraycopy(src, pos, literals, 0, regenSize);
-            pos += regenSize;
-        } else if (litType == 1) { // RLE
-            if (pos >= blockEnd) throw new IOException("RLE literal truncated");
-            final byte b = src[pos++];
-            Arrays.fill(literals, b);
-        } else { // Compressed or Treeless
-            final int litEnd = pos + compSize;
-            if (litEnd > blockEnd) throw new IOException("Compressed literals exceed block");
-
-            if (litType == 2) { // Read Huffman tree description
-                final int huffBytesRead = ctx.huffTable.read(src, pos, compSize);
-                pos += huffBytesRead;
-            }
-
-            if (numStreams == 1) {
-                ctx.huffTable.decode1Stream(src, pos, litEnd - pos, literals);
-            } else {
-                ctx.huffTable.decode4Streams(src, pos, litEnd - pos, literals);
-            }
-            pos = litEnd;
-        }
-
-        // 2. Sequences Section
-        if (pos >= blockEnd) {
-            out.write(literals, 0, literals.length);
-            return;
-        }
-
-        final int seqHeader = src[pos++] & 0xFF;
-        int numSequences;
-        if (seqHeader == 0) {
-            numSequences = 0;
-        } else if (seqHeader < 128) {
-            numSequences = seqHeader;
-        } else if (seqHeader < 255) {
-            if (pos >= blockEnd) throw new IOException("Sequences header truncated");
-            numSequences = ((seqHeader - 128) << 8) | (src[pos++] & 0xFF);
-        } else {
-            if (pos + 1 >= blockEnd) throw new IOException("Sequences header truncated");
-            numSequences = (src[pos++] & 0xFF) | ((src[pos++] & 0xFF) << 8) + 0x7F00;
-        }
-
-        if (numSequences == 0) {
-            out.write(literals, 0, literals.length);
-            return;
-        }
-
-        if (pos >= blockEnd) throw new IOException("Sequences mode byte missing");
-        final int modes = src[pos++] & 0xFF;
-        final int llMode = modes >>> 6;
-        final int ofMode = (modes >>> 4) & 3;
-        final int mlMode = (modes >>> 2) & 3;
-
-        // FSE テーブル初期化 / 読み出し
-        pos = initFseTable(src, pos, blockEnd, ctx.llTable, llMode, LL_DEFAULT_DISTRIBUTION, 6, 35);
-        pos = initFseTable(src, pos, blockEnd, ctx.ofTable, ofMode, OF_DEFAULT_DISTRIBUTION, 5, 28);
-        pos = initFseTable(src, pos, blockEnd, ctx.mlTable, mlMode, ML_DEFAULT_DISTRIBUTION, 6, 52);
-
-        // 逆方向ビットストリームからシーケンスを復号
-        final BitReaderRev bitReader = new BitReaderRev(src, pos, blockEnd - pos);
-
-        int stateLL = bitReader.readBits(ctx.llTable.accuracyLog);
-        int stateOF = bitReader.readBits(ctx.ofTable.accuracyLog);
-        int stateML = bitReader.readBits(ctx.mlTable.accuracyLog);
-
-        int litPos = 0;
-
-        for (int i = 0; i < numSequences; i++) {
-            final int ofCode = ctx.ofTable.symbols[stateOF];
-            final int mlCode = ctx.mlTable.symbols[stateML];
-            final int llCode = ctx.llTable.symbols[stateLL];
-
-            final int mlBits = ML_EXTRA_BITS[mlCode];
-            final int llBits = LL_EXTRA_BITS[llCode];
-
-            final int offset;
-            if (ofCode > 1) {
-                final int ofExtra = bitReader.readBits(ofCode);
-                offset = OF_BASE[ofCode] + ofExtra;
-                ctx.repeatOffsets[2] = ctx.repeatOffsets[1];
-                ctx.repeatOffsets[1] = ctx.repeatOffsets[0];
-                ctx.repeatOffsets[0] = offset;
-            } else {
-                final int ll0 = (LL_BASE[llCode] == 0) ? 1 : 0;
-                if (ofCode == 0) {
-                    offset = ctx.repeatOffsets[ll0];
-                    ctx.repeatOffsets[1] = ctx.repeatOffsets[1 - ll0];
-                    ctx.repeatOffsets[0] = offset;
-                } else { // ofCode == 1
-                    final int extra = bitReader.readBits(1);
-                    final int offsetVal = 1 + ll0 + extra;
-                    final int temp = (offsetVal == 3) ? ctx.repeatOffsets[0] - 1 : ctx.repeatOffsets[offsetVal];
-                    if (offsetVal != 1) {
-                        ctx.repeatOffsets[2] = ctx.repeatOffsets[1];
-                    }
-                    ctx.repeatOffsets[1] = ctx.repeatOffsets[0];
-                    ctx.repeatOffsets[0] = offset = temp;
-                }
-            }
-
-            final int matchLength = ML_BASE[mlCode] + ((mlBits > 0) ? bitReader.readBits(mlBits) : 0);
-            final int litLength = LL_BASE[llCode] + ((llBits > 0) ? bitReader.readBits(llBits) : 0);
-
-            // 1. リテラル出力
-            if (litLength > 0) {
-                if (litPos + litLength > literals.length) {
-                    throw new IOException("Literal length exceeds available literals");
-                }
-                out.write(literals, litPos, litLength);
-                litPos += litLength;
-            }
-
-            // 2. 過去のデータから matchLength バイトをコピー
-            out.copyMatch(offset, matchLength);
-
-            // 3. 次の状態へ遷移 (RFC 8878: LL -> ML -> OF)
-            if (i < numSequences - 1) {
-                final int llNumBits = ctx.llTable.numBits[stateLL];
-                stateLL = ctx.llTable.newStateBase[stateLL] + ((llNumBits > 0) ? bitReader.readBits(llNumBits) : 0);
-
-                final int mlNumBits = ctx.mlTable.numBits[stateML];
-                stateML = ctx.mlTable.newStateBase[stateML] + ((mlNumBits > 0) ? bitReader.readBits(mlNumBits) : 0);
-
-                final int ofNumBits = ctx.ofTable.numBits[stateOF];
-                stateOF = ctx.ofTable.newStateBase[stateOF] + ((ofNumBits > 0) ? bitReader.readBits(ofNumBits) : 0);
-            }
-        }
-
-        // 残りのリテラルを出力
-        if (litPos < literals.length) {
-            out.write(literals, litPos, literals.length - litPos);
+    /**
+     * 展開する。maxSize を超えるときは失敗にする。
+     */
+    static byte[] decompress(byte[] src, int offset, int length, int maxSize) throws IOException {
+        try {
+            return new Frame(src, offset, offset + length, maxSize).run();
+        } catch (RuntimeException e) {
+            throw new IOException("Invalid Zstandard data: " + e, e);
         }
     }
 
-    private static int initFseTable(byte[] src, int pos, int end, FseTable table, int mode,
-                                    short[] defaultDist, int defaultAccLog, int maxSymbol) throws IOException {
-        switch (mode) {
-            case 0: // Predefined
-                table.buildFromDistribution(defaultDist, defaultAccLog, maxSymbol);
-                return pos;
-            case 1: // RLE
-                if (pos >= end) throw new IOException("RLE FSE symbol truncated");
-                final int sym = src[pos++] & 0xFF;
-                table.buildRle(sym);
-                return pos;
-            case 2: // FSE compressed
-                return table.readFse(src, pos, end, maxSymbol);
-            case 3: // Repeat
-                if (!table.isValid()) throw new IOException("Repeat mode with uninitialized FSE table");
-                return pos;
-            default:
-                throw new IOException("Invalid FSE mode: " + mode);
-        }
-    }
+    // ---------- FSE の表 ----------
 
-    // FSE テーブル
     private static final class FseTable {
         int accuracyLog;
-        int[] symbols;
-        byte[] numBits;
-        short[] newStateBase;
-        private boolean valid = false;
+        int[] symbol;
+        int[] bits;
+        int[] base;
 
-        boolean isValid() {
-            return valid;
-        }
-
-        void buildRle(int symbol) {
-            accuracyLog = 0;
-            symbols = new int[]{symbol};
-            numBits = new byte[]{0};
-            newStateBase = new short[]{0};
-            valid = true;
-        }
-
-        void buildFromDistribution(short[] dist, int accLog, int maxSymbol) {
-            this.accuracyLog = accLog;
-            final int tableSize = 1 << accLog;
-            symbols = new int[tableSize];
-            numBits = new byte[tableSize];
-            newStateBase = new short[tableSize];
-
-            final int[] nextState = new int[maxSymbol + 1];
-            for (int s = 0; s <= maxSymbol; s++) {
-                final int prob = dist[s];
-                if (prob < 0) {
-                    nextState[s] = 1;
+        // 確率の分布から表を作る
+        static FseTable build(short[] normalized, int symbols, int accuracyLog) throws IOException {
+            final int size = 1 << accuracyLog;
+            final FseTable table = new FseTable();
+            table.accuracyLog = accuracyLog;
+            table.symbol = new int[size];
+            table.bits = new int[size];
+            table.base = new int[size];
+            final int[] next = new int[symbols];
+            int high = size - 1;
+            // 「1 より小さい」確率の記号は、表の後ろから 1 つずつ置く
+            for (int s = 0; s < symbols; s++) {
+                if (normalized[s] == -1) {
+                    if (high < 0) throw new IOException("Invalid FSE distribution");
+                    table.symbol[high--] = s;
+                    next[s] = 1;
                 } else {
-                    nextState[s] = prob;
+                    next[s] = normalized[s];
                 }
             }
-
-            int highThreshold = tableSize - 1;
-            for (int s = 0; s <= maxSymbol; s++) {
-                if (dist[s] == -1) {
-                    symbols[highThreshold] = s;
-                    highThreshold--;
-                }
-            }
-
+            final int step = (size >> 1) + (size >> 3) + 3;
+            final int mask = size - 1;
             int position = 0;
-            final int step = (tableSize >>> 1) + (tableSize >>> 3) + 3;
-            final int mask = tableSize - 1;
-
-            for (int s = 0; s <= maxSymbol; s++) {
-                final int prob = dist[s];
-                if (prob <= 0) continue;
-                for (int i = 0; i < prob; i++) {
-                    symbols[position] = s;
+            for (int s = 0; s < symbols; s++) {
+                for (int i = 0; i < normalized[s]; i++) {
+                    table.symbol[position] = s;
                     do {
                         position = (position + step) & mask;
-                    } while (position > highThreshold);
+                    } while (position > high);
                 }
             }
-
-            for (int i = 0; i < tableSize; i++) {
-                final int s = symbols[i];
-                final int state = nextState[s]++;
-                final int bits = accLog - highBit(state);
-                numBits[i] = (byte) bits;
-                newStateBase[i] = (short) ((state << bits) - tableSize);
+            if (position != 0) throw new IOException("Invalid FSE distribution");
+            for (int state = 0; state < size; state++) {
+                final int s = table.symbol[state];
+                final int nextState = next[s]++;
+                final int nbBits = accuracyLog - (31 - Integer.numberOfLeadingZeros(nextState));
+                table.bits[state] = nbBits;
+                table.base[state] = (nextState << nbBits) - size;
             }
-
-            valid = true;
+            return table;
         }
 
-        int readFse(byte[] src, int pos, int end, int maxSymbol) throws IOException {
-            final short[] dist = new short[maxSymbol + 1];
-
-            long bitBuffer = 0;
-            int bitsInBuffer = 0;
-            int curPos = pos;
-
-            // fill initial bits
-            while (bitsInBuffer <= 56 && curPos < end) {
-                bitBuffer |= ((long) (src[curPos++] & 0xFF)) << bitsInBuffer;
-                bitsInBuffer += 8;
-            }
-
-            final int accLog = (int) ((bitBuffer & 0xF) + 5);
-            bitBuffer >>>= 4;
-            bitsInBuffer -= 4;
-            int totalBitsRead = 4;
-
-            int remaining = (1 << accLog) + 1;
-            int threshold = 1 << accLog;
-            int nbBits = accLog + 1;
-
-            int charnum = 0;
-            boolean previous0 = false;
-
-            while (remaining > 1 && charnum <= maxSymbol) {
-                if (previous0) {
-                    while (bitsInBuffer <= 56 && curPos < end) {
-                        bitBuffer |= ((long) (src[curPos++] & 0xFF)) << bitsInBuffer;
-                        bitsInBuffer += 8;
-                    }
-                    int repeats = 0;
-                    while ((bitBuffer & 3) == 3) {
-                        repeats++;
-                        bitBuffer >>>= 2;
-                        bitsInBuffer -= 2;
-                        totalBitsRead += 2;
-                        while (bitsInBuffer <= 56 && curPos < end) {
-                            bitBuffer |= ((long) (src[curPos++] & 0xFF)) << bitsInBuffer;
-                            bitsInBuffer += 8;
-                        }
-                    }
-                    final int extra = (int) (bitBuffer & 3);
-                    bitBuffer >>>= 2;
-                    bitsInBuffer -= 2;
-                    totalBitsRead += 2;
-                    charnum += 3 * repeats + extra;
-                    if (charnum > maxSymbol) break;
-                }
-
-                while (bitsInBuffer <= 56 && curPos < end) {
-                    bitBuffer |= ((long) (src[curPos++] & 0xFF)) << bitsInBuffer;
-                    bitsInBuffer += 8;
-                }
-
-                final int maxVal = (2 * threshold - 1) - remaining;
-                final int valLow = (int) (bitBuffer & (threshold - 1));
-                int count;
-                if (valLow < maxVal) {
-                    count = valLow;
-                    bitBuffer >>>= (nbBits - 1);
-                    bitsInBuffer -= (nbBits - 1);
-                    totalBitsRead += nbBits - 1;
-                } else {
-                    int valFull = (int) (bitBuffer & (2 * threshold - 1));
-                    if (valFull >= threshold) {
-                        valFull -= maxVal;
-                    }
-                    count = valFull;
-                    bitBuffer >>>= nbBits;
-                    bitsInBuffer -= nbBits;
-                    totalBitsRead += nbBits;
-                }
-
-                count -= 1;
-                if (count >= 0) {
-                    remaining -= count;
-                } else {
-                    remaining += count; // count == -1 -> remaining -= 1
-                }
-                dist[charnum++] = (short) count;
-                previous0 = (count == 0);
-
-                if (remaining < threshold) {
-                    if (remaining <= 1) break;
-                    nbBits = highBit(remaining) + 1;
-                    threshold = 1 << (nbBits - 1);
-                }
-            }
-
-            buildFromDistribution(dist, accLog, maxSymbol);
-            final int bytesRead = (totalBitsRead + 7) >>> 3;
-            return pos + bytesRead;
+        // 1 つの記号だけの表 (RLE)
+        static FseTable single(int value) {
+            final FseTable table = new FseTable();
+            table.accuracyLog = 0;
+            table.symbol = new int[]{value};
+            table.bits = new int[]{0};
+            table.base = new int[]{0};
+            return table;
         }
     }
 
-    // ハフマンテーブル
-    private static final class HuffmanTable {
-        private int[] symbols;
-        private byte[] numBits;
-        private int tableLog = 0;
+    // ---------- ビットの読み出し ----------
 
-        int read(byte[] src, int pos, int maxLen) throws IOException {
-            if (maxLen < 1) throw new IOException("Huffman description empty");
-            final int header = src[pos] & 0xFF;
-            final byte[] weights = new byte[256];
-            int numWeights = 0;
-            final int bytesRead;
-
-            if (header < 128) { // FSE 圧縮
-                final int fseLen = header;
-                bytesRead = 1 + fseLen;
-                if (bytesRead > maxLen) throw new IOException("FSE Huffman tree exceeds literals block");
-                final FseTable fse = new FseTable();
-                final int fseHeaderEnd = fse.readFse(src, pos + 1, pos + 1 + fseLen, 255);
-
-                final int bitstreamBytes = (pos + 1 + fseLen) - fseHeaderEnd;
-                final BitReaderRev bitReader = new BitReaderRev(src, fseHeaderEnd, bitstreamBytes);
-
-                int state1 = bitReader.readBits(fse.accuracyLog);
-                int state2 = bitReader.readBits(fse.accuracyLog);
-
-                while (numWeights < 255) {
-                    final int w1 = fse.symbols[state1];
-                    weights[numWeights++] = (byte) w1;
-                    if (numWeights >= 255) break;
-
-                    final int nBits1 = fse.numBits[state1];
-                    state1 = fse.newStateBase[state1] + ((nBits1 > 0) ? bitReader.readBits(nBits1) : 0);
-
-                    final int w2 = fse.symbols[state2];
-                    weights[numWeights++] = (byte) w2;
-                    if (numWeights >= 255) break;
-
-                    final int nBits2 = fse.numBits[state2];
-                    state2 = fse.newStateBase[state2] + ((nBits2 > 0) ? bitReader.readBits(nBits2) : 0);
-                }
-            } else { // 直接 4 ビット重み
-                numWeights = header - 127;
-                bytesRead = 1 + (numWeights + 1) / 2;
-                if (bytesRead > maxLen) throw new IOException("Direct Huffman tree exceeds literals block");
-                for (int i = 0; i < numWeights; i++) {
-                    final int b = src[pos + 1 + i / 2] & 0xFF;
-                    weights[i] = (byte) ((i % 2 == 0) ? (b >>> 4) : (b & 0xF));
-                }
-            }
-
-            // 最後の重みを導出
-            int weightTotal = 0;
-            for (int i = 0; i < numWeights; i++) {
-                final int w = weights[i] & 0xFF;
-                if (w > 0) {
-                    weightTotal += 1 << (w - 1);
-                }
-            }
-            final int tLog = highBit(weightTotal) + 1;
-            final int target = 1 << tLog;
-            final int rest = target - weightTotal;
-            if (rest > 0) {
-                final int lastWeight = highBit(rest) + 1;
-                weights[numWeights++] = (byte) lastWeight;
-            }
-
-            buildFromWeights(weights, numWeights);
-            return bytesRead;
-        }
-
-        private void buildFromWeights(byte[] weights, int numWeights) {
-            int weightSum = 0;
-            for (int i = 0; i < numWeights; i++) {
-                final int w = weights[i] & 0xFF;
-                if (w > 0) {
-                    weightSum += 1 << (w - 1);
-                }
-            }
-            this.tableLog = highBit(weightSum) + 1;
-            final int tableSize = 1 << tableLog;
-            symbols = new int[tableSize];
-            numBits = new byte[tableSize];
-
-            final int[] rankVal = new int[tableLog + 1];
-            for (int i = 0; i < numWeights; i++) {
-                final int w = weights[i] & 0xFF;
-                rankVal[w]++;
-            }
-
-            final int[] rankStart = new int[tableLog + 1];
-            int curr = 0;
-            for (int n = 0; n <= tableLog; n++) {
-                rankStart[n] = curr;
-                curr += rankVal[n];
-            }
-
-            final int[] sortedSymbols = new int[numWeights];
-            for (int s = 0; s < numWeights; s++) {
-                final int w = weights[s] & 0xFF;
-                sortedSymbols[rankStart[w]++] = s;
-            }
-
-            int symbolIdx = rankVal[0];
-            int rStart = 0;
-            for (int w = 1; w <= tableLog; w++) {
-                final int symCount = rankVal[w];
-                final int length = 1 << (w - 1);
-                final byte nb = (byte) (tableLog + 1 - w);
-                for (int s = 0; s < symCount; s++) {
-                    final int sym = sortedSymbols[symbolIdx + s];
-                    for (int u = 0; u < length; u++) {
-                        symbols[rStart + u] = sym;
-                        numBits[rStart + u] = nb;
-                    }
-                    rStart += length;
-                }
-                symbolIdx += symCount;
-            }
-        }
-
-        void decode1Stream(byte[] src, int pos, int len, byte[] out) throws IOException {
-            final BitReaderRev bitReader = new BitReaderRev(src, pos, len);
-            for (int i = 0; i < out.length; i++) {
-                final int peek = bitReader.peekBits(tableLog);
-                out[i] = (byte) symbols[peek];
-                bitReader.consumeBits(numBits[peek]);
-            }
-        }
-
-        void decode4Streams(byte[] src, int pos, int len, byte[] out) throws IOException {
-            if (len < 6) throw new IOException("4 streams literals truncated");
-            final int s1Len = readUShortLE(src, pos);
-            final int s2Len = readUShortLE(src, pos + 2);
-            final int s3Len = readUShortLE(src, pos + 4);
-            final int s4Len = len - 6 - s1Len - s2Len - s3Len;
-            if (s4Len < 0) throw new IOException("Invalid stream lengths in 4-stream literals");
-
-            final int p1 = pos + 6;
-            final int p2 = p1 + s1Len;
-            final int p3 = p2 + s2Len;
-            final int p4 = p3 + s3Len;
-
-            final int segSize = (out.length + 3) / 4;
-            decodeStreamSegment(src, p1, s1Len, out, 0, Math.min(segSize, out.length));
-            decodeStreamSegment(src, p2, s2Len, out, segSize, Math.min(segSize * 2, out.length));
-            decodeStreamSegment(src, p3, s3Len, out, segSize * 2, Math.min(segSize * 3, out.length));
-            decodeStreamSegment(src, p4, s4Len, out, segSize * 3, out.length);
-        }
-
-        private void decodeStreamSegment(byte[] src, int pos, int len, byte[] out, int start, int end) throws IOException {
-            final BitReaderRev bitReader = new BitReaderRev(src, pos, len);
-            for (int i = start; i < end; i++) {
-                final int peek = bitReader.peekBits(tableLog);
-                out[i] = (byte) symbols[peek];
-                bitReader.consumeBits(numBits[peek]);
-            }
-        }
-    }
-
-    // 逆方向ビットリーダー (BIT_DStream 準拠)
-    private static final class BitReaderRev {
+    // 前から下位ビット順に読む (表の記述用)
+    private static final class ForwardBits {
         private final byte[] data;
-        private final int start;
-        private int ptr;
-        private long bitContainer;
-        private int bitsConsumed;
+        private final int end;
+        private long position;
 
-        BitReaderRev(byte[] data, int start, int size) throws IOException {
-            if (size < 1) throw new IOException("BitReaderRev empty stream");
+        ForwardBits(byte[] data, int start, int end) {
             this.data = data;
-            this.start = start;
-            if (size >= 8) {
-                this.ptr = start + size - 8;
-                this.bitContainer = readLongLE(data, ptr);
-                final int lastByte = data[start + size - 1] & 0xFF;
-                if (lastByte == 0) throw new IOException("Bitstream termination bit missing");
-                final int highBit = highBit(lastByte);
-                this.bitsConsumed = 8 - highBit;
-            } else {
-                this.ptr = start;
-                long bc = 0;
-                for (int i = 0; i < size; i++) {
-                    bc |= ((long) (data[start + i] & 0xFF)) << (i * 8);
-                }
-                this.bitContainer = bc;
-                final int lastByte = data[start + size - 1] & 0xFF;
-                if (lastByte == 0) throw new IOException("Bitstream termination bit missing");
-                final int highBit = highBit(lastByte);
-                this.bitsConsumed = (8 - highBit) + (8 - size) * 8;
+            this.end = end;
+            this.position = (long) start * 8;
+        }
+
+        int bits(int count) {
+            int result = 0;
+            for (int i = 0; i < count; i++) {
+                final int index = (int) (position >> 3);
+                final int bit = index < end ? (data[index] >> (position & 7)) & 1 : 0;
+                result |= bit << i;
+                position++;
             }
-        }
-
-        int peekBits(int count) {
-            if (count == 0) return 0;
-            final int shift = 64 - bitsConsumed - count;
-            if (shift < 0) {
-                return (int) ((bitContainer << (-shift)) & ((1L << count) - 1));
-            } else {
-                return (int) ((bitContainer >>> shift) & ((1L << count) - 1));
-            }
-        }
-
-        void consumeBits(int count) {
-            bitsConsumed += count;
-            if (bitsConsumed >= 32 && ptr > start) {
-                int bytesToDrop = bitsConsumed >>> 3;
-                if (ptr - bytesToDrop < start) {
-                    bytesToDrop = ptr - start;
-                }
-                ptr -= bytesToDrop;
-                bitsConsumed -= bytesToDrop * 8;
-                bitContainer = readLongLE(data, ptr);
-            }
-        }
-
-        int readBits(int count) {
-            final int val = peekBits(count);
-            consumeBits(count);
-            return val;
-        }
-    }
-
-    // 高速バイトバッファ
-    private static final class FastByteArrayBuffer {
-        private byte[] buf;
-        private int count;
-
-        FastByteArrayBuffer(int capacity) {
-            buf = new byte[Math.max(capacity, 1024)];
-            count = 0;
-        }
-
-        int size() {
-            return count;
-        }
-
-        void write(byte[] b, int off, int len) {
-            ensureCapacity(count + len);
-            System.arraycopy(b, off, buf, count, len);
-            count += len;
-        }
-
-        void writeByte(byte b) {
-            ensureCapacity(count + 1);
-            buf[count++] = b;
-        }
-
-        void copyMatch(int offset, int matchLength) throws IOException {
-            if (offset <= 0 || offset > count) {
-                throw new IOException("Invalid match offset: " + offset + ", buffer size: " + count);
-            }
-            ensureCapacity(count + matchLength);
-            int srcPos = count - offset;
-            for (int i = 0; i < matchLength; i++) {
-                buf[count++] = buf[srcPos++];
-            }
-        }
-
-        byte[] toByteArray() {
-            final byte[] result = new byte[count];
-            System.arraycopy(buf, 0, result, 0, count);
             return result;
         }
 
-        private void ensureCapacity(int minCapacity) {
-            if (minCapacity > buf.length) {
-                int newCap = buf.length * 2;
-                if (newCap < minCapacity) newCap = minCapacity;
-                final byte[] newBuf = new byte[newCap];
-                System.arraycopy(buf, 0, newBuf, 0, count);
-                buf = newBuf;
-            }
+        int peek(int count) {
+            final long saved = position;
+            final int result = bits(count);
+            position = saved;
+            return result;
+        }
+
+        void skip(int count) {
+            position += count;
+        }
+
+        int bytePosition() {
+            return (int) ((position + 7) >> 3);
         }
     }
 
-    private static int highBit(int val) {
-        return 31 - Integer.numberOfLeadingZeros(val);
+    // 後ろから読む (FSE とハフマンの符号の列)。末尾の 1 のビットの手前から始まる
+    private static final class BackwardBits {
+        private final byte[] data;
+        private final int start;
+        private long position;
+
+        BackwardBits(byte[] data, int start, int end) throws IOException {
+            this.data = data;
+            this.start = start;
+            if (end <= start) throw new IOException("Empty Zstandard bitstream");
+            final int last = data[end - 1] & 0xFF;
+            if (last == 0) throw new IOException("Invalid Zstandard bitstream padding");
+            position = (long) (end - start - 1) * 8 + (31 - Integer.numberOfLeadingZeros(last));
+        }
+
+        // 次の count ビットを、上位から順に読んだ値として返す。先頭より前は 0 として読む
+        int bits(int count) {
+            int result = 0;
+            for (int i = 0; i < count; i++) {
+                position--;
+                int bit = 0;
+                if (position >= 0) bit = (data[start + (int) (position >> 3)] >> (position & 7)) & 1;
+                result = (result << 1) | bit;
+            }
+            return result;
+        }
+
+        int peek(int count) {
+            final long saved = position;
+            final int result = bits(count);
+            position = saved;
+            return result;
+        }
+
+        void skip(int count) {
+            position -= count;
+        }
+
+        boolean overflowed() {
+            return position < 0;
+        }
+
+        boolean finished() {
+            return position == 0;
+        }
     }
 
-    private static int readUShortLE(byte[] data, int offset) {
-        return (data[offset] & 0xFF) | ((data[offset + 1] & 0xFF) << 8);
+    // ---------- フレーム ----------
+
+    private static final class Frame {
+        private final byte[] src;
+        private int pos;
+        private final int end;
+        private final int maxSize;
+
+        private byte[] out = new byte[1 << 16];
+        private int outSize;
+
+        private final int[] repeat = {1, 4, 8};
+        private FseTable llTable, ofTable, mlTable;
+        private int[] huffmanSymbol;
+        private int[] huffmanBits;
+        private int huffmanLog;
+
+        Frame(byte[] src, int start, int end, int maxSize) {
+            this.src = src;
+            this.pos = start;
+            this.end = end;
+            this.maxSize = maxSize;
+        }
+
+        byte[] run() throws IOException {
+            while (pos < end) {
+                if (end - pos < 4) throw new IOException("Truncated Zstandard frame");
+                final int magic = readInt(pos);
+                if ((magic & 0xFFFFFFF0) == 0x184D2A50) {
+                    // 読み飛ばす枠
+                    final long size = readInt(pos + 4) & 0xFFFFFFFFL;
+                    pos += 8;
+                    if (size > end - pos) throw new IOException("Truncated skippable frame");
+                    pos += (int) size;
+                    continue;
+                }
+                if (magic != MAGIC) throw new IOException("Not a Zstandard frame");
+                pos += 4;
+                readFrame();
+            }
+            return Arrays.copyOf(out, outSize);
+        }
+
+        private void readFrame() throws IOException {
+            final int descriptor = u8(pos++);
+            final int fcsFlag = descriptor >> 6;
+            final boolean singleSegment = (descriptor & 0x20) != 0;
+            final boolean checksum = (descriptor & 0x04) != 0;
+            final int dictionaryFlag = descriptor & 3;
+            if ((descriptor & 0x08) != 0) throw new IOException("Reserved Zstandard frame bit");
+            if (!singleSegment) pos++;
+            final int dictionaryBytes = dictionaryFlag == 0 ? 0 : dictionaryFlag == 1 ? 1 : dictionaryFlag == 2 ? 2 : 4;
+            if (dictionaryBytes > 0) {
+                long id = 0;
+                for (int i = 0; i < dictionaryBytes; i++) id |= (long) u8(pos + i) << (8 * i);
+                if (id != 0) throw new IOException("Zstandard dictionaries are not supported");
+                pos += dictionaryBytes;
+            }
+            final int fcsBytes = fcsFlag == 0 ? (singleSegment ? 1 : 0) : fcsFlag == 1 ? 2 : fcsFlag == 2 ? 4 : 8;
+            if (fcsBytes > 0) {
+                long size = 0;
+                for (int i = 0; i < fcsBytes; i++) size |= (long) u8(pos + i) << (8 * i);
+                if (fcsBytes == 2) size += 256;
+                if (size > maxSize - outSize) throw new IOException("Zstandard content is too large");
+                pos += fcsBytes;
+            }
+
+            // フレームごとに、繰り返しの距離と表を初めに戻す
+            repeat[0] = 1;
+            repeat[1] = 4;
+            repeat[2] = 8;
+            llTable = ofTable = mlTable = null;
+            huffmanSymbol = null;
+
+            for (;;) {
+                if (end - pos < 3) throw new IOException("Truncated Zstandard block");
+                final int header = u8(pos) | u8(pos + 1) << 8 | u8(pos + 2) << 16;
+                pos += 3;
+                final boolean last = (header & 1) != 0;
+                final int type = (header >> 1) & 3;
+                final int size = header >>> 3;
+                if (type == 0) {
+                    if (size > end - pos) throw new IOException("Truncated Zstandard block");
+                    ensure(size);
+                    System.arraycopy(src, pos, out, outSize, size);
+                    outSize += size;
+                    pos += size;
+                } else if (type == 1) {
+                    if (pos >= end) throw new IOException("Truncated Zstandard block");
+                    ensure(size);
+                    Arrays.fill(out, outSize, outSize + size, src[pos]);
+                    outSize += size;
+                    pos++;
+                } else if (type == 2) {
+                    if (size > end - pos) throw new IOException("Truncated Zstandard block");
+                    readCompressedBlock(pos, pos + size);
+                    pos += size;
+                } else {
+                    throw new IOException("Reserved Zstandard block type");
+                }
+                if (last) break;
+            }
+            if (checksum) pos += 4;
+        }
+
+        private void readCompressedBlock(int start, int blockEnd) throws IOException {
+            // リテラル (そのまま写す文字列)
+            int p = start;
+            final int b0 = u8(p);
+            final int literalsType = b0 & 3;
+            final int sizeFormat = (b0 >> 2) & 3;
+            int regenerated, compressed = 0, streams = 1;
+            if (literalsType < 2) {
+                if ((sizeFormat & 1) == 0) {
+                    regenerated = b0 >> 3;
+                    p += 1;
+                } else if (sizeFormat == 1) {
+                    regenerated = (b0 >> 4) + (u8(p + 1) << 4);
+                    p += 2;
+                } else {
+                    regenerated = (b0 >> 4) + (u8(p + 1) << 4) + (u8(p + 2) << 12);
+                    p += 3;
+                }
+            } else {
+                final long h;
+                if (sizeFormat < 2) {
+                    h = u8(p) | (long) u8(p + 1) << 8 | (long) u8(p + 2) << 16;
+                    regenerated = (int) ((h >> 4) & 0x3FF);
+                    compressed = (int) ((h >> 14) & 0x3FF);
+                    streams = sizeFormat == 0 ? 1 : 4;
+                    p += 3;
+                } else if (sizeFormat == 2) {
+                    h = u8(p) | (long) u8(p + 1) << 8 | (long) u8(p + 2) << 16 | (long) u8(p + 3) << 24;
+                    regenerated = (int) ((h >> 4) & 0x3FFF);
+                    compressed = (int) ((h >> 18) & 0x3FFF);
+                    streams = 4;
+                    p += 4;
+                } else {
+                    h = u8(p) | (long) u8(p + 1) << 8 | (long) u8(p + 2) << 16 | (long) u8(p + 3) << 24 | (long) u8(p + 4) << 32;
+                    regenerated = (int) ((h >> 4) & 0x3FFFF);
+                    compressed = (int) ((h >> 22) & 0x3FFFF);
+                    streams = 4;
+                    p += 5;
+                }
+            }
+
+            final byte[] literals = new byte[regenerated];
+            if (literalsType == 0) {
+                if (regenerated > blockEnd - p) throw new IOException("Truncated Zstandard literals");
+                System.arraycopy(src, p, literals, 0, regenerated);
+                p += regenerated;
+            } else if (literalsType == 1) {
+                if (p >= blockEnd) throw new IOException("Truncated Zstandard literals");
+                Arrays.fill(literals, src[p]);
+                p += 1;
+            } else {
+                if (compressed > blockEnd - p) throw new IOException("Truncated Zstandard literals");
+                final int literalsEnd = p + compressed;
+                if (literalsType == 2) {
+                    p = readHuffmanTable(p, literalsEnd);
+                } else if (huffmanSymbol == null) {
+                    throw new IOException("Zstandard literals refer to a missing Huffman table");
+                }
+                decodeLiterals(p, literalsEnd, streams, literals);
+                p = literalsEnd;
+            }
+
+            // 並び (リテラルの長さ、さかのぼる距離、写す長さ)
+            if (p >= blockEnd) throw new IOException("Truncated Zstandard sequences");
+            int count = u8(p++);
+            if (count >= 128) {
+                if (count < 255) {
+                    count = ((count - 128) << 8) + u8(p++);
+                } else {
+                    count = u8(p) + (u8(p + 1) << 8) + 0x7F00;
+                    p += 2;
+                }
+            }
+            if (count == 0) {
+                append(literals, 0, literals.length);
+                return;
+            }
+            final int modes = u8(p++);
+            if ((modes & 3) != 0) throw new IOException("Reserved Zstandard sequence mode bits");
+            p = readTable(p, blockEnd, modes >> 6, 0);
+            p = readTable(p, blockEnd, (modes >> 4) & 3, 1);
+            p = readTable(p, blockEnd, (modes >> 2) & 3, 2);
+
+            final BackwardBits bits = new BackwardBits(src, p, blockEnd);
+            int llState = bits.bits(llTable.accuracyLog);
+            int ofState = bits.bits(ofTable.accuracyLog);
+            int mlState = bits.bits(mlTable.accuracyLog);
+            int literalPos = 0;
+            for (int i = 0; i < count; i++) {
+                final int ofCode = ofTable.symbol[ofState];
+                final int mlCode = mlTable.symbol[mlState];
+                final int llCode = llTable.symbol[llState];
+                if (ofCode > 31 || mlCode >= ML_BASE.length || llCode >= LL_BASE.length) {
+                    throw new IOException("Invalid Zstandard sequence code");
+                }
+                final long offsetValue = (1L << ofCode) + bits.bits(ofCode);
+                final int matchLength = ML_BASE[mlCode] + bits.bits(ML_BITS[mlCode]);
+                final int literalLength = LL_BASE[llCode] + bits.bits(LL_BITS[llCode]);
+
+                final int offset;
+                if (offsetValue > 3) {
+                    if (offsetValue - 3 > Integer.MAX_VALUE) throw new IOException("Zstandard offset is too large");
+                    offset = (int) (offsetValue - 3);
+                    repeat[2] = repeat[1];
+                    repeat[1] = repeat[0];
+                    repeat[0] = offset;
+                } else {
+                    int index = (int) offsetValue - 1 + (literalLength == 0 ? 1 : 0);
+                    if (index == 0) {
+                        offset = repeat[0];
+                    } else {
+                        offset = index == 3 ? repeat[0] - 1 : repeat[index];
+                        if (index != 1) repeat[2] = repeat[1];
+                        repeat[1] = repeat[0];
+                        repeat[0] = offset;
+                    }
+                }
+
+                // リテラルを写し、そのあと過去の出力を写す
+                if (literalLength > literals.length - literalPos) throw new IOException("Zstandard literals overflow");
+                append(literals, literalPos, literalLength);
+                literalPos += literalLength;
+                if (offset <= 0 || offset > outSize) throw new IOException("Invalid Zstandard match offset");
+                ensure(matchLength);
+                int from = outSize - offset;
+                for (int k = 0; k < matchLength; k++) {
+                    out[outSize++] = out[from++];
+                }
+
+                if (i < count - 1) {
+                    llState = llTable.base[llState] + bits.bits(llTable.bits[llState]);
+                    mlState = mlTable.base[mlState] + bits.bits(mlTable.bits[mlState]);
+                    ofState = ofTable.base[ofState] + bits.bits(ofTable.bits[ofState]);
+                }
+            }
+            if (!bits.finished()) throw new IOException("Zstandard sequence bitstream not fully consumed");
+            append(literals, literalPos, literals.length - literalPos);
+        }
+
+        // 並びの 3 種類の値の表を読む。kind: 0 リテラルの長さ、1 距離、2 写す長さ
+        private int readTable(int p, int blockEnd, int mode, int kind) throws IOException {
+            final FseTable table;
+            if (mode == 0) {
+                table = kind == 0 ? FseTable.build(LL_DEFAULT, LL_DEFAULT.length, 6)
+                        : kind == 1 ? FseTable.build(OF_DEFAULT, OF_DEFAULT.length, 5)
+                        : FseTable.build(ML_DEFAULT, ML_DEFAULT.length, 6);
+            } else if (mode == 1) {
+                if (p >= blockEnd) throw new IOException("Truncated Zstandard table");
+                table = FseTable.single(u8(p++));
+            } else if (mode == 2) {
+                final int maxLog = kind == 1 ? 8 : 9;
+                final int maxSymbol = kind == 0 ? 35 : kind == 1 ? 31 : 52;
+                final short[] normalized = new short[maxSymbol + 1];
+                final ForwardBits bits = new ForwardBits(src, p, blockEnd);
+                final int[] result = readDistribution(bits, normalized, maxSymbol, maxLog);
+                table = FseTable.build(normalized, result[0], result[1]);
+                p = bits.bytePosition();
+            } else {
+                table = kind == 0 ? llTable : kind == 1 ? ofTable : mlTable;
+                if (table == null) throw new IOException("Zstandard table repeat without a previous table");
+            }
+            if (kind == 0) llTable = table;
+            else if (kind == 1) ofTable = table;
+            else mlTable = table;
+            return p;
+        }
+
+        // ---------- ハフマン符号 (リテラル) ----------
+
+        private int readHuffmanTable(int p, int limit) throws IOException {
+            final int header = u8(p++);
+            final int[] weights = new int[256];
+            int count;
+            if (header < 128) {
+                // 重みを FSE で圧縮してある
+                if (header > limit - p) throw new IOException("Truncated Huffman weights");
+                final int weightsEnd = p + header;
+                final ForwardBits forward = new ForwardBits(src, p, weightsEnd);
+                final short[] normalized = new short[16];
+                final int[] result = readDistribution(forward, normalized, 15, 6);
+                final FseTable table = FseTable.build(normalized, result[0], result[1]);
+                final BackwardBits bits = new BackwardBits(src, forward.bytePosition(), weightsEnd);
+                int state1 = bits.bits(table.accuracyLog);
+                int state2 = bits.bits(table.accuracyLog);
+                count = 0;
+                for (;;) {
+                    if (count >= 255) throw new IOException("Too many Huffman weights");
+                    weights[count++] = table.symbol[state1];
+                    state1 = table.base[state1] + bits.bits(table.bits[state1]);
+                    if (bits.overflowed()) {
+                        weights[count++] = table.symbol[state2];
+                        break;
+                    }
+                    if (count >= 255) throw new IOException("Too many Huffman weights");
+                    weights[count++] = table.symbol[state2];
+                    state2 = table.base[state2] + bits.bits(table.bits[state2]);
+                    if (bits.overflowed()) {
+                        weights[count++] = table.symbol[state1];
+                        break;
+                    }
+                }
+                p = weightsEnd;
+            } else {
+                count = header - 127;
+                final int bytes = (count + 1) / 2;
+                if (bytes > limit - p) throw new IOException("Truncated Huffman weights");
+                for (int i = 0; i < count; i++) {
+                    final int b = u8(p + i / 2);
+                    weights[i] = (i & 1) == 0 ? b >> 4 : b & 15;
+                }
+                p += bytes;
+            }
+
+            // 最後の記号の重みは、合計が 2 の累乗になるように決まる
+            long total = 0;
+            for (int i = 0; i < count; i++) {
+                if (weights[i] > 11) throw new IOException("Invalid Huffman weight");
+                if (weights[i] > 0) total += 1L << (weights[i] - 1);
+            }
+            if (total == 0) throw new IOException("Invalid Huffman weights");
+            final int maxBits = 64 - Long.numberOfLeadingZeros(total);
+            final long rest = (1L << maxBits) - total;
+            if (Long.bitCount(rest) != 1) throw new IOException("Invalid Huffman weights");
+            if (count >= 256) throw new IOException("Too many Huffman symbols");
+            weights[count++] = 64 - Long.numberOfLeadingZeros(rest);
+            if (maxBits > 11) throw new IOException("Huffman code is too long");
+
+            // 重みの小さい記号から順に符号を割り当てる
+            final int size = 1 << maxBits;
+            final int[] rankStart = new int[maxBits + 2];
+            final int[] rankCount = new int[maxBits + 2];
+            for (int i = 0; i < count; i++) rankCount[weights[i]]++;
+            int next = 0;
+            for (int w = 1; w <= maxBits; w++) {
+                rankStart[w] = next;
+                next += rankCount[w] << (w - 1);
+            }
+            huffmanSymbol = new int[size];
+            huffmanBits = new int[size];
+            huffmanLog = maxBits;
+            for (int s = 0; s < count; s++) {
+                final int w = weights[s];
+                if (w == 0) continue;
+                final int length = 1 << (w - 1);
+                for (int k = 0; k < length; k++) {
+                    huffmanSymbol[rankStart[w] + k] = s;
+                    huffmanBits[rankStart[w] + k] = maxBits + 1 - w;
+                }
+                rankStart[w] += length;
+            }
+            return p;
+        }
+
+        private void decodeLiterals(int p, int limit, int streams, byte[] literals) throws IOException {
+            if (streams == 1) {
+                decodeHuffmanStream(p, limit, literals, 0, literals.length);
+                return;
+            }
+            if (limit - p < 6) throw new IOException("Truncated Huffman jump table");
+            final int size1 = u8(p) | u8(p + 1) << 8;
+            final int size2 = u8(p + 2) | u8(p + 3) << 8;
+            final int size3 = u8(p + 4) | u8(p + 5) << 8;
+            int start = p + 6;
+            final int total = limit - start;
+            if (size1 + size2 + size3 > total) throw new IOException("Invalid Huffman jump table");
+            final int perStream = (literals.length + 3) / 4;
+            final int[] sizes = {size1, size2, size3, total - size1 - size2 - size3};
+            int out = 0;
+            for (int i = 0; i < 4; i++) {
+                final int n = i < 3 ? Math.min(perStream, literals.length - out) : literals.length - out;
+                decodeHuffmanStream(start, start + sizes[i], literals, out, n);
+                start += sizes[i];
+                out += n;
+            }
+        }
+
+        private void decodeHuffmanStream(int start, int streamEnd, byte[] literals, int offset, int count) throws IOException {
+            final BackwardBits bits = new BackwardBits(src, start, streamEnd);
+            for (int i = 0; i < count; i++) {
+                final int index = bits.peek(huffmanLog);
+                literals[offset + i] = (byte) huffmanSymbol[index];
+                bits.skip(huffmanBits[index]);
+            }
+            if (!bits.finished()) throw new IOException("Huffman stream not fully consumed");
+        }
+
+        // ---------- 共通 ----------
+
+        // FSE の確率の分布を読む。返り値は {記号の数, 精度}
+        private int[] readDistribution(ForwardBits bits, short[] normalized, int maxSymbol, int maxLog) throws IOException {
+            final int accuracyLog = bits.bits(4) + 5;
+            if (accuracyLog > maxLog) throw new IOException("FSE accuracy is too high");
+            int remaining = (1 << accuracyLog) + 1;
+            int threshold = 1 << accuracyLog;
+            int nbBits = accuracyLog + 1;
+            int symbol = 0;
+            boolean previousZero = false;
+            while (remaining > 1 && symbol <= maxSymbol) {
+                if (previousZero) {
+                    int repeatCount;
+                    do {
+                        repeatCount = bits.bits(2);
+                        for (int i = 0; i < repeatCount; i++) {
+                            if (symbol > maxSymbol) throw new IOException("Too many FSE symbols");
+                            normalized[symbol++] = 0;
+                        }
+                    } while (repeatCount == 3);
+                    if (symbol > maxSymbol) break;
+                }
+                final int max = (2 * threshold - 1) - remaining;
+                int count;
+                final int low = bits.peek(nbBits - 1);
+                if (low < max) {
+                    count = low;
+                    bits.skip(nbBits - 1);
+                } else {
+                    count = bits.bits(nbBits);
+                    if (count >= threshold) count -= max;
+                }
+                count--;
+                remaining -= Math.abs(count);
+                normalized[symbol++] = (short) count;
+                previousZero = count == 0;
+                while (remaining < threshold) {
+                    nbBits--;
+                    threshold >>= 1;
+                }
+            }
+            if (remaining != 1) throw new IOException("Invalid FSE distribution");
+            return new int[]{symbol, accuracyLog};
+        }
+
+        private void append(byte[] data, int offset, int length) throws IOException {
+            ensure(length);
+            System.arraycopy(data, offset, out, outSize, length);
+            outSize += length;
+        }
+
+        private void ensure(int extra) throws IOException {
+            if (extra < 0 || (long) outSize + extra > maxSize) throw new IOException("Zstandard content is too large");
+            if (outSize + extra > out.length) {
+                out = Arrays.copyOf(out, (int) Math.min(maxSize, Math.max((long) out.length * 2, (long) outSize + extra)));
+            }
+        }
+
+        private int u8(int index) throws IOException {
+            if (index >= end) throw new IOException("Truncated Zstandard data");
+            return src[index] & 0xFF;
+        }
+
+        private int readInt(int index) throws IOException {
+            return u8(index) | u8(index + 1) << 8 | u8(index + 2) << 16 | u8(index + 3) << 24;
+        }
     }
-
-    private static int readIntLE(byte[] data, int offset) {
-        return (data[offset] & 0xFF) | ((data[offset + 1] & 0xFF) << 8)
-                | ((data[offset + 2] & 0xFF) << 16) | ((data[offset + 3] & 0xFF) << 24);
-    }
-
-    private static long readLongLE(byte[] data, int offset) {
-        return (readIntLE(data, offset) & 0xFFFFFFFFL) | (((long) readIntLE(data, offset + 4)) << 32);
-    }
-
-    // RFC 8878 Section 3.1.1.3.2.2 定数テーブル
-    private static final short[] LL_DEFAULT_DISTRIBUTION = {
-            4, 3, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 1, 1, 1,
-            2, 2, 2, 2, 2, 2, 2, 2, 2, 3, 2, 1, 1, 1, 1, 1,
-            -1, -1, -1, -1
-    };
-
-    private static final short[] ML_DEFAULT_DISTRIBUTION = {
-            1, 4, 3, 2, 2, 2, 2, 2, 2, 1, 1, 1, 1, 1, 1, 1,
-            1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
-            1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, -1, -1,
-            -1, -1, -1, -1, -1
-    };
-
-    private static final short[] OF_DEFAULT_DISTRIBUTION = {
-            1, 1, 1, 1, 1, 1, 2, 2, 2, 1, 1, 1, 1, 1, 1, 1,
-            1, 1, 1, 1, 1, 1, 1, 1, -1, -1, -1, -1, -1
-    };
-
-    private static final int[] LL_BASE = {
-            0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15,
-            16, 18, 20, 22, 24, 28, 32, 40, 48, 64, 128, 256, 512, 1024, 2048, 4096,
-            8192, 16384, 32768, 65536
-    };
-
-    private static final int[] LL_EXTRA_BITS = {
-            0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-            1, 1, 1, 1, 2, 2, 3, 3, 4, 6, 7, 8, 9, 10, 11, 12,
-            13, 14, 15, 16
-    };
-
-    private static final int[] ML_BASE = {
-            3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18,
-            19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34,
-            35, 37, 39, 41, 43, 47, 51, 59, 67, 83, 99, 131, 259, 515, 1027, 2051,
-            4099, 8195, 16387, 32771, 65539
-    };
-
-    private static final int[] ML_EXTRA_BITS = {
-            0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-            0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-            1, 1, 1, 1, 2, 2, 3, 3, 4, 4, 5, 7, 8, 9, 10, 11,
-            12, 13, 14, 15, 16
-    };
-
-    private static final int[] OF_BASE = {
-            0, 1, 1, 5, 0xD, 0x1D, 0x3D, 0x7D,
-            0xFD, 0x1FD, 0x3FD, 0x7FD, 0xFFD, 0x1FFD, 0x3FFD, 0x7FFD,
-            0xFFFD, 0x1FFFD, 0x3FFFD, 0x7FFFD, 0xFFFFD, 0x1FFFFD, 0x3FFFFD, 0x7FFFFD,
-            0xFFFFFD, 0x1FFFFFD, 0x3FFFFFD, 0x7FFFFFD, 0xFFFFFFD, 0x1FFFFFFD, 0x3FFFFFFD, 0x7FFFFFFD
-    };
 }
