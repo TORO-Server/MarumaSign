@@ -156,6 +156,11 @@ public final class DdsDecoder {
         }
     }
 
+    // KTX2 の BC の形式にも使う
+    static void decodeBlocks(byte[] data, int offset, int width, int height, int dxgiFormat, int[] out) throws IOException {
+        decodeDxgi(data, offset, width, height, dxgiFormat, out);
+    }
+
     private static void decodeDxgi(byte[] data, int offset, int width, int height, int dxgiFormat, int[] out) throws IOException {
         // 型を決めていない形式 (TYPELESS) は、符号なしとして読む
         switch (dxgiFormat) {
