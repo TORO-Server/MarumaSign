@@ -162,6 +162,12 @@ def modrinth_files(project, loader, minecraft, seen, cache_dir, version=None):
         seen.add(target)
         if dependency.get("version_id"):
             chosen = fetch_json(f"{MODRINTH}/version/{dependency['version_id']}")
+            if minecraft not in chosen.get("game_versions", []) \
+                    and fetch_json(f"{MODRINTH}/project/{target}").get("slug", "") not in requirements:
+                # 指定された版が、このバージョンの Minecraft 向けでないことがある
+                # (Oculus 1.19-1.2.5a は 1.19.2 向けの Rubidium 0.6.2b を指定していて、1.19 / 1.19.1 では Mod なしでも落ちる)。
+                # jar の中に版の条件も書かれていなければ、このバージョン向けの最新版を使う
+                chosen = modrinth_version(target, loader, minecraft) or chosen
         else:
             chosen = matching_version(target, loader, minecraft, requirements)
         required = modrinth_files(target, loader, minecraft, seen, cache_dir, chosen)
