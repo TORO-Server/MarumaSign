@@ -627,6 +627,7 @@ def grab_screen(path):
     window, box = windows[0]
     ctypes.windll.user32.ShowWindow(window, 9)  # SW_RESTORE
     ctypes.windll.user32.SetForegroundWindow(window)
+    time.sleep(0.7)
     try:
         ImageGrab.grab(bbox=box, all_screens=True).save(path)
         return True
