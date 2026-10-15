@@ -1,10 +1,15 @@
 name: CI
 
+# 1 回のビルドに 1〜2 時間かかるので、同じ変更で二重に動かさない。
+# PR のあるブランチは pull_request だけで動かし、push で動かすのは PR を作る前の確認用に限る。
+# ドキュメントだけの変更では動かさない。
 on:
   pull_request:
-  push:
-    branches-ignore:
-      - main
+    paths-ignore:
+      - 'docs/**'
+      - '**.md'
+      - 'LICENSE'
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -16,6 +21,7 @@ concurrency:
 jobs:
   build:
     runs-on: ubuntu-latest
+    timeout-minutes: 240
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
