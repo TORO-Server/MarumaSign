@@ -140,6 +140,8 @@ class MeshPredictionSchemeConstrainedMultiParallelogram extends MeshPredictionSc
         
     }
     
+    // 総称型の配列は作れないため、型を指定しない配列を作る
+    @SuppressWarnings("unchecked")
     private void $initFields$()
     {
         try
