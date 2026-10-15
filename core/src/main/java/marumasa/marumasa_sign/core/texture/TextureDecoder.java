@@ -32,7 +32,12 @@ public final class TextureDecoder {
         }
 
         // 2. KTX2 (後で追加)
-        // 3. WebP (後で追加)
+
+        // 3. WebP
+        if (WebpDecoder.isWebp(data) || "image/webp".equalsIgnoreCase(mimeType)) {
+            return WebpDecoder.decode(data);
+        }
+
 
         // 4. AVIF
         if (AvifDecoder.isAvif(data) || "image/avif".equalsIgnoreCase(mimeType)) {
