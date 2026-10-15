@@ -1,5 +1,10 @@
 package marumasa.marumasa_sign.core.gltf;
 
+import marumasa.marumasa_sign.core.gltf.draco.DataType;
+import marumasa.marumasa_sign.core.gltf.draco.DracoDecoder;
+import marumasa.marumasa_sign.core.gltf.draco.DracoMesh;
+import marumasa.marumasa_sign.core.gltf.draco.IntList;
+import marumasa.marumasa_sign.core.gltf.draco.PointAttribute;
 import marumasa.marumasa_sign.core.gltf.meshopt.MeshoptDecoder;
 import marumasa.marumasa_sign.core.util.Json;
 
@@ -13,10 +18,13 @@ import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Base64;
+import java.util.HashSet;
 import java.util.IdentityHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 /**
  * glTF 2.0 (.gltf / .glb) を読み込む。
@@ -53,8 +61,21 @@ public final class GltfLoader {
 
     private static final float INVERSE_GAMMA = 1f / 2.2f;
 
-    // 対応していない圧縮形式。これが必須のファイルは形を読み取れない
-    private static final String[] UNSUPPORTED = {"KHR_draco_mesh_compression"};
+    // 対応している拡張。未知の必須拡張は拒絶する
+    private static final Set<String> SUPPORTED_EXTENSIONS = new HashSet<String>(Arrays.asList(
+            "KHR_draco_mesh_compression",
+            "EXT_meshopt_compression",
+            "KHR_meshopt_compression",
+            "KHR_mesh_quantization",
+            "EXT_mesh_gpu_instancing",
+            "KHR_materials_pbrSpecularGlossiness",
+            "KHR_materials_unlit",
+            "KHR_materials_emissive_strength",
+            "KHR_texture_transform",
+            "KHR_texture_basisu",
+            "EXT_texture_webp"
+    ));
+    private static final String[] UNSUPPORTED = {};
 
     // 先頭のバイト列が GLB かどうか
     public static boolean isGlb(byte[] head, int length) {
@@ -148,8 +169,8 @@ public final class GltfLoader {
         if (!root.containsKey("asset")) throw new IOException("Not a glTF file");
 
         for (Object required : Json.array(root, "extensionsRequired")) {
-            for (String name : UNSUPPORTED) {
-                if (name.equals(required)) throw new IOException("Unsupported glTF extension: " + name);
+            if (required instanceof String && !SUPPORTED_EXTENSIONS.contains((String) required)) {
+                throw new IOException("Unsupported glTF extension: " + required);
             }
         }
 
@@ -956,38 +977,200 @@ public final class GltfLoader {
         return mesh;
     }
 
-    private GltfModel.Primitive primitive(Map<String, Object> json, Draft[] drafts) throws IOException {
-        if (Json.object(json, "extensions").containsKey("KHR_draco_mesh_compression")) {
-            throw new IOException("Unsupported glTF extension: KHR_draco_mesh_compression");
+    private boolean isExtensionRequired(String name) {
+        for (Object item : Json.array(root, "extensionsRequired")) {
+            if (name.equals(item)) return true;
         }
+        return false;
+    }
+
+    private double[] readDracoAttribute(PointAttribute pa, int count, int components,
+                                       int accessorComponentType, boolean normalized) throws IOException {
+        final double[] out = new double[count * components];
+        final byte[] data = pa.getBuffer().getBuffer();
+        final ByteBuffer buf = ByteBuffer.wrap(data).order(ByteOrder.LITTLE_ENDIAN);
+        final int dracoType = pa.getDataType();
+        final int dracoCompType;
+        switch (dracoType) {
+            case DataType.INT8: dracoCompType = 5120; break;
+            case DataType.UINT8: dracoCompType = 5121; break;
+            case DataType.INT16: dracoCompType = 5122; break;
+            case DataType.UINT16: dracoCompType = 5123; break;
+            case DataType.UINT32:
+            case DataType.INT32: dracoCompType = 5125; break;
+            default: dracoCompType = 5126; break;
+        }
+        final int effectiveCompType = dracoType == DataType.FLOAT32 ? 5126 : accessorComponentType;
+        final int size = componentSize(effectiveCompType);
+        final int stride = pa.getByteStride();
+        final int baseOffset = pa.getByteOffset();
+
+        for (int p = 0; p < count; p++) {
+            final int entryId = pa.mappedIndex(p);
+            final int entryPos = baseOffset + entryId * stride;
+            for (int c = 0; c < components; c++) {
+                final int pos = entryPos + c * size;
+                if (pos >= 0 && pos + size <= data.length) {
+                    out[p * components + c] = component(buf, pos, effectiveCompType, normalized);
+                }
+            }
+        }
+        return out;
+    }
+
+    private float[] readDracoFloats(PointAttribute pa, int count, int components,
+                                   int accessorComponentType, boolean normalized) throws IOException {
+        final double[] values = readDracoAttribute(pa, count, components, accessorComponentType, normalized);
+        final float[] result = new float[values.length];
+        for (int i = 0; i < result.length; i++) {
+            final float value = (float) values[i];
+            result[i] = Float.isNaN(value) || Float.isInfinite(value) ? 0f : value;
+        }
+        return result;
+    }
+
+    private int[] readDracoInts(PointAttribute pa, int count, int components,
+                                 int accessorComponentType, boolean normalized) throws IOException {
+        final double[] values = readDracoAttribute(pa, count, components, accessorComponentType, normalized);
+        final int[] result = new int[values.length];
+        for (int i = 0; i < result.length; i++) {
+            result[i] = (int) values[i];
+        }
+        return result;
+    }
+
+    private float[] readAttributeFloats(String name, Map<String, Object> attributes,
+                                       DracoMesh dracoMesh, Map<String, Object> dracoAttrs,
+                                       int expectedComponents, int count) throws IOException {
+        if (dracoMesh != null && dracoAttrs != null && dracoAttrs.containsKey(name)) {
+            final int uniqueId = Json.integer(dracoAttrs, name, -1);
+            final PointAttribute pa = dracoMesh.getAttributeByUniqueId(uniqueId);
+            if (pa == null) return null;
+            final int accIndex = Json.integer(attributes, name, -1);
+            int compType = 5126;
+            boolean norm = false;
+            if (accIndex >= 0 && accIndex < accessors.size()) {
+                final Map<String, Object> acc = Json.object(accessors.get(accIndex));
+                compType = Json.integer(acc, "componentType", 5126);
+                norm = Json.bool(acc, "normalized", false);
+            }
+            return readDracoFloats(pa, count, expectedComponents, compType, norm);
+        }
+        if (attributes.containsKey(name)) {
+            final int accIndex = Json.integer(attributes, name, -1);
+            return floats(accIndex);
+        }
+        return null;
+    }
+
+    private int[] readAttributeInts(String name, Map<String, Object> attributes,
+                                     DracoMesh dracoMesh, Map<String, Object> dracoAttrs,
+                                     int expectedComponents, int count) throws IOException {
+        if (dracoMesh != null && dracoAttrs != null && dracoAttrs.containsKey(name)) {
+            final int uniqueId = Json.integer(dracoAttrs, name, -1);
+            final PointAttribute pa = dracoMesh.getAttributeByUniqueId(uniqueId);
+            if (pa == null) return null;
+            final int accIndex = Json.integer(attributes, name, -1);
+            int compType = 5125;
+            boolean norm = false;
+            if (accIndex >= 0 && accIndex < accessors.size()) {
+                final Map<String, Object> acc = Json.object(accessors.get(accIndex));
+                compType = Json.integer(acc, "componentType", 5125);
+                norm = Json.bool(acc, "normalized", false);
+            }
+            return readDracoInts(pa, count, expectedComponents, compType, norm);
+        }
+        if (attributes.containsKey(name)) {
+            final int accIndex = Json.integer(attributes, name, -1);
+            return ints(accIndex);
+        }
+        return null;
+    }
+
+    private GltfModel.Primitive primitive(Map<String, Object> json, Draft[] drafts) throws IOException {
         final Map<String, Object> attributes = Json.object(json, "attributes");
-        if (!attributes.containsKey("POSITION")) return null;
+        final Map<String, Object> extensions = Json.object(json, "extensions");
+        final Map<String, Object> dracoExt = Json.object(extensions, "KHR_draco_mesh_compression");
+
+        DracoMesh dracoMesh = null;
+        Map<String, Object> dracoAttrs = null;
+        if (!dracoExt.isEmpty()) {
+            final int viewIndex = Json.integer(dracoExt, "bufferView", -1);
+            if (viewIndex < 0 || viewIndex >= bufferViews.size()) {
+                throw new IOException("Invalid Draco bufferView: " + viewIndex);
+            }
+            final byte[] decomp = getDecompressedView(viewIndex);
+            final byte[] dracoData;
+            if (decomp != null) {
+                dracoData = decomp;
+            } else {
+                final Map<String, Object> view = Json.object(bufferViews.get(viewIndex));
+                final int bufferIndex = Json.integer(view, "buffer", 0);
+                if (bufferIndex < 0 || bufferIndex >= buffers.length) {
+                    throw new IOException("Invalid buffer index in Draco bufferView: " + bufferIndex);
+                }
+                final byte[] buffer = buffers[bufferIndex];
+                final int offset = Json.integer(view, "byteOffset", 0);
+                final int length = Json.integer(view, "byteLength", 0);
+                if (offset < 0 || length < 0 || (long) offset + length > buffer.length) {
+                    throw new IOException("Draco bufferView is out of range");
+                }
+                dracoData = new byte[length];
+                System.arraycopy(buffer, offset, dracoData, 0, length);
+            }
+
+            try {
+                dracoMesh = DracoDecoder.decodeMesh(dracoData);
+                dracoAttrs = Json.object(dracoExt, "attributes");
+            } catch (IOException e) {
+                final int posAcc = Json.integer(attributes, "POSITION", -1);
+                final boolean hasFallback = posAcc >= 0 && posAcc < accessors.size()
+                        && Json.object(accessors.get(posAcc)).containsKey("bufferView");
+                if (isExtensionRequired("KHR_draco_mesh_compression") || !hasFallback) {
+                    throw e;
+                }
+                dracoMesh = null;
+                dracoAttrs = null;
+            }
+        }
+
+        final boolean hasPosition = (dracoAttrs != null && dracoAttrs.containsKey("POSITION"))
+                || attributes.containsKey("POSITION");
+        if (!hasPosition) return null;
         final int mode = Json.integer(json, "mode", 4);
-        // 点と線は描かない
         if (mode < 4 || mode > 6) return null;
 
         final GltfModel.Primitive primitive = new GltfModel.Primitive();
-        final int position = Json.integer(attributes, "POSITION", -1);
-        primitive.positions = floats(position);
-        if (accessorComponents(position) != 3) throw new IOException("Invalid POSITION accessor");
-        final int count = primitive.positions.length / 3;
+        final int count;
+        if (dracoMesh != null && dracoAttrs != null && dracoAttrs.containsKey("POSITION")) {
+            count = dracoMesh.getNumPoints();
+            primitive.positions = readAttributeFloats("POSITION", attributes, dracoMesh, dracoAttrs, 3, count);
+            if (primitive.positions == null || primitive.positions.length != count * 3) {
+                throw new IOException("Invalid Draco POSITION attribute");
+            }
+        } else {
+            final int position = Json.integer(attributes, "POSITION", -1);
+            primitive.positions = floats(position);
+            if (accessorComponents(position) != 3) throw new IOException("Invalid POSITION accessor");
+            count = primitive.positions.length / 3;
+        }
         primitive.vertexCount = count;
 
-        if (attributes.containsKey("NORMAL")) {
-            final float[] normals = floats(Json.integer(attributes, "NORMAL", -1));
-            if (normals.length == count * 3) primitive.normals = normals;
+        if (attributes.containsKey("NORMAL") || (dracoAttrs != null && dracoAttrs.containsKey("NORMAL"))) {
+            final float[] normals = readAttributeFloats("NORMAL", attributes, dracoMesh, dracoAttrs, 3, count);
+            if (normals != null && normals.length == count * 3) primitive.normals = normals;
         }
 
-        if (attributes.containsKey("TANGENT")) {
-            final float[] tangents = floats(Json.integer(attributes, "TANGENT", -1));
-            if (tangents.length == count * 4) primitive.tangents = tangents;
+        if (attributes.containsKey("TANGENT") || (dracoAttrs != null && dracoAttrs.containsKey("TANGENT"))) {
+            final float[] tangents = readAttributeFloats("TANGENT", attributes, dracoMesh, dracoAttrs, 4, count);
+            if (tangents != null && tangents.length == count * 4) primitive.tangents = tangents;
         }
 
-        if (attributes.containsKey("COLOR_0")) {
+        if (attributes.containsKey("COLOR_0") || (dracoAttrs != null && dracoAttrs.containsKey("COLOR_0"))) {
             final int accessor = Json.integer(attributes, "COLOR_0", -1);
-            final float[] source = floats(accessor);
-            final int components = accessorComponents(accessor);
-            if ((components == 3 || components == 4) && source.length == count * components) {
+            final int components = accessor >= 0 && accessor < accessors.size() ? accessorComponents(accessor) : 4;
+            final float[] source = readAttributeFloats("COLOR_0", attributes, dracoMesh, dracoAttrs, components, count);
+            if (source != null && (components == 3 || components == 4) && source.length == count * components) {
                 final float[] colors = new float[count * 4];
                 for (int i = 0; i < count; i++) {
                     colors[i * 4] = gamma(source[i * components]);
@@ -999,11 +1182,19 @@ public final class GltfLoader {
             }
         }
 
-        readInfluences(primitive, attributes, count);
+        readInfluences(primitive, attributes, dracoMesh, dracoAttrs, count);
 
         // 頂点番号。帯や扇の形式は、三角形の並びに直す
         final int[] source;
-        if (json.containsKey("indices")) {
+        if (dracoMesh != null) {
+            final IntList dracoIndices = dracoMesh.getIndices();
+            source = new int[dracoIndices.getCount()];
+            for (int i = 0; i < source.length; i++) {
+                final int index = dracoIndices.get(i);
+                if (index < 0 || index >= count) throw new IOException("Draco vertex index is out of range");
+                source[i] = index;
+            }
+        } else if (json.containsKey("indices")) {
             source = ints(Json.integer(json, "indices", -1));
             for (int index : source) {
                 if (index < 0 || index >= count) throw new IOException("Vertex index is out of range");
@@ -1037,11 +1228,11 @@ public final class GltfLoader {
         final Draft draft = drafts[material];
         draft.primitives.add(primitive);
 
-        primitive.cornerUv = cornerUv(attributes, draft.mapping, primitive.indices, count);
+        primitive.cornerUv = cornerUv(attributes, draft.mapping, primitive.indices, count, dracoMesh, dracoAttrs);
         if (!draft.extraRefs.isEmpty()) {
             final float[][] extra = new float[draft.extraRefs.size()][];
             for (int i = 0; i < extra.length; i++) {
-                extra[i] = cornerUv(attributes, draft.extraRefs.get(i), primitive.indices, count);
+                extra[i] = cornerUv(attributes, draft.extraRefs.get(i), primitive.indices, count, dracoMesh, dracoAttrs);
             }
             draft.extraUv.put(primitive, extra);
         }
@@ -1049,12 +1240,15 @@ public final class GltfLoader {
     }
 
     // 三角形の角ごとのテクスチャ座標を、テクスチャの貼り方の指定 (ずらし、回転、拡大) を反映して求める
-    private float[] cornerUv(Map<String, Object> attributes, TexRef mapping, int[] indices, int count) throws IOException {
+    private float[] cornerUv(Map<String, Object> attributes, TexRef mapping, int[] indices, int count,
+                             DracoMesh dracoMesh, Map<String, Object> dracoAttrs) throws IOException {
         final float[] result = new float[indices.length * 2];
         final String name = mapping == null ? null : "TEXCOORD_" + mapping.texCoord;
-        if (name == null || !attributes.containsKey(name)) return result;
-        final float[] uv = floats(Json.integer(attributes, name, -1));
-        if (uv.length != count * 2) return result;
+        if (name == null) return result;
+        final boolean inDraco = dracoAttrs != null && dracoAttrs.containsKey(name);
+        if (!attributes.containsKey(name) && !inDraco) return result;
+        final float[] uv = readAttributeFloats(name, attributes, dracoMesh, dracoAttrs, 2, count);
+        if (uv == null || uv.length != count * 2) return result;
         final float cos = (float) Math.cos(mapping.rotation);
         final float sin = (float) Math.sin(mapping.rotation);
         for (int i = 0; i < indices.length; i++) {
@@ -1066,16 +1260,22 @@ public final class GltfLoader {
         return result;
     }
 
-    private void readInfluences(GltfModel.Primitive primitive, Map<String, Object> attributes, int count) throws IOException {
-        if (!attributes.containsKey("JOINTS_0") || !attributes.containsKey("WEIGHTS_0")) return;
-        final int sets = attributes.containsKey("JOINTS_1") && attributes.containsKey("WEIGHTS_1") ? 2 : 1;
+    private void readInfluences(GltfModel.Primitive primitive, Map<String, Object> attributes,
+                                DracoMesh dracoMesh, Map<String, Object> dracoAttrs, int count) throws IOException {
+        final boolean hasDracoJoints = dracoAttrs != null && dracoAttrs.containsKey("JOINTS_0");
+        final boolean hasDracoWeights = dracoAttrs != null && dracoAttrs.containsKey("WEIGHTS_0");
+        if ((!attributes.containsKey("JOINTS_0") && !hasDracoJoints) ||
+                (!attributes.containsKey("WEIGHTS_0") && !hasDracoWeights)) return;
+        final boolean hasSecondDraco = dracoAttrs != null && dracoAttrs.containsKey("JOINTS_1") && dracoAttrs.containsKey("WEIGHTS_1");
+        final boolean hasSecondAttr = attributes.containsKey("JOINTS_1") && attributes.containsKey("WEIGHTS_1");
+        final int sets = (hasSecondDraco || hasSecondAttr) ? 2 : 1;
         final int influences = sets * 4;
         final int[] joints = new int[count * influences];
         final float[] weights = new float[count * influences];
         for (int set = 0; set < sets; set++) {
-            final int[] setJoints = ints(Json.integer(attributes, "JOINTS_" + set, -1));
-            final float[] setWeights = floats(Json.integer(attributes, "WEIGHTS_" + set, -1));
-            if (setJoints.length != count * 4 || setWeights.length != count * 4) return;
+            final int[] setJoints = readAttributeInts("JOINTS_" + set, attributes, dracoMesh, dracoAttrs, 4, count);
+            final float[] setWeights = readAttributeFloats("WEIGHTS_" + set, attributes, dracoMesh, dracoAttrs, 4, count);
+            if (setJoints == null || setWeights == null || setJoints.length != count * 4 || setWeights.length != count * 4) return;
             for (int i = 0; i < count; i++) {
                 for (int k = 0; k < 4; k++) {
                     joints[i * influences + set * 4 + k] = setJoints[i * 4 + k];
