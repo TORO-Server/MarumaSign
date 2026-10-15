@@ -6,6 +6,8 @@ import java.util.Arrays;
 /**
  * EXT_meshopt_compression / KHR_meshopt_compression の展開を行う。
  * 頂点属性、三角形インデックス、汎用インデックス列の復号および各種フィルタの逆変換に対応する。
+ * meshoptimizer (https://github.com/zeux/meshoptimizer, MIT License, Copyright (c) 2016-2026 Arseny Kapoulkine)
+ * の復号処理を Java に書き直したもの。ライセンスの全文は jar の marumasa_sign/licenses/meshoptimizer.txt にある。
  */
 public final class MeshoptDecoder {
 
