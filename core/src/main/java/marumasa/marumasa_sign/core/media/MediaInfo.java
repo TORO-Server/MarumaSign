@@ -22,10 +22,27 @@ final class MediaInfo {
     double duration;
     // 映像のフレーム数。分からなければ 0
     long frameCount;
+    // 形式の名前 (FFmpeg での名前。hls, dash, flv, mpjpeg など)
+    String formatName = "";
 
     // 1 枚だけの画像かどうか
     boolean isStillImage() {
         return hasVideo && !hasAudio && (frameCount == 1 || (frameRate <= 0 && duration <= 0));
+    }
+
+    // 終わりのないライブ配信かどうか (長さが分からず、画像でもない)
+    boolean isLive() {
+        return duration <= 0 && !isStillImage() && !isImageFormat();
+    }
+
+    // 時刻の情報を持たない、JPEG を並べただけの映像 (MJPEG) かどうか
+    boolean isJpegSequence() {
+        return formatName.equals("mpjpeg") || formatName.equals("jpeg_pipe") || formatName.equals("mjpeg");
+    }
+
+    private boolean isImageFormat() {
+        // JPEG を並べた映像は画像の形式として読まれるが、画像ではない
+        return !isJpegSequence() && (formatName.endsWith("_pipe") || formatName.equals("image2"));
     }
 
     private static double parseRate(String value) {
@@ -50,10 +67,11 @@ final class MediaInfo {
     static MediaInfo probe(String url) throws IOException {
         // 結果を「項目=値」の形式で 1 行ずつ出力させる
         final Process process = new ProcessBuilder(Arrays.asList(
-                Ffmpeg.ffprobe().getPath(),
+                Ffmpeg.requireFfprobe().getPath(),
                 "-v", "error",
                 "-protocol_whitelist", MediaPlayer.PROTOCOLS,
-                "-show_entries", "stream=codec_type,width,height,avg_frame_rate,r_frame_rate,nb_frames:format=duration",
+                "-rw_timeout", MediaPlayer.NETWORK_TIMEOUT,
+                "-show_entries", "stream=codec_type,width,height,avg_frame_rate,r_frame_rate,nb_frames:format=duration,format_name",
                 "-of", "default=noprint_wrappers=1",
                 url
         )).redirectErrorStream(false).start();
@@ -80,6 +98,8 @@ final class MediaInfo {
                     if (value.equals("audio")) info.hasAudio = true;
                 } else if (key.equals("duration")) {
                     info.duration = parseNumber(value);
+                } else if (key.equals("format_name")) {
+                    info.formatName = value;
                 } else if (type.equals("video") && !videoDone) {
                     if (key.equals("width")) info.width = (int) parseNumber(value);
                     else if (key.equals("height")) info.height = (int) parseNumber(value);

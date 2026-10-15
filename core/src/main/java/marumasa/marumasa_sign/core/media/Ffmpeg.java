@@ -3,6 +3,7 @@ package marumasa.marumasa_sign.core.media;
 import marumasa.marumasa_sign.core.MarumaSign;
 
 import java.io.File;
+import java.io.IOException;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
@@ -29,13 +30,16 @@ public final class Ffmpeg {
         return ffmpeg != null && ffprobe != null;
     }
 
-    static synchronized File ffmpeg() {
+    // 見つからなければ例外を投げる (null のまま使って落ちないように)
+    static synchronized File requireFfmpeg() throws IOException {
         search();
+        if (ffmpeg == null) throw new IOException("FFmpeg was not found");
         return ffmpeg;
     }
 
-    static synchronized File ffprobe() {
+    static synchronized File requireFfprobe() throws IOException {
         search();
+        if (ffprobe == null) throw new IOException("FFmpeg was not found");
         return ffprobe;
     }
 
@@ -46,7 +50,17 @@ public final class Ffmpeg {
     private static void search() {
         if (searched) return;
         searched = true;
+        try {
+            searchDirectories();
+        } catch (RuntimeException e) {
+            // 環境変数やフォルダが読めない場合も、FFmpeg がないものとして続ける
+            ffmpeg = null;
+            ffprobe = null;
+            MarumaSign.LOGGER.info("Could not search for FFmpeg (" + e + ")");
+        }
+    }
 
+    private static void searchDirectories() {
         final List<File> directories = new ArrayList<File>();
         final String configured = System.getProperty("marumasign.ffmpeg");
         if (configured != null && !configured.isEmpty()) {
