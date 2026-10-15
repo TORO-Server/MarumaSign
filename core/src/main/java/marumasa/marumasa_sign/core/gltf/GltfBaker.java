@@ -69,6 +69,15 @@ final class GltfBaker {
     // 焼き込む材質
     static final class Input {
         Map base, metallicRoughness, normal, occlusion, emissive;
+        Map specular, specularColor;
+        Map clearcoat, clearcoatRoughness, clearcoatNormal;
+        Map sheenColor, sheenRoughness;
+        Map iridescence, iridescenceThickness;
+        Map anisotropy;
+        Map transmission, thickness;
+        Map diffuseTransmission, diffuseTransmissionColor;
+        Map specularGlossiness;
+
         // リニアの値
         float[] baseFactor = {1, 1, 1, 1};
         float[] emissiveFactor = {0, 0, 0};
@@ -76,6 +85,31 @@ final class GltfBaker {
         float normalScale = 1, occlusionStrength = 1;
         int alphaMode;
         float alphaCutoff = 0.5f;
+
+        float[] f0 = {0.04f, 0.04f, 0.04f};
+        float specularFactor = 1f;
+        float[] specularColorFactor = {1, 1, 1};
+        float clearcoatFactor = 0, clearcoatRoughnessFactor = 0;
+        float clearcoatNormalScale = 1;
+        float[] sheenColorFactor = {0, 0, 0};
+        float sheenRoughnessFactor = 0;
+        float iridescenceFactor = 0, iridescenceIor = 1.3f;
+        float iridescenceThicknessMin = 100f, iridescenceThicknessMax = 400f;
+        float anisotropyStrength = 0, anisotropyRotation = 0;
+        float transmissionFactor = 0;
+        float thicknessFactor = 0;
+        float[] attenuationColor = {1, 1, 1};
+        float attenuationDistance = Float.POSITIVE_INFINITY;
+        float diffuseTransmissionFactor = 0;
+        float[] diffuseTransmissionColorFactor = {1, 1, 1};
+
+        boolean isSpecGloss;
+        float[] specGlossSpecularFactor = {1, 1, 1};
+        float specGlossGlossinessFactor = 1;
+
+        GltfLight.LightInstance[] lights;
+        int lightCount;
+        float[] sphericalHarmonics;
     }
 
     // 焼き込む面。行列はモデルの座標への変換 (列優先の 4x4)
@@ -130,6 +164,7 @@ final class GltfBaker {
     private final int width, height;
     private final List<Layer> layers = new ArrayList<Layer>();
     private final float[] shaded = new float[3];
+    private final GltfLight.Context ctx = new GltfLight.Context();
     // scan の結果
     private int inside, overlap;
 
@@ -355,47 +390,55 @@ final class GltfBaker {
                 if (!paint) continue;
 
                 final float u = px / width, v = py / height;
-                if (input.normal != null) {
-                    // 接線。頂点に指定があればそれを、なければ面から求めたものを使う
-                    float tx, ty, tz, hand;
-                    if (tangents != null) {
-                        tx = tangents[a * 3] * w0 + tangents[b * 3] * w1 + tangents[c * 3] * w2;
-                        ty = tangents[a * 3 + 1] * w0 + tangents[b * 3 + 1] * w1 + tangents[c * 3 + 1] * w2;
-                        tz = tangents[a * 3 + 2] * w0 + tangents[b * 3 + 2] * w1 + tangents[c * 3 + 2] * w2;
-                        hand = primitive.tangents[a * 4 + 3] < 0 ? -sign : sign;
-                    } else {
-                        tx = faceTx;
-                        ty = faceTy;
-                        tz = faceTz;
-                        hand = faceHand;
-                    }
-                    // 法線に直交させる
+                // 接線。頂点に指定があればそれを、なければ面から求めたものを使う
+                float tx = 0, ty = 0, tz = 0, bx = 0, by = 0, bz = 0;
+                if (tangents != null) {
+                    tx = tangents[a * 3] * w0 + tangents[b * 3] * w1 + tangents[c * 3] * w2;
+                    ty = tangents[a * 3 + 1] * w0 + tangents[b * 3 + 1] * w1 + tangents[c * 3 + 1] * w2;
+                    tz = tangents[a * 3 + 2] * w0 + tangents[b * 3 + 2] * w1 + tangents[c * 3 + 2] * w2;
+                    final float hand = primitive.tangents[a * 4 + 3] < 0 ? -sign : sign;
                     final float along = tx * nx + ty * ny + tz * nz;
                     tx -= nx * along;
                     ty -= ny * along;
                     tz -= nz * along;
                     final float length = (float) Math.sqrt(tx * tx + ty * ty + tz * tz);
                     if (length > 1e-12f) {
-                        tx /= length;
-                        ty /= length;
-                        tz /= length;
-                        final float bx = (ny * tz - nz * ty) * hand, by = (nz * tx - nx * tz) * hand, bz = (nx * ty - ny * tx) * hand;
-                        final int sample = sample(input.normal, surface, t, u, v, w0, w1, w2);
-                        final float mx = (((sample >> 16) & 0xFF) / 127.5f - 1) * input.normalScale;
-                        final float my = (((sample >> 8) & 0xFF) / 127.5f - 1) * input.normalScale;
-                        final float mz = (sample & 0xFF) / 127.5f - 1;
-                        final float rx = tx * mx + bx * my + nx * mz;
-                        final float ry = ty * mx + by * my + ny * mz;
-                        final float rz = tz * mx + bz * my + nz * mz;
-                        final float bent = (float) Math.sqrt(rx * rx + ry * ry + rz * rz);
-                        if (bent > 0) {
-                            nx = rx / bent;
-                            ny = ry / bent;
-                            nz = rz / bent;
-                        }
+                        tx /= length; ty /= length; tz /= length;
+                        bx = (ny * tz - nz * ty) * hand;
+                        by = (nz * tx - nx * tz) * hand;
+                        bz = (nx * ty - ny * tx) * hand;
+                    }
+                } else if (faceTx != 0 || faceTy != 0 || faceTz != 0) {
+                    tx = faceTx; ty = faceTy; tz = faceTz;
+                    final float along = tx * nx + ty * ny + tz * nz;
+                    tx -= nx * along;
+                    ty -= ny * along;
+                    tz -= nz * along;
+                    final float length = (float) Math.sqrt(tx * tx + ty * ty + tz * tz);
+                    if (length > 1e-12f) {
+                        tx /= length; ty /= length; tz /= length;
+                        bx = (ny * tz - nz * ty) * faceHand;
+                        by = (nz * tx - nx * tz) * faceHand;
+                        bz = (nx * ty - ny * tx) * faceHand;
                     }
                 }
-                layer.pixels[pixel] = texel(surface, t, u, v, w0, w1, w2, nx, ny, nz);
+
+                if (input.normal != null && (tx != 0 || ty != 0 || tz != 0)) {
+                    final int sample = sample(input.normal, surface, t, u, v, w0, w1, w2);
+                    final float mx = (((sample >> 16) & 0xFF) / 127.5f - 1) * input.normalScale;
+                    final float my = (((sample >> 8) & 0xFF) / 127.5f - 1) * input.normalScale;
+                    final float mz = (sample & 0xFF) / 127.5f - 1;
+                    final float rx = tx * mx + bx * my + nx * mz;
+                    final float ry = ty * mx + by * my + ny * mz;
+                    final float rz = tz * mx + bz * my + nz * mz;
+                    final float bent = (float) Math.sqrt(rx * rx + ry * ry + rz * rz);
+                    if (bent > 0) {
+                        nx = rx / bent;
+                        ny = ry / bent;
+                        nz = rz / bent;
+                    }
+                }
+                layer.pixels[pixel] = texel(surface, t, u, v, w0, w1, w2, nx, ny, nz, tx, ty, tz, bx, by, bz);
             }
         }
     }
@@ -410,7 +453,7 @@ final class GltfBaker {
 
     // テクスチャの 1 点の色を計算する
     private int texel(Surface surface, int corner, float u, float v, float w0, float w1, float w2,
-                      float nx, float ny, float nz) {
+                      float nx, float ny, float nz, float tx, float ty, float tz, float bx, float by, float bz) {
         float r = input.baseFactor[0], g = input.baseFactor[1], b = input.baseFactor[2], a = input.baseFactor[3];
         if (input.base != null) {
             final int sample = sample(input.base, surface, corner, u, v, w0, w1, w2);
@@ -421,17 +464,162 @@ final class GltfBaker {
         }
 
         float metallic = input.metallic, roughness = input.roughness;
-        if (input.metallicRoughness != null) {
-            final int sample = sample(input.metallicRoughness, surface, corner, u, v, w0, w1, w2);
-            roughness *= ((sample >> 8) & 0xFF) / 255f;
-            metallic *= (sample & 0xFF) / 255f;
+        float f0r = input.f0[0], f0g = input.f0[1], f0b = input.f0[2];
+
+        if (input.isSpecGloss) {
+            float specR = input.specGlossSpecularFactor[0];
+            float specG = input.specGlossSpecularFactor[1];
+            float specB = input.specGlossSpecularFactor[2];
+            float gloss = input.specGlossGlossinessFactor;
+            if (input.specularGlossiness != null) {
+                final int sample = sample(input.specularGlossiness, surface, corner, u, v, w0, w1, w2);
+                specR *= GltfLight.toLinear(sample >> 16);
+                specG *= GltfLight.toLinear(sample >> 8);
+                specB *= GltfLight.toLinear(sample);
+                gloss *= ((sample >>> 24) & 0xFF) / 255f;
+            }
+            roughness = Math.max(0.04f, 1f - gloss);
+            metallic = 0f;
+            f0r = specR;
+            f0g = specG;
+            f0b = specB;
+            final float maxSpec = Math.max(specR, Math.max(specG, specB));
+            final float diffuseFactor = Math.max(0f, 1f - maxSpec);
+            r *= diffuseFactor;
+            g *= diffuseFactor;
+            b *= diffuseFactor;
+        } else {
+            if (input.metallicRoughness != null) {
+                final int sample = sample(input.metallicRoughness, surface, corner, u, v, w0, w1, w2);
+                roughness *= ((sample >> 8) & 0xFF) / 255f;
+                metallic *= (sample & 0xFF) / 255f;
+            }
+            float specFactor = input.specularFactor;
+            if (input.specular != null) {
+                final int sample = sample(input.specular, surface, corner, u, v, w0, w1, w2);
+                specFactor *= ((sample >>> 24) & 0xFF) / 255f;
+            }
+            float specColorR = input.specularColorFactor[0];
+            float specColorG = input.specularColorFactor[1];
+            float specColorB = input.specularColorFactor[2];
+            if (input.specularColor != null) {
+                final int sample = sample(input.specularColor, surface, corner, u, v, w0, w1, w2);
+                specColorR *= GltfLight.toLinear(sample >> 16);
+                specColorG *= GltfLight.toLinear(sample >> 8);
+                specColorB *= GltfLight.toLinear(sample);
+            }
+            f0r = Math.min(1f, f0r * specFactor * specColorR);
+            f0g = Math.min(1f, f0g * specFactor * specColorG);
+            f0b = Math.min(1f, f0b * specFactor * specColorB);
         }
+
+        ctx.f0r = f0r;
+        ctx.f0g = f0g;
+        ctx.f0b = f0b;
+
+        final GltfModel.Primitive prim = surface.primitive;
+        final int ac = prim.indices[corner], bc = prim.indices[corner + 1], cc = prim.indices[corner + 2];
+        ctx.px = surface.positions[ac * 3] * w0 + surface.positions[bc * 3] * w1 + surface.positions[cc * 3] * w2;
+        ctx.py = surface.positions[ac * 3 + 1] * w0 + surface.positions[bc * 3 + 1] * w1 + surface.positions[cc * 3 + 1] * w2;
+        ctx.pz = surface.positions[ac * 3 + 2] * w0 + surface.positions[bc * 3 + 2] * w1 + surface.positions[cc * 3 + 2] * w2;
+
+        ctx.tx = tx; ctx.ty = ty; ctx.tz = tz;
+        ctx.bx = bx; ctx.by = by; ctx.bz = bz;
+        ctx.lights = input.lights;
+        ctx.lightCount = input.lightCount;
+        ctx.sphericalHarmonics = input.sphericalHarmonics;
+
+        float clearcoat = input.clearcoatFactor;
+        if (input.clearcoat != null) {
+            final int sample = sample(input.clearcoat, surface, corner, u, v, w0, w1, w2);
+            clearcoat *= ((sample >> 16) & 0xFF) / 255f;
+        }
+        ctx.clearcoat = clearcoat;
+        float ccRough = input.clearcoatRoughnessFactor;
+        if (input.clearcoatRoughness != null) {
+            final int sample = sample(input.clearcoatRoughness, surface, corner, u, v, w0, w1, w2);
+            ccRough *= ((sample >> 8) & 0xFF) / 255f;
+        }
+        ctx.clearcoatRoughness = ccRough;
+        if (input.clearcoatNormal != null && (tx != 0 || ty != 0 || tz != 0)) {
+            final int sample = sample(input.clearcoatNormal, surface, corner, u, v, w0, w1, w2);
+            final float mx = (((sample >> 16) & 0xFF) / 127.5f - 1) * input.clearcoatNormalScale;
+            final float my = (((sample >> 8) & 0xFF) / 127.5f - 1) * input.clearcoatNormalScale;
+            final float mz = (sample & 0xFF) / 127.5f - 1;
+            final float rx = tx * mx + bx * my + nx * mz;
+            final float ry = ty * mx + by * my + ny * mz;
+            final float rz = tz * mx + bz * my + nz * mz;
+            final float bent = (float) Math.sqrt(rx * rx + ry * ry + rz * rz);
+            if (bent > 0) {
+                ctx.cnx = rx / bent; ctx.cny = ry / bent; ctx.cnz = rz / bent;
+            } else {
+                ctx.cnx = nx; ctx.cny = ny; ctx.cnz = nz;
+            }
+        } else {
+            ctx.cnx = nx; ctx.cny = ny; ctx.cnz = nz;
+        }
+
+        float sheenR = input.sheenColorFactor[0], sheenG = input.sheenColorFactor[1], sheenB = input.sheenColorFactor[2];
+        if (input.sheenColor != null) {
+            final int sample = sample(input.sheenColor, surface, corner, u, v, w0, w1, w2);
+            sheenR *= GltfLight.toLinear(sample >> 16);
+            sheenG *= GltfLight.toLinear(sample >> 8);
+            sheenB *= GltfLight.toLinear(sample);
+        }
+        ctx.sheenR = sheenR; ctx.sheenG = sheenG; ctx.sheenB = sheenB;
+        float sheenRough = input.sheenRoughnessFactor;
+        if (input.sheenRoughness != null) {
+            final int sample = sample(input.sheenRoughness, surface, corner, u, v, w0, w1, w2);
+            sheenRough *= ((sample >>> 24) & 0xFF) / 255f;
+        }
+        ctx.sheenRoughness = sheenRough;
+
+        float irid = input.iridescenceFactor;
+        if (input.iridescence != null) {
+            final int sample = sample(input.iridescence, surface, corner, u, v, w0, w1, w2);
+            irid *= ((sample >> 16) & 0xFF) / 255f;
+        }
+        ctx.iridescence = irid;
+        ctx.iridescenceIor = input.iridescenceIor;
+        float iridThick = input.iridescenceThicknessMax;
+        if (input.iridescenceThickness != null) {
+            final int sample = sample(input.iridescenceThickness, surface, corner, u, v, w0, w1, w2);
+            final float frac = ((sample >> 8) & 0xFF) / 255f;
+            iridThick = input.iridescenceThicknessMin + (input.iridescenceThicknessMax - input.iridescenceThicknessMin) * frac;
+        }
+        ctx.iridescenceThickness = iridThick;
+
+        float aniso = input.anisotropyStrength;
+        if (input.anisotropy != null) {
+            final int sample = sample(input.anisotropy, surface, corner, u, v, w0, w1, w2);
+            final float ax = ((sample >> 16) & 0xFF) / 127.5f - 1f;
+            final float ay = ((sample >> 8) & 0xFF) / 127.5f - 1f;
+            aniso *= (float) Math.sqrt(ax * ax + ay * ay);
+        }
+        ctx.anisotropy = aniso;
+
+        float dtFactor = input.diffuseTransmissionFactor;
+        if (input.diffuseTransmission != null) {
+            final int sample = sample(input.diffuseTransmission, surface, corner, u, v, w0, w1, w2);
+            dtFactor *= ((sample >>> 24) & 0xFF) / 255f;
+        }
+        float dtR = input.diffuseTransmissionColorFactor[0] * dtFactor;
+        float dtG = input.diffuseTransmissionColorFactor[1] * dtFactor;
+        float dtB = input.diffuseTransmissionColorFactor[2] * dtFactor;
+        if (input.diffuseTransmissionColor != null) {
+            final int sample = sample(input.diffuseTransmissionColor, surface, corner, u, v, w0, w1, w2);
+            dtR *= GltfLight.toLinear(sample >> 16);
+            dtG *= GltfLight.toLinear(sample >> 8);
+            dtB *= GltfLight.toLinear(sample);
+        }
+        ctx.diffuseTransR = dtR; ctx.diffuseTransG = dtG; ctx.diffuseTransB = dtB;
+
         float occlusion = 1;
         if (input.occlusion != null) {
             final int sample = sample(input.occlusion, surface, corner, u, v, w0, w1, w2);
             occlusion = 1 + input.occlusionStrength * (((sample >> 16) & 0xFF) / 255f - 1);
         }
-        GltfLight.shade(r, g, b, metallic, roughness, nx, ny, nz, occlusion, shaded);
+        GltfLight.shade(r, g, b, metallic, roughness, nx, ny, nz, occlusion, ctx, shaded);
         r = shaded[0];
         g = shaded[1];
         b = shaded[2];
@@ -445,6 +633,30 @@ final class GltfBaker {
             r += input.emissiveFactor[0];
             g += input.emissiveFactor[1];
             b += input.emissiveFactor[2];
+        }
+
+        float trans = input.transmissionFactor;
+        if (input.transmission != null) {
+            final int sample = sample(input.transmission, surface, corner, u, v, w0, w1, w2);
+            trans *= ((sample >> 16) & 0xFF) / 255f;
+        }
+        if (trans > 0) {
+            float thick = input.thicknessFactor;
+            if (input.thickness != null) {
+                final int sample = sample(input.thickness, surface, corner, u, v, w0, w1, w2);
+                thick *= ((sample >> 8) & 0xFF) / 255f;
+            }
+            if (thick > 0 && !Float.isInfinite(input.attenuationDistance) && input.attenuationDistance > 0) {
+                final float attR = (float) Math.exp(-thick / input.attenuationDistance * (float) -Math.log(Math.max(1e-4f, input.attenuationColor[0])));
+                final float attG = (float) Math.exp(-thick / input.attenuationDistance * (float) -Math.log(Math.max(1e-4f, input.attenuationColor[1])));
+                final float attB = (float) Math.exp(-thick / input.attenuationDistance * (float) -Math.log(Math.max(1e-4f, input.attenuationColor[2])));
+                r *= attR; g *= attG; b *= attB;
+            } else if (thick > 0) {
+                r *= input.attenuationColor[0];
+                g *= input.attenuationColor[1];
+                b *= input.attenuationColor[2];
+            }
+            a *= (1f - trans * 0.75f);
         }
 
         if (input.alphaMode == GltfModel.ALPHA_OPAQUE) a = 1;
