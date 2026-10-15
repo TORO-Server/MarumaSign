@@ -29,10 +29,11 @@ public final class Ffmpeg {
         return ffmpeg != null && ffprobe != null;
     }
 
-    static synchronized File ffmpeg() {
+    public static synchronized File ffmpeg() {
         search();
         return ffmpeg;
     }
+
 
     static synchronized File ffprobe() {
         search();
