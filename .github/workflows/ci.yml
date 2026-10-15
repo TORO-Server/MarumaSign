@@ -40,7 +40,13 @@ jobs:
 
       # 対応するすべてのバージョンの Minecraft を取得するため、時間がかかる
       - name: Build with Gradle
-        run: ./gradlew :dist:assemble
+        # Mojang などからの取得が一時的に失敗しても、もう 1 回やり直す (取得済みのものは再利用される)
+        run: |
+          for attempt in 1 2; do
+            ./gradlew :dist:assemble && exit 0
+            echo "::warning::Gradle のビルドに失敗しました (${attempt} 回目)"
+          done
+          exit 1
 
       # FFmpeg は jar に入れない (利用者が自分で用意する)
       - name: Check that FFmpeg is not bundled
