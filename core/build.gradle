@@ -38,6 +38,15 @@ tasks.register('dracoCheck', JavaExec) {
     javaLauncher = javaToolchains.launcherFor(java.toolchain)
 }
 
+// テクスチャデコーダの動作を確認する。引数は -PtextureArgs="出力先 ファイル..." で渡す
+tasks.register('textureCheck', JavaExec) {
+    classpath = sourceSets.test.runtimeClasspath
+    mainClass = 'marumasa.marumasa_sign.core.texture.TextureCheck'
+    javaLauncher = javaToolchains.launcherFor(java.toolchain)
+    args = providers.gradleProperty('textureArgs').getOrElse('').tokenize(' ')
+}
+
+
 tasks.withType(JavaCompile).configureEach {
     // Minecraft に依存しないので JDK 8 の API だけに制限する
     options.release = 8
