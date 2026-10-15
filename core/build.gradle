@@ -31,6 +31,13 @@ tasks.register('gltfCheck', JavaExec) {
     args = providers.gradleProperty('gltfArgs').getOrElse('').tokenize(' ')
 }
 
+// Draco デコーダの単体テスト・安全性検査を実行する
+tasks.register('dracoCheck', JavaExec) {
+    classpath = sourceSets.test.runtimeClasspath
+    mainClass = 'marumasa.marumasa_sign.core.gltf.DracoCheck'
+    javaLauncher = javaToolchains.launcherFor(java.toolchain)
+}
+
 tasks.withType(JavaCompile).configureEach {
     // Minecraft に依存しないので JDK 8 の API だけに制限する
     options.release = 8
