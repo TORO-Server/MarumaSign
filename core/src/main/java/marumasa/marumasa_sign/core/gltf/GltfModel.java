@@ -14,6 +14,30 @@ public final class GltfModel {
     static final int PATH_SCALE = 2;
     static final int PATH_WEIGHTS = 3;
 
+    static final int TARGET_NODE = 0;
+    static final int TARGET_MATERIAL_COLOR = 1;
+    static final int TARGET_MATERIAL_EMISSIVE = 2;
+    static final int TARGET_MATERIAL_METALLIC = 3;
+    static final int TARGET_MATERIAL_ROUGHNESS = 4;
+    static final int TARGET_MATERIAL_TEX_OFFSET = 5;
+    static final int TARGET_MATERIAL_TEX_SCALE = 6;
+    static final int TARGET_MATERIAL_TEX_ROTATION = 7;
+    static final int TARGET_LIGHT_COLOR = 8;
+    static final int TARGET_LIGHT_INTENSITY = 9;
+
+    public static final int LIGHT_DIRECTIONAL = 0;
+    public static final int LIGHT_POINT = 1;
+    public static final int LIGHT_SPOT = 2;
+
+    public static final class Light {
+        public int type;
+        public final float[] color = {1, 1, 1};
+        public float intensity = 1;
+        public float range = 0;
+        public float innerConeAngle = 0;
+        public float outerConeAngle = 0.7853981633974483f;
+    }
+
     static final int INTERPOLATION_LINEAR = 0;
     static final int INTERPOLATION_STEP = 1;
     static final int INTERPOLATION_CUBIC = 2;
@@ -28,6 +52,7 @@ public final class GltfModel {
         float[] matrix;
         int mesh = -1;
         int skin = -1;
+        int light = -1;
         // モーフィングの重みの初期値。指定がなければ null
         float[] weights;
     }
@@ -50,6 +75,8 @@ public final class GltfModel {
         int[] indices;
         // 三角形の角ごとのテクスチャ座標。indices と同じ並びで、1 つにつき u, v
         float[] cornerUv;
+        // 変換前の元のテクスチャ座標。動的テクスチャトランスフォームで使用
+        float[] rawUv;
         int material;
         // モーフィングの変化量。使わなければ長さ 0
         float[][] morphPositions = new float[0][];
@@ -80,6 +107,23 @@ public final class GltfModel {
         public boolean doubleSided;
         // 陰影を付けない
         boolean unlit;
+        final float[] f0 = {0.04f, 0.04f, 0.04f};
+        float clearcoat = 0;
+        float clearcoatRoughness = 0;
+        final float[] sheen = {0, 0, 0};
+        float sheenRoughness = 0;
+        float iridescence = 0;
+        float iridescenceIor = 1.3f;
+        float iridescenceThickness = 100f;
+        float anisotropy = 0;
+        final float[] diffuseTransmission = {0, 0, 0};
+        float transmission = 0;
+        float thickness = 0;
+        final float[] attenuationColor = {1, 1, 1};
+        float attenuationDistance = Float.POSITIVE_INFINITY;
+        float texOffsetX = 0, texOffsetY = 0;
+        float texScaleX = 1, texScaleY = 1;
+        float texRotation = 0;
     }
 
     public static final class Texture {
@@ -96,6 +140,8 @@ public final class GltfModel {
     }
 
     static final class Channel {
+        int targetType = TARGET_NODE;
+        int targetIndex;
         int node;
         int path;
         int interpolation;
@@ -118,6 +164,8 @@ public final class GltfModel {
     Material[] materials = new Material[0];
     Texture[] textures = new Texture[0];
     Animation[] animations = new Animation[0];
+    Light[] lights = new Light[0];
+    float[] sphericalHarmonics;
     int triangleCount;
     // 陰影をテクスチャに焼き込んだ材質の数
     int bakedCount;

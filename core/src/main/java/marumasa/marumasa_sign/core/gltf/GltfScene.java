@@ -47,20 +47,38 @@ public final class GltfScene {
     private float posedTime = Float.NaN;
     private float[] restBounds;
 
+    // 材質の動的プロパティ
+    private final float[] matColors;
+    private final float[] matEmissive;
+    private final float[] matMetallic;
+    private final float[] matRoughness;
+    private final float[] matTexOffset;
+    private final float[] matTexScale;
+    private final float[] matTexRotation;
+
+    // ライトの動的プロパティとシーンライト
+    private final float[] lightColors;
+    private final float[] lightIntensities;
+    private final GltfLight.LightInstance[] sceneLights;
+    private final int[] sceneLightNodes;
+    private final int[] sceneLightIndices;
+    private final GltfLight.Context lightContext = new GltfLight.Context();
+
     // 計算用の領域
     private final float[] matrix = new float[16];
     private final float[] matrix2 = new float[16];
     private final float[] normal = new float[9];
     private final float[] sample = new float[4];
     private float[] jointMatrices = new float[0];
+    private float[] modelJointMatrices = new float[0];
     private float[] jointNormals = new float[0];
     private float[] positions = new float[0];
+    private float[] modelPositions = new float[0];
+    private float[] dynamicUv = new float[0];
     private int[] front = new int[0];
     private int[] back = new int[0];
     private final float[] lit = new float[3];
     private final int[] cursor;
-    // 材質ごとの、頂点の色に掛ける色 (リニア)
-    private final float[] materialColor;
     // 描画する座標の法線を、モデルの座標に戻すための行列 (配置の行列の左上 3x3 の転置)
     private final float[] toModel = new float[9];
 
@@ -73,6 +91,43 @@ public final class GltfScene {
         weights = new float[nodeCount][];
         local = new float[nodeCount * 16];
         global = new float[nodeCount * 16];
+
+        final int matCount = model.materials.length;
+        matColors = new float[matCount * 4];
+        matEmissive = new float[matCount * 3];
+        matMetallic = new float[matCount];
+        matRoughness = new float[matCount];
+        matTexOffset = new float[matCount * 2];
+        matTexScale = new float[matCount * 2];
+        matTexRotation = new float[matCount];
+        resetMaterialProperties();
+
+        final int lightCount = model.lights.length;
+        lightColors = new float[lightCount * 3];
+        lightIntensities = new float[lightCount];
+        resetLightProperties();
+
+        int placedCount = 0;
+        for (int i : model.order) {
+            final GltfModel.Node node = model.nodes[i];
+            if (node.light >= 0 && node.light < model.lights.length) placedCount++;
+        }
+        sceneLights = new GltfLight.LightInstance[placedCount];
+        sceneLightNodes = new int[placedCount];
+        sceneLightIndices = new int[placedCount];
+        int lIdx = 0;
+        for (int i : model.order) {
+            final GltfModel.Node node = model.nodes[i];
+            if (node.light >= 0 && node.light < model.lights.length) {
+                sceneLights[lIdx] = new GltfLight.LightInstance();
+                sceneLightNodes[lIdx] = i;
+                sceneLightIndices[lIdx] = node.light;
+                lIdx++;
+            }
+        }
+        lightContext.lights = sceneLights;
+        lightContext.lightCount = sceneLights.length;
+        lightContext.sphericalHarmonics = model.sphericalHarmonics;
 
         // 不透明なものを先に、半透明なものを後に並べる
         final List<Group> list = new ArrayList<Group>();
@@ -100,13 +155,6 @@ public final class GltfScene {
         groups = list.toArray(new Group[0]);
         cursor = new int[groups.length];
 
-        materialColor = new float[model.materials.length * 3];
-        for (int i = 0; i < model.materials.length; i++) {
-            for (int c = 0; c < 3; c++) {
-                materialColor[i * 3 + c] = GltfLight.toLinear(model.materials[i].color[c]);
-            }
-        }
-
         for (int node : model.order) {
             final int mesh = model.nodes[node].mesh;
             if (mesh < 0) continue;
@@ -119,6 +167,29 @@ public final class GltfScene {
                 targets = Math.max(targets, primitives[p].morphPositions.length);
             }
             if (targets > 0) weights[node] = new float[targets];
+        }
+    }
+
+    private void resetMaterialProperties() {
+        for (int i = 0; i < model.materials.length; i++) {
+            final GltfModel.Material m = model.materials[i];
+            System.arraycopy(m.color, 0, matColors, i * 4, 4);
+            System.arraycopy(m.emissive, 0, matEmissive, i * 3, 3);
+            matMetallic[i] = m.metallic;
+            matRoughness[i] = m.roughness;
+            matTexOffset[i * 2] = m.texOffsetX;
+            matTexOffset[i * 2 + 1] = m.texOffsetY;
+            matTexScale[i * 2] = m.texScaleX;
+            matTexScale[i * 2 + 1] = m.texScaleY;
+            matTexRotation[i] = m.texRotation;
+        }
+    }
+
+    private void resetLightProperties() {
+        for (int i = 0; i < model.lights.length; i++) {
+            final GltfModel.Light l = model.lights[i];
+            System.arraycopy(l.color, 0, lightColors, i * 3, 3);
+            lightIntensities[i] = l.intensity;
         }
     }
 
@@ -156,6 +227,8 @@ public final class GltfScene {
                 }
             }
         }
+        resetMaterialProperties();
+        resetLightProperties();
 
         if (model.animations.length > 0) {
             final GltfModel.Animation animation = model.animations[0];
@@ -186,6 +259,34 @@ public final class GltfScene {
                 System.arraycopy(out, 0, global, i * 16, 16);
             }
         }
+
+        // 配置されたライトの姿勢と動的パラメータを更新
+        for (int k = 0; k < sceneLights.length; k++) {
+            final int nodeIdx = sceneLightNodes[k];
+            final int lightIdx = sceneLightIndices[k];
+            final GltfModel.Light light = model.lights[lightIdx];
+            final GltfLight.LightInstance inst = sceneLights[k];
+            inst.type = light.type;
+            inst.r = lightColors[lightIdx * 3];
+            inst.g = lightColors[lightIdx * 3 + 1];
+            inst.b = lightColors[lightIdx * 3 + 2];
+            inst.intensity = lightIntensities[lightIdx];
+            inst.range = light.range;
+            inst.innerCos = (float) Math.cos(light.innerConeAngle);
+            inst.outerCos = (float) Math.cos(light.outerConeAngle);
+            final int o = nodeIdx * 16;
+            inst.px = global[o + 12];
+            inst.py = global[o + 13];
+            inst.pz = global[o + 14];
+            float dx = -global[o + 8], dy = -global[o + 9], dz = -global[o + 10];
+            final float len = (float) Math.sqrt(dx * dx + dy * dy + dz * dz);
+            if (len > 0) {
+                dx /= len; dy /= len; dz /= len;
+            }
+            inst.dx = dx;
+            inst.dy = dy;
+            inst.dz = dz;
+        }
     }
 
     private void apply(GltfModel.Channel channel, float time) {
@@ -200,18 +301,86 @@ public final class GltfScene {
 
         final float[] out;
         final int outOffset;
-        if (channel.path == GltfModel.PATH_WEIGHTS) {
-            out = weights[channel.node];
-            outOffset = 0;
-            if (out == null) return;
-        } else if (channel.path == GltfModel.PATH_ROTATION) {
-            out = rotation;
-            outOffset = channel.node * 4;
-        } else {
-            out = channel.path == GltfModel.PATH_TRANSLATION ? translation : scale;
-            outOffset = channel.node * 3;
+        final int count;
+        final boolean isNodeRotation;
+
+        switch (channel.targetType) {
+            case GltfModel.TARGET_NODE:
+                if (channel.path == GltfModel.PATH_WEIGHTS) {
+                    out = weights[channel.node];
+                    outOffset = 0;
+                    if (out == null) return;
+                    count = Math.min(components, out.length);
+                    isNodeRotation = false;
+                } else if (channel.path == GltfModel.PATH_ROTATION) {
+                    out = rotation;
+                    outOffset = channel.node * 4;
+                    count = components;
+                    isNodeRotation = true;
+                } else {
+                    out = channel.path == GltfModel.PATH_TRANSLATION ? translation : scale;
+                    outOffset = channel.node * 3;
+                    count = components;
+                    isNodeRotation = false;
+                }
+                break;
+            case GltfModel.TARGET_MATERIAL_COLOR:
+                out = matColors;
+                outOffset = channel.targetIndex * 4;
+                count = Math.min(components, 4);
+                isNodeRotation = false;
+                break;
+            case GltfModel.TARGET_MATERIAL_EMISSIVE:
+                out = matEmissive;
+                outOffset = channel.targetIndex * 3;
+                count = Math.min(components, 3);
+                isNodeRotation = false;
+                break;
+            case GltfModel.TARGET_MATERIAL_METALLIC:
+                out = matMetallic;
+                outOffset = channel.targetIndex;
+                count = 1;
+                isNodeRotation = false;
+                break;
+            case GltfModel.TARGET_MATERIAL_ROUGHNESS:
+                out = matRoughness;
+                outOffset = channel.targetIndex;
+                count = 1;
+                isNodeRotation = false;
+                break;
+            case GltfModel.TARGET_MATERIAL_TEX_OFFSET:
+                out = matTexOffset;
+                outOffset = channel.targetIndex * 2;
+                count = Math.min(components, 2);
+                isNodeRotation = false;
+                break;
+            case GltfModel.TARGET_MATERIAL_TEX_SCALE:
+                out = matTexScale;
+                outOffset = channel.targetIndex * 2;
+                count = Math.min(components, 2);
+                isNodeRotation = false;
+                break;
+            case GltfModel.TARGET_MATERIAL_TEX_ROTATION:
+                out = matTexRotation;
+                outOffset = channel.targetIndex;
+                count = 1;
+                isNodeRotation = false;
+                break;
+            case GltfModel.TARGET_LIGHT_COLOR:
+                out = lightColors;
+                outOffset = channel.targetIndex * 3;
+                count = Math.min(components, 3);
+                isNodeRotation = false;
+                break;
+            case GltfModel.TARGET_LIGHT_INTENSITY:
+                out = lightIntensities;
+                outOffset = channel.targetIndex;
+                count = 1;
+                isNodeRotation = false;
+                break;
+            default:
+                return;
         }
-        final int count = channel.path == GltfModel.PATH_WEIGHTS ? Math.min(components, out.length) : components;
 
         int key;
         if (time <= times[0]) {
@@ -231,7 +400,7 @@ public final class GltfScene {
         final boolean held = key == keys - 1 || time <= times[0] || channel.interpolation == GltfModel.INTERPOLATION_STEP;
         if (held) {
             System.arraycopy(values, key * keySize + valueOffset, out, outOffset, count);
-            if (channel.path == GltfModel.PATH_ROTATION) normalizeRotation(out, outOffset);
+            if (isNodeRotation) normalizeRotation(out, outOffset);
             return;
         }
 
@@ -249,8 +418,8 @@ public final class GltfScene {
                 out[outOffset + c] = h00 * values[a + c] + h10 * values[a + components + c]
                         + h01 * values[b + c] + h11 * values[b - components + c];
             }
-            if (channel.path == GltfModel.PATH_ROTATION) normalizeRotation(out, outOffset);
-        } else if (channel.path == GltfModel.PATH_ROTATION) {
+            if (isNodeRotation) normalizeRotation(out, outOffset);
+        } else if (isNodeRotation) {
             Mat4.slerp(values, a, values, b, u, sample);
             System.arraycopy(sample, 0, out, outOffset, 4);
         } else {
@@ -321,6 +490,7 @@ public final class GltfScene {
         final int count = skin.joints.length;
         if (jointMatrices.length < count * 16) {
             jointMatrices = new float[count * 16];
+            modelJointMatrices = new float[count * 16];
             jointNormals = new float[count * 9];
         }
         final float[] inverseBind = new float[16];
@@ -336,6 +506,7 @@ public final class GltfScene {
                 System.arraycopy(skin.inverseBind, j * 16, inverseBind, 0, 16);
                 Mat4.multiply(joint, inverseBind, bone);
             }
+            System.arraycopy(bone, 0, modelJointMatrices, j * 16, 16);
             Mat4.multiply(placement, bone, out);
             System.arraycopy(out, 0, jointMatrices, j * 16, 16);
             Mat4.normalMatrix(bone, boneNormal);
@@ -350,6 +521,7 @@ public final class GltfScene {
         final int count = primitive.vertexCount;
         if (positions.length < count * 3) {
             positions = new float[count * 3];
+            modelPositions = new float[count * 3];
             front = new int[count];
             back = new int[count];
         }
@@ -386,8 +558,9 @@ public final class GltfScene {
             }
 
             float x, y, z, wnx, wny, wnz;
+            float mx, my, mz;
             if (influences > 0) {
-                x = y = z = wnx = wny = wnz = 0;
+                x = y = z = wnx = wny = wnz = mx = my = mz = 0;
                 for (int k = 0; k < influences; k++) {
                     final float weight = primitive.weights[i * influences + k];
                     if (weight == 0) continue;
@@ -398,6 +571,12 @@ public final class GltfScene {
                     x += weight * (jm[o] * px + jm[o + 4] * py + jm[o + 8] * pz + jm[o + 12]);
                     y += weight * (jm[o + 1] * px + jm[o + 5] * py + jm[o + 9] * pz + jm[o + 13]);
                     z += weight * (jm[o + 2] * px + jm[o + 6] * py + jm[o + 10] * pz + jm[o + 14]);
+
+                    final float[] mjm = modelJointMatrices;
+                    mx += weight * (mjm[o] * px + mjm[o + 4] * py + mjm[o + 8] * pz + mjm[o + 12]);
+                    my += weight * (mjm[o + 1] * px + mjm[o + 5] * py + mjm[o + 9] * pz + mjm[o + 13]);
+                    mz += weight * (mjm[o + 2] * px + mjm[o + 6] * py + mjm[o + 10] * pz + mjm[o + 14]);
+
                     final int q = joint * 9;
                     final float[] jn = jointNormals;
                     wnx += weight * (jn[q] * nx + jn[q + 3] * ny + jn[q + 6] * nz);
@@ -408,6 +587,12 @@ public final class GltfScene {
                 x = m[0] * px + m[4] * py + m[8] * pz + m[12];
                 y = m[1] * px + m[5] * py + m[9] * pz + m[13];
                 z = m[2] * px + m[6] * py + m[10] * pz + m[14];
+
+                final float[] m2 = matrix2;
+                mx = m2[0] * px + m2[4] * py + m2[8] * pz + m2[12];
+                my = m2[1] * px + m2[5] * py + m2[9] * pz + m2[13];
+                mz = m2[2] * px + m2[6] * py + m2[10] * pz + m2[14];
+
                 wnx = n[0] * nx + n[3] * ny + n[6] * nz;
                 wny = n[1] * nx + n[4] * ny + n[7] * nz;
                 wnz = n[2] * nx + n[5] * ny + n[8] * nz;
@@ -415,6 +600,9 @@ public final class GltfScene {
             positions[i * 3] = x;
             positions[i * 3 + 1] = y;
             positions[i * 3 + 2] = z;
+            modelPositions[i * 3] = mx;
+            modelPositions[i * 3 + 1] = my;
+            modelPositions[i * 3 + 2] = mz;
 
             if (sourceNormals != null) {
                 final float length = (float) Math.sqrt(wnx * wnx + wny * wny + wnz * wnz);
@@ -423,34 +611,87 @@ public final class GltfScene {
                     wny /= length;
                     wnz /= length;
                 }
-                front[i] = color(primitive, material, i, wnx, wny, wnz);
+                front[i] = color(primitive, material, i, wnx, wny, wnz, mx, my, mz);
                 if (material.doubleSided) {
-                    back[i] = color(primitive, material, i, -wnx, -wny, -wnz);
+                    back[i] = color(primitive, material, i, -wnx, -wny, -wnz, mx, my, mz);
                 }
             }
         }
     }
 
     // 頂点の色を計算する。n は面の外側を向いた法線 (モデルの座標)
-    private int color(GltfModel.Primitive primitive, GltfModel.Material material, int vertex, float nx, float ny, float nz) {
-        float r = material.color[0], g = material.color[1], b = material.color[2], a = material.color[3];
+    private int color(GltfModel.Primitive primitive, GltfModel.Material material, int vertex,
+                      float nx, float ny, float nz, float px, float py, float pz) {
+        final int mat = primitive.material;
+        float r = matColors[mat * 4];
+        float g = matColors[mat * 4 + 1];
+        float b = matColors[mat * 4 + 2];
+        float a = matColors[mat * 4 + 3];
+
         if (!material.unlit) {
-            final int m = primitive.material * 3;
-            GltfLight.shade(materialColor[m], materialColor[m + 1], materialColor[m + 2],
-                    material.metallic, material.roughness, nx, ny, nz, 1f, lit);
+            final GltfLight.Context ctx = lightContext;
+            ctx.f0r = material.f0[0];
+            ctx.f0g = material.f0[1];
+            ctx.f0b = material.f0[2];
+            ctx.clearcoat = material.clearcoat;
+            ctx.clearcoatRoughness = material.clearcoatRoughness;
+            ctx.cnx = nx; ctx.cny = ny; ctx.cnz = nz;
+            ctx.sheenR = material.sheen[0];
+            ctx.sheenG = material.sheen[1];
+            ctx.sheenB = material.sheen[2];
+            ctx.sheenRoughness = material.sheenRoughness;
+            ctx.iridescence = material.iridescence;
+            ctx.iridescenceIor = material.iridescenceIor;
+            ctx.iridescenceThickness = material.iridescenceThickness;
+            ctx.anisotropy = material.anisotropy;
+            if (primitive.tangents != null && vertex * 4 + 3 < primitive.tangents.length) {
+                float tx = primitive.tangents[vertex * 4];
+                float ty = primitive.tangents[vertex * 4 + 1];
+                float tz = primitive.tangents[vertex * 4 + 2];
+                float sign = primitive.tangents[vertex * 4 + 3];
+                float bx = (ny * tz - nz * ty) * sign;
+                float by = (nz * tx - nx * tz) * sign;
+                float bz = (nx * ty - ny * tx) * sign;
+                ctx.tx = tx; ctx.ty = ty; ctx.tz = tz;
+                ctx.bx = bx; ctx.by = by; ctx.bz = bz;
+            } else {
+                float ox = Math.abs(ny) > 0.99f ? 1f : 0f;
+                float oy = Math.abs(ny) > 0.99f ? 0f : 1f;
+                float oz = 0f;
+                float tx = oy * nz - oz * ny, ty = oz * nx - ox * nz, tz = ox * ny - oy * nx;
+                final float len = (float) Math.sqrt(tx * tx + ty * ty + tz * tz);
+                if (len > 0) {
+                    tx /= len; ty /= len; tz /= len;
+                }
+                ctx.tx = tx; ctx.ty = ty; ctx.tz = tz;
+                ctx.bx = ny * tz - nz * ty;
+                ctx.by = nz * tx - nx * tz;
+                ctx.bz = nx * ty - ny * tx;
+            }
+            ctx.diffuseTransR = material.diffuseTransmission[0];
+            ctx.diffuseTransG = material.diffuseTransmission[1];
+            ctx.diffuseTransB = material.diffuseTransmission[2];
+            ctx.px = px; ctx.py = py; ctx.pz = pz;
+
+            final float linR = GltfLight.toLinear(r);
+            final float linG = GltfLight.toLinear(g);
+            final float linB = GltfLight.toLinear(b);
+            GltfLight.shade(linR, linG, linB, matMetallic[mat], matRoughness[mat],
+                    nx, ny, nz, 1f, ctx, lit);
             r = GltfLight.toDisplay(lit[0]) / 255f;
             g = GltfLight.toDisplay(lit[1]) / 255f;
             b = GltfLight.toDisplay(lit[2]) / 255f;
         }
+
         if (primitive.colors != null) {
             r *= primitive.colors[vertex * 4];
             g *= primitive.colors[vertex * 4 + 1];
             b *= primitive.colors[vertex * 4 + 2];
             if (material.alphaMode != GltfModel.ALPHA_OPAQUE) a *= primitive.colors[vertex * 4 + 3];
         }
-        r += material.emissive[0];
-        g += material.emissive[1];
-        b += material.emissive[2];
+        r += matEmissive[mat * 3];
+        g += matEmissive[mat * 3 + 1];
+        b += matEmissive[mat * 3 + 2];
         return (channel(a) << 24) | (channel(r) << 16) | (channel(g) << 8) | channel(b);
     }
 
@@ -462,7 +703,30 @@ public final class GltfScene {
     private int write(GltfModel.Primitive primitive, GltfModel.Material material, boolean flip,
                       float[] vertices, int[] colors, int count) {
         final int[] indices = primitive.indices;
-        final float[] uv = primitive.cornerUv;
+        float[] uv = primitive.cornerUv;
+        final int mat = primitive.material;
+        final float offX = matTexOffset[mat * 2];
+        final float offY = matTexOffset[mat * 2 + 1];
+        final float scaX = matTexScale[mat * 2];
+        final float scaY = matTexScale[mat * 2 + 1];
+        final float rot = matTexRotation[mat];
+        final boolean transformUv = primitive.rawUv != null && (offX != 0 || offY != 0 || scaX != 1 || scaY != 1 || rot != 0);
+        if (transformUv) {
+            if (dynamicUv.length < indices.length * 2) {
+                dynamicUv = new float[indices.length * 2];
+            }
+            final float cos = (float) Math.cos(rot);
+            final float sin = (float) Math.sin(rot);
+            final float[] raw = primitive.rawUv;
+            for (int i = 0; i < indices.length; i++) {
+                final float u = raw[i * 2] * scaX;
+                final float v = raw[i * 2 + 1] * scaY;
+                dynamicUv[i * 2] = cos * u + sin * v + offX;
+                dynamicUv[i * 2 + 1] = -sin * u + cos * v + offY;
+            }
+            uv = dynamicUv;
+        }
+
         final boolean smooth = primitive.normals != null;
         final boolean doubleSided = material.doubleSided;
 
@@ -497,13 +761,13 @@ public final class GltfScene {
                     ny /= length;
                     nz /= length;
                 }
-                colorA = color(primitive, material, a, nx, ny, nz);
-                colorB = color(primitive, material, b, nx, ny, nz);
-                colorC = color(primitive, material, c, nx, ny, nz);
+                colorA = color(primitive, material, a, nx, ny, nz, modelPositions[a * 3], modelPositions[a * 3 + 1], modelPositions[a * 3 + 2]);
+                colorB = color(primitive, material, b, nx, ny, nz, modelPositions[b * 3], modelPositions[b * 3 + 1], modelPositions[b * 3 + 2]);
+                colorC = color(primitive, material, c, nx, ny, nz, modelPositions[c * 3], modelPositions[c * 3 + 1], modelPositions[c * 3 + 2]);
                 if (doubleSided) {
-                    backA = color(primitive, material, a, -nx, -ny, -nz);
-                    backB = color(primitive, material, b, -nx, -ny, -nz);
-                    backC = color(primitive, material, c, -nx, -ny, -nz);
+                    backA = color(primitive, material, a, -nx, -ny, -nz, modelPositions[a * 3], modelPositions[a * 3 + 1], modelPositions[a * 3 + 2]);
+                    backB = color(primitive, material, b, -nx, -ny, -nz, modelPositions[b * 3], modelPositions[b * 3 + 1], modelPositions[b * 3 + 2]);
+                    backC = color(primitive, material, c, -nx, -ny, -nz, modelPositions[c * 3], modelPositions[c * 3 + 1], modelPositions[c * 3 + 2]);
                 }
             }
 
