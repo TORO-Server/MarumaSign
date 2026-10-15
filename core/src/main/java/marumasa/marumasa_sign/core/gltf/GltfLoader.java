@@ -1,5 +1,6 @@
 package marumasa.marumasa_sign.core.gltf;
 
+import marumasa.marumasa_sign.core.texture.TextureDecoder;
 import marumasa.marumasa_sign.core.util.Json;
 
 import javax.imageio.ImageIO;
@@ -476,7 +477,8 @@ public final class GltfLoader {
                 data = new byte[length];
                 System.arraycopy(buffer, offset, data, 0, length);
             }
-            BufferedImage decoded = ImageIO.read(new ByteArrayInputStream(data));
+            final String mimeType = Json.string(json, "mimeType", null);
+            BufferedImage decoded = TextureDecoder.decode(data, mimeType);
             if (decoded == null) return null;
 
             int width = decoded.getWidth();
@@ -506,16 +508,47 @@ public final class GltfLoader {
     private Pixels textureImage(TexRef ref) {
         if (ref == null || ref.texture < 0 || ref.texture >= textureList.size()) return null;
         final Map<String, Object> texture = Json.object(textureList.get(ref.texture));
-        int source = Json.integer(texture, "source", -1);
-        if (source < 0) {
-            // 別の形式の画像だけが指定されている場合
-            final Map<String, Object> extensions = Json.object(texture, "extensions");
-            for (Object extension : extensions.values()) {
-                source = Json.integer(Json.object(extension), "source", -1);
-                if (source >= 0) break;
+        final Map<String, Object> extensions = Json.object(texture, "extensions");
+
+        // 優先度順に試行: KHR_texture_basisu -> EXT_texture_webp -> MSFT_texture_dds -> EXT_texture_avif -> 他の拡張 -> core source
+        final String[] preferredExtensions = {
+                "KHR_texture_basisu",
+                "EXT_texture_webp",
+                "MSFT_texture_dds",
+                "EXT_texture_avif"
+        };
+
+        for (String extName : preferredExtensions) {
+            if (extensions.containsKey(extName)) {
+                final int extSource = Json.integer(Json.object(extensions, extName), "source", -1);
+                if (extSource >= 0) {
+                    final Pixels pix = image(extSource);
+                    if (pix != null) return pix;
+                }
             }
         }
-        return image(source);
+
+        for (Map.Entry<String, Object> entry : extensions.entrySet()) {
+            boolean alreadyTried = false;
+            for (String extName : preferredExtensions) {
+                if (extName.equals(entry.getKey())) {
+                    alreadyTried = true;
+                    break;
+                }
+            }
+            if (alreadyTried) continue;
+            final int extSource = Json.integer(Json.object(entry.getValue()), "source", -1);
+            if (extSource >= 0) {
+                final Pixels pix = image(extSource);
+                if (pix != null) return pix;
+            }
+        }
+
+        final int coreSource = Json.integer(texture, "source", -1);
+        if (coreSource >= 0) {
+            return image(coreSource);
+        }
+        return null;
     }
 
     private TexRef texRef(Map<String, Object> parent, String name) {
