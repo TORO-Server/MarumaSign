@@ -19,6 +19,7 @@ public final class MediaTools {
     // 動画や音声として扱う拡張子 (FFmpeg がないときの判定に使う)
     private static final String[] MEDIA_EXTENSIONS = {
             ".mp4", ".m4v", ".mov", ".mkv", ".webm", ".avi", ".flv", ".wmv", ".ts", ".m2ts", ".mpg", ".mpeg", ".3gp", ".ogv",
+            ".mjpeg", ".mjpg",
             ".mp3", ".m4a", ".aac", ".wav", ".ogg", ".oga", ".opus", ".flac", ".wma",
             ".webp", ".avif", ".heic", ".tif", ".tiff",
     };
@@ -44,9 +45,11 @@ public final class MediaTools {
     public static BufferedImage thumbnail(String source) throws IOException {
         if (!Ffmpeg.isAvailable()) return null;
         final Process process = new ProcessBuilder(Arrays.asList(
-                Ffmpeg.ffmpeg().getPath(),
+                Ffmpeg.requireFfmpeg().getPath(),
                 "-hide_banner", "-loglevel", "error", "-nostdin",
                 "-protocol_whitelist", "file," + MediaPlayer.PROTOCOLS,
+                // ライブ配信が途中で止まっても、待ち続けない
+                "-rw_timeout", MediaPlayer.NETWORK_TIMEOUT,
                 "-i", source,
                 "-map", "0:v:0", "-frames:v", "1",
                 // 大きすぎる映像は縮小する
@@ -83,7 +86,7 @@ public final class MediaTools {
         if (!Ffmpeg.isAvailable()) return hasMediaExtension(file.getName());
         try {
             final Process process = new ProcessBuilder(Arrays.asList(
-                    Ffmpeg.ffprobe().getPath(), "-v", "error",
+                    Ffmpeg.requireFfprobe().getPath(), "-v", "error",
                     "-show_entries", "stream=codec_type", "-of", "default=noprint_wrappers=1",
                     file.getPath()
             )).redirectErrorStream(true).start();
