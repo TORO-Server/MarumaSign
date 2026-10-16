@@ -88,11 +88,27 @@ public final class SplatCheck {
             throw new AssertionError("Non-3DGS mesh PLY must be false");
         }
 
-        // SPZ: gzip 展開して "NGSP" を確認
+        // SPZ: v2/v3 (gzip) および v4 (平文 NGSP ヘッダ)
         final byte[] validSpz = createMinimalSpz(2, 1, 0);
         if (!SplatLoader.isSplat(validSpz, validSpz.length, null)) {
-            throw new AssertionError("Valid SPZ with null name should be true");
+            throw new AssertionError("Valid SPZ v2 with null name should be true");
         }
+        final byte[] validSpzV4 = createMinimalSpzV4(1, 0, 0, 0, false);
+        if (!SplatLoader.isSplat(validSpzV4, validSpzV4.length, null)) {
+            throw new AssertionError("Valid SPZ v4 with null name should be true");
+        }
+        if (!SplatLoader.isSplat(validSpzV4, 32, "scene.spz?v=4")) {
+            throw new AssertionError("Valid SPZ v4 head (32 bytes) should be true");
+        }
+        if (SplatLoader.isSplat(validSpzV4, 31, "scene.spz")) {
+            throw new AssertionError("SPZ v4 with <32 bytes must be false");
+        }
+        final byte[] badVerSpzV4 = validSpzV4.clone();
+        ByteBuffer.wrap(badVerSpzV4).order(ByteOrder.LITTLE_ENDIAN).putInt(4, 5);
+        if (SplatLoader.isSplat(badVerSpzV4, badVerSpzV4.length, "bad_ver.spz")) {
+            throw new AssertionError("SPZ v5 must be false");
+        }
+
         final ByteArrayOutputStream plainGzipOut = new ByteArrayOutputStream();
         try (GZIPOutputStream gz = new GZIPOutputStream(plainGzipOut)) {
             gz.write("not an spz file at all".getBytes(StandardCharsets.US_ASCII));
@@ -288,6 +304,63 @@ public final class SplatCheck {
         }
         expectIOException(bombSpzOut.toByteArray(), "bomb.spz", "SPZ gzip bomb");
 
+        // SPZ v4 の異常系 (切り詰め・不正ヘッダ・TOC 範囲外・サイズ不一致・ZSTD 破損・ZSTD 爆弾)
+        final byte[] validSpzV4 = createMinimalSpzV4(4, 1, 0, 0, false);
+        for (int len = 1; len < validSpzV4.length; len += 5) {
+            expectIOException(Arrays.copyOf(validSpzV4, len), "trunc_v4.spz", "truncated SPZ v4 len=" + len);
+        }
+
+        // 不正バージョン (v5)
+        final byte[] badVerSpzV4 = validSpzV4.clone();
+        ByteBuffer.wrap(badVerSpzV4).order(ByteOrder.LITTLE_ENDIAN).putInt(4, 5);
+        expectIOException(badVerSpzV4, "bad_ver_v4.spz", "SPZ v4 unsupported version 5");
+
+        // 不正な点数 (0 点)
+        final byte[] zeroPointsSpzV4 = validSpzV4.clone();
+        ByteBuffer.wrap(zeroPointsSpzV4).order(ByteOrder.LITTLE_ENDIAN).putInt(8, 0);
+        expectIOException(zeroPointsSpzV4, "zero_pts_v4.spz", "SPZ v4 zero points");
+
+        // 不正なストリーム数
+        final byte[] badStreamsSpzV4 = validSpzV4.clone();
+        badStreamsSpzV4[15] = (byte) 2;
+        expectIOException(badStreamsSpzV4, "bad_streams_v4.spz", "SPZ v4 unexpected stream count");
+
+        // TOC が範囲外 (巨大な tocByteOffset)
+        final byte[] badTocOffsetSpzV4 = validSpzV4.clone();
+        ByteBuffer.wrap(badTocOffsetSpzV4).order(ByteOrder.LITTLE_ENDIAN).putInt(16, 999999);
+        expectIOException(badTocOffsetSpzV4, "bad_toc_v4.spz", "SPZ v4 TOC out of range");
+
+        // TOC の uncompressedSize 不一致
+        final byte[] badUSizeSpzV4 = validSpzV4.clone();
+        final int tocOff = ByteBuffer.wrap(validSpzV4).order(ByteOrder.LITTLE_ENDIAN).getInt(16);
+        ByteBuffer.wrap(badUSizeSpzV4).order(ByteOrder.LITTLE_ENDIAN).putLong(tocOff + 8, 99999);
+        expectIOException(badUSizeSpzV4, "bad_usize_v4.spz", "SPZ v4 uncompressed size mismatch");
+
+        // ZSTD ストリーム破損
+        final byte[] corruptZstdSpzV4 = validSpzV4.clone();
+        final int dataStart = tocOff + (validSpzV4[15] & 0xFF) * 16;
+        corruptZstdSpzV4[dataStart + 2] = (byte) 0xFF; // ZSTD magic 破壊
+        expectIOException(corruptZstdSpzV4, "corrupt_zstd_v4.spz", "SPZ v4 corrupt ZSTD magic");
+
+        // ZSTD 爆弾 (小さいファイルなのに巨大な点数を詐称)
+        final byte[] bombSpzV4 = validSpzV4.clone();
+        ByteBuffer.wrap(bombSpzV4).order(ByteOrder.LITTLE_ENDIAN).putInt(8, 20_000_000);
+        expectIOException(bombSpzV4, "bomb_v4.spz", "SPZ v4 ZSTD bomb exceeding point limit");
+
+        // SPZ v4 の拡張付きファイルが正常に読めることの検査 (未知の拡張をスキップ)
+        final byte[] extSpzV4 = createMinimalSpzV4(4, 1, 0, 64, false);
+        final SplatCloud extCloud = SplatLoader.load(extSpzV4, "ext.spz");
+        if (extCloud.count != 4 || extCloud.shDegree != 1) {
+            throw new AssertionError("SPZ v4 with extensions failed to load correctly: count=" + extCloud.count);
+        }
+
+        // SPZ v4 の SH 次数 4 が来たら 3 次までを採用し 4 次を捨てることの検査
+        final byte[] deg4SpzV4 = createMinimalSpzV4(4, 4, 0, 0, false);
+        final SplatCloud deg4Cloud = SplatLoader.load(deg4SpzV4, "deg4.spz");
+        if (deg4Cloud.count != 4 || deg4Cloud.shDegree != 3) {
+            throw new AssertionError("SPZ v4 SH degree 4 failed: expected count=4, shDegree=3, got " + deg4Cloud.shDegree);
+        }
+
         // SOG の異常系 (meta.json 欠如・パストラバーサル・不正 JSON・WebP 破損)
         expectIOException(createZipWithEntry("other.txt", new byte[]{1, 2}), "no_meta.sog", "SOG without meta.json");
         expectIOException(createZipWithEntry("../meta.json", "{}".getBytes(StandardCharsets.UTF_8)), "traversal.sog", "SOG path traversal");
@@ -348,6 +421,7 @@ public final class SplatCheck {
         final String[] samplePaths = new String[]{
                 "repos/spz/samples/hornedlizard.spz",
                 "repos/spz/samples/racoonfamily.spz",
+                "hornedlizard_v4.spz",
                 "nike.splat",
                 "plush.splat",
                 "train.splat",
@@ -358,6 +432,7 @@ public final class SplatCheck {
                 "lizard_10k.sog",
                 "lizard_10k_v2.spz",
                 "lizard_10k_v3.spz",
+                "lizard_10k_v4.spz",
                 "lizard_10k.splat",
                 "lizard_10k_m0.ksplat",
                 "lizard_10k_m1.ksplat",
@@ -388,6 +463,7 @@ public final class SplatCheck {
                 "lizard_10k.compressed.ply",
                 "lizard_10k.sog",
                 "lizard_10k_v3.spz",
+                "lizard_10k_v4.spz",
                 "lizard_10k_m1.ksplat"
         };
         for (String rel : truncTargets) {
@@ -468,6 +544,38 @@ public final class SplatCheck {
         compareRoundtrip("SPZ v3", loadFile(dataDir, "lizard_10k_v3.spz"),
                 rtSpzV3, "lizard_10k_v3.spz vs rt_spz_v3.ply",
                 1e-5f, 1e-5f, 1e-5f, 1e-5f, 1e-5f, 1e-5f);
+
+        // SPZ v4: SH 次数 0 / 1 / 2 / 3
+        final SplatCloud rtSpzV4Deg0 = loadFile(dataDir, "rt_spz_v4_deg0.ply");
+        SplatLoader.flipYZ(rtSpzV4Deg0.count, rtSpzV4Deg0.positions, rtSpzV4Deg0.rotations, rtSpzV4Deg0.shDegree, rtSpzV4Deg0.shCoefficients);
+        compareRoundtrip("SPZ v4 (deg 0)", loadFile(dataDir, "lizard_10k_deg0_v4.spz"),
+                rtSpzV4Deg0, "lizard_10k_deg0_v4.spz vs rt_spz_v4_deg0.ply",
+                1e-5f, 1e-5f, 1e-5f, 1e-5f, 1e-5f, 1e-5f);
+
+        final SplatCloud rtSpzV4Deg1 = loadFile(dataDir, "rt_spz_v4_deg1.ply");
+        SplatLoader.flipYZ(rtSpzV4Deg1.count, rtSpzV4Deg1.positions, rtSpzV4Deg1.rotations, rtSpzV4Deg1.shDegree, rtSpzV4Deg1.shCoefficients);
+        compareRoundtrip("SPZ v4 (deg 1)", loadFile(dataDir, "lizard_10k_deg1_v4.spz"),
+                rtSpzV4Deg1, "lizard_10k_deg1_v4.spz vs rt_spz_v4_deg1.ply",
+                1e-5f, 1e-5f, 1e-5f, 1e-5f, 1e-5f, 1e-5f);
+
+        final SplatCloud rtSpzV4Deg2 = loadFile(dataDir, "rt_spz_v4_deg2.ply");
+        SplatLoader.flipYZ(rtSpzV4Deg2.count, rtSpzV4Deg2.positions, rtSpzV4Deg2.rotations, rtSpzV4Deg2.shDegree, rtSpzV4Deg2.shCoefficients);
+        compareRoundtrip("SPZ v4 (deg 2)", loadFile(dataDir, "lizard_10k_deg2_v4.spz"),
+                rtSpzV4Deg2, "lizard_10k_deg2_v4.spz vs rt_spz_v4_deg2.ply",
+                1e-5f, 1e-5f, 1e-5f, 1e-5f, 1e-5f, 1e-5f);
+
+        final SplatCloud rtSpzV4Deg3 = loadFile(dataDir, "rt_spz_v4.ply");
+        SplatLoader.flipYZ(rtSpzV4Deg3.count, rtSpzV4Deg3.positions, rtSpzV4Deg3.rotations, rtSpzV4Deg3.shDegree, rtSpzV4Deg3.shCoefficients);
+        compareRoundtrip("SPZ v4 (deg 3)", loadFile(dataDir, "lizard_10k_v4.spz"),
+                rtSpzV4Deg3, "lizard_10k_v4.spz vs rt_spz_v4.ply",
+                1e-5f, 1e-5f, 1e-5f, 1e-5f, 1e-5f, 1e-5f);
+
+        // 10 万個超の実データ (hornedlizard_v4.spz: 786,233 点 -> MAX_SPLATS=150,000 点選択)
+        final SplatCloud rtHorned = loadFile(dataDir, "rt_hornedlizard_v4.ply");
+        SplatLoader.flipYZ(rtHorned.count, rtHorned.positions, rtHorned.rotations, rtHorned.shDegree, rtHorned.shCoefficients);
+        compareRoundtrip("SPZ v4 (786k)", loadFile(dataDir, "hornedlizard_v4.spz"),
+                rtHorned, "hornedlizard_v4.spz vs rt_hornedlizard_v4.ply",
+                1e-4f, 1e-4f, 1e-4f, 1e-4f, 1e-4f, 1e-4f);
         System.out.println();
     }
 
@@ -919,5 +1027,103 @@ public final class SplatCheck {
             zos.closeEntry();
         }
         return out.toByteArray();
+    }
+
+    private static byte[] wrapInZstdRawBlock(byte[] raw) {
+        final int size = raw.length;
+        final byte[] frame = new byte[12 + size];
+        // Zstandard Magic: 0xFD2FB528 LE
+        frame[0] = (byte) 0x28;
+        frame[1] = (byte) 0xB5;
+        frame[2] = (byte) 0x2F;
+        frame[3] = (byte) 0xFD;
+        // Frame_Header_Descriptor: Single_Segment=1, fcsFlag=2 (4 bytes FCS) -> 0xA0
+        frame[4] = (byte) 0xA0;
+        // Frame_Content_Size: 4 bytes LE
+        frame[5] = (byte) (size & 0xFF);
+        frame[6] = (byte) ((size >> 8) & 0xFF);
+        frame[7] = (byte) ((size >> 16) & 0xFF);
+        frame[8] = (byte) ((size >> 24) & 0xFF);
+        // Block Header: 3 bytes LE (last_block=1, type=0 (Raw_Block), size=size)
+        final int bh = (size << 3) | 1;
+        frame[9] = (byte) (bh & 0xFF);
+        frame[10] = (byte) ((bh >> 8) & 0xFF);
+        frame[11] = (byte) ((bh >> 16) & 0xFF);
+        System.arraycopy(raw, 0, frame, 12, size);
+        return frame;
+    }
+
+    private static byte[] createMinimalSpzV4(int numPoints, int shDegree, int fractionalBits, int extLength, boolean antialiased) throws IOException {
+        final int numStreams = shDegree == 0 ? 5 : 6;
+        final int fileShDim = SpzReader.shDimForDegree(shDegree);
+
+        final byte[] posRaw = new byte[numPoints * 9];
+        final byte[] alphaRaw = new byte[numPoints];
+        Arrays.fill(alphaRaw, (byte) 200);
+        final byte[] colorRaw = new byte[numPoints * 3];
+        Arrays.fill(colorRaw, (byte) 128);
+        final byte[] scaleRaw = new byte[numPoints * 3];
+        Arrays.fill(scaleRaw, (byte) 160);
+        final byte[] rotRaw = new byte[numPoints * 4];
+        final ByteBuffer rotBb = ByteBuffer.wrap(rotRaw).order(ByteOrder.LITTLE_ENDIAN);
+        for (int i = 0; i < numPoints; i++) {
+            // smallest-three: largest=3, magnitude=0 -> packed = 3 << 30
+            rotBb.putInt(i * 4, 3 << 30);
+        }
+        final byte[] shRaw = shDegree > 0 ? new byte[numPoints * fileShDim * 3] : null;
+        if (shRaw != null) {
+            Arrays.fill(shRaw, (byte) 128);
+        }
+
+        final byte[][] rawStreams = new byte[numStreams][];
+        rawStreams[0] = posRaw;
+        rawStreams[1] = alphaRaw;
+        rawStreams[2] = colorRaw;
+        rawStreams[3] = scaleRaw;
+        rawStreams[4] = rotRaw;
+        if (shDegree > 0) rawStreams[5] = shRaw;
+
+        final byte[][] compStreams = new byte[numStreams][];
+        int totalCompSize = 0;
+        for (int i = 0; i < numStreams; i++) {
+            compStreams[i] = wrapInZstdRawBlock(rawStreams[i]);
+            totalCompSize += compStreams[i].length;
+        }
+
+        final int tocByteOffset = 32 + extLength;
+        final int totalSize = tocByteOffset + numStreams * 16 + totalCompSize;
+        final byte[] spz = new byte[totalSize];
+        final ByteBuffer bb = ByteBuffer.wrap(spz).order(ByteOrder.LITTLE_ENDIAN);
+
+        // 32-byte header
+        bb.putInt(0, 0x5053474E); // NGSP
+        bb.putInt(4, 4);          // version 4
+        bb.putInt(8, numPoints);
+        spz[12] = (byte) shDegree;
+        spz[13] = (byte) fractionalBits;
+        spz[14] = (byte) ((antialiased ? 1 : 0) | (extLength > 0 ? 2 : 0));
+        spz[15] = (byte) numStreams;
+        bb.putInt(16, tocByteOffset);
+
+        // Extensions (if any)
+        if (extLength > 0) {
+            Arrays.fill(spz, 32, 32 + extLength, (byte) 0x55);
+        }
+
+        // TOC
+        for (int i = 0; i < numStreams; i++) {
+            final int entryOff = tocByteOffset + i * 16;
+            bb.putLong(entryOff, compStreams[i].length);
+            bb.putLong(entryOff + 8, rawStreams[i].length);
+        }
+
+        // Streams
+        int streamOff = tocByteOffset + numStreams * 16;
+        for (int i = 0; i < numStreams; i++) {
+            System.arraycopy(compStreams[i], 0, spz, streamOff, compStreams[i].length);
+            streamOff += compStreams[i].length;
+        }
+
+        return spz;
     }
 }
