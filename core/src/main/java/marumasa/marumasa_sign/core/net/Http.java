@@ -12,6 +12,7 @@ import java.net.URISyntaxException;
 import java.net.URL;
 import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
+import java.util.Locale;
 
 /**
  * 画像のダウンロード・アップロードと URL の短縮。
@@ -102,7 +103,7 @@ public final class Http {
 
     /**
      * URL の内容をダウンロードする。
-     * check が先頭のバイト列を受け付けなかった場合は、残りを読まずに null を返す。
+     * check が先頭のバイト列を受け付けなかった場合や、画像を送り続ける配信だった場合は、残りを読まずに null を返す。
      */
     public static byte[] download(String url, HeadCheck check) throws IOException {
         return download(url, check, MAX_SIZE);
@@ -118,6 +119,11 @@ public final class Http {
 
             final int status = connection.getResponseCode();
             if (status / 100 != 2) throw new IOException("HTTP " + status);
+            // MJPEG の配信など、画像を送り続ける形式はファイルではないので読まない
+            final String type = connection.getContentType();
+            if (check != null && type != null && type.toLowerCase(Locale.ROOT).startsWith("multipart/x-mixed-replace")) {
+                return null;
+            }
             final InputStream input = connection.getInputStream();
             try {
                 byte[] head = new byte[0];

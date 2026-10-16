@@ -64,6 +64,17 @@ WebP や AVIF、TIFF など、上の「画像」にない形式の画像も、FF
 
 FFmpeg が見つからない場合は、動画や音声の看板を見たときにチャットで知らせます。
 
+#### ライブ配信
+
+次の形式のライブ配信の URL も、動画と同じように表示できます。URL が長くて看板に入りきらない場合は、自動で短縮します。
+
+- HLS (`.m3u8`)
+- MPEG-DASH (`.mpd`)
+- HTTP-FLV
+- MJPEG (ネットワークカメラなどの `multipart/x-mixed-replace` の配信)
+
+配信が途切れた場合は、少し待ってから自動でつなぎ直します。
+
 #### 3D モデル
 
 glTF 2.0 の `.glb` と `.gltf` を表示できます。
@@ -75,11 +86,15 @@ glTF 2.0 の `.glb` と `.gltf` を表示できます。
 対応している内容:
 
 - ノードの階層、メッシュ (三角形、帯、扇)、疎なアクセサ、整数に量子化された頂点
+- 圧縮されたメッシュ: Draco (`KHR_draco_mesh_compression`)、meshopt (`EXT_meshopt_compression` / `KHR_meshopt_compression`)、`KHR_mesh_quantization`、インスタンス (`EXT_mesh_gpu_instancing`)
 - アニメーション (移動・回転・拡大・モーフィングの重み、補間は LINEAR / STEP / CUBICSPLINE)。最初のアニメーションを繰り返し再生します
+- `KHR_animation_pointer` による、材質 (色・発光・金属らしさ・粗さ・テクスチャの貼り方) と光源 (色・強さ) のアニメーション
 - スキニング (1 頂点につきボーン 8 本まで) とモーフターゲット
 - 材質: 色とテクスチャ、頂点の色、金属らしさと粗さ、法線マップ、遮蔽 (オクルージョン)、発光、透明度の扱い (OPAQUE / MASK / BLEND)、両面表示
-- テクスチャ: PNG / JPEG、複数のテクスチャ座標、繰り返しの指定 (繰り返し・折り返し・端で止める)
-- 拡張: `KHR_materials_unlit` `KHR_materials_emissive_strength` `KHR_texture_transform` `KHR_mesh_quantization` `KHR_materials_pbrSpecularGlossiness`
+- 材質の拡張: `KHR_materials_unlit` `KHR_materials_emissive_strength` `KHR_materials_pbrSpecularGlossiness` `KHR_materials_clearcoat` `KHR_materials_sheen` `KHR_materials_specular` `KHR_materials_ior` `KHR_materials_transmission` `KHR_materials_volume` `KHR_materials_iridescence` `KHR_materials_anisotropy` `KHR_materials_diffuse_transmission` `KHR_materials_dispersion` `KHR_materials_variants` (既定の材質を使う)
+- 光源: `KHR_lights_punctual` (平行光・点光源・スポットライト)、`EXT_lights_image_based` (環境光として)
+- テクスチャ: PNG / JPEG、KTX2 (`KHR_texture_basisu`、ETC1S / UASTC)、WebP (`EXT_texture_webp`)、DDS (`MSFT_texture_dds`、BC1 - BC7)、AVIF (`EXT_texture_avif`、FFmpeg が必要)。複数のテクスチャ座標、繰り返しの指定 (繰り返し・折り返し・端で止める)、`KHR_texture_transform`
+- そのほか: `KHR_xmp_json_ld` (メタデータは読み飛ばします)
 
 陰影について:
 
@@ -91,10 +106,9 @@ glTF 2.0 の `.glb` と `.gltf` を表示できます。
 制限:
 
 - 三角形は 15 万枚まで、ファイルは外部ファイルを含めて 64 MB まで
-- Draco と meshopt で圧縮されたモデルは読み込めません
-- KTX2 (Basis) と WebP のテクスチャは読み込めず、その材質は色だけで表示されます
-- 透過 (transmission) やクリアコートなど、上に挙げていない拡張の材質は、基本の材質として表示されます
-- 光源とカメラの定義は使いません
+- 透過 (transmission) は屈折を計算せず、半透明として表示します。分散 (dispersion) は見た目に反映しません
+- カメラの定義は使いません
+- 上に挙げていない拡張が必須 (`extensionsRequired`) のモデルは読み込めません
 
 ### 看板のフォーマット
 
@@ -123,6 +137,7 @@ OptiFine、Iris、Oculus などの影 Mod とシェーダーパックを使っ�
 - Minecraft 1.7.10 のサーバーは看板 1 行につき 15 文字までしか受け付けないため、特に URL が短縮されやすくなります。
 - スペクテイターモードでは、画像と一緒に看板そのものも表示されます。
 - 画像は 10 MB まで、アップロードできる動画・音声は 200 MB までです。
+- 画面とチャットのメッセージは、Minecraft で選べるすべての言語 (115 言語) に翻訳してあります。英語と日本語以外は、ネイティブの話者による確認をしていません。
 
 ## 開発者向け
 
@@ -158,6 +173,7 @@ python tools/verify/matrix.py
 バニラのサーバーを起動し、各ローダーを入れた実際のクライアントで接続して、
 画像・3D モデル・動画を看板に書き込んで表示するまでと、看板の文字を持たせた看板アイテムの見た目を自動で確認します。
 [portablemc](https://github.com/mindstorm38/portablemc)、Pillow、FFmpeg が必要です。
+`tools/verify/verify.py --image` には、ファイルのほかにライブ配信などの URL も `|` で区切って指定できます。
 
 ```bash
 # 影 Mod とシェーダーパックを入れた状態で確認する
@@ -182,6 +198,19 @@ python tools/check_linkage.py
 # 3D モデルを PNG に描く (出力先, アニメーションの時刻, モデルのファイル...)
 ./gradlew :core:gltfCheck -PgltfArgs="build/gltf 0.5 model.glb"
 ```
+
+### 取り込んでいるソースコード
+
+次のライブラリのコードを、Java に書き直して (またはそのまま) `core` に取り込んでいます。
+ライセンスの全文は jar の `marumasa_sign/licenses` にあります。
+
+| ライブラリ | ライセンス | 使っているところ |
+| --- | --- | --- |
+| [openize-drako-java](https://github.com/openize-com/openize-drako-java) | MIT | Draco の展開 (`core/gltf/draco`) |
+| [meshoptimizer](https://github.com/zeux/meshoptimizer) | MIT | meshopt の展開 (`core/gltf/meshopt`) |
+| [TwelveMonkeys ImageIO](https://github.com/haraldk/TwelveMonkeys) | BSD 3-Clause | WebP の展開 (`core/texture/webp`) |
+| [bcdec](https://github.com/iOrange/bcdec) | MIT | BC6H と BC7 の展開 (`core/texture/Bptc.java`) |
+| [Basis Universal](https://github.com/BinomialLLC/basis_universal) | Apache 2.0 | KTX2 の ETC1S と UASTC の展開 (`core/texture/BasisEtc1s.java`, `Uastc.java`) |
 
 ## 貢献者
 

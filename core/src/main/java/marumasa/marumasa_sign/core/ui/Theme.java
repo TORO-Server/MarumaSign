@@ -6,9 +6,18 @@ import java.awt.Font;
 import java.awt.FontMetrics;
 import java.awt.GradientPaint;
 import java.awt.Graphics2D;
+import java.awt.GraphicsEnvironment;
 import java.awt.LinearGradientPaint;
 import java.awt.Shape;
+import java.awt.font.TextAttribute;
+import java.awt.font.TextLayout;
 import java.awt.geom.Path2D;
+import java.text.AttributedString;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
 
 /**
  * 画面の見た目 (クラシックなデスクトップ風) をまとめたクラス。
@@ -51,17 +60,83 @@ public final class Theme {
     private Theme() {
     }
 
-    // 文字列をすべて表示できるフォントを選ぶ (日本語などは代替フォントになる)
+    // 代替フォントでも表示できない文字 (タミル文字など) のために、インストールされているフォントから探して選んだフォント。
+    // キーは「文字の種類,スタイル,大きさ」。見つからなかった種類は代替フォントのままにする
+    private static final Map<String, Font> FONT_BY_SCRIPT = new HashMap<String, Font>();
+    // 先に試すフォント。多くの文字を含み、どの OS にもどれかがあることが多い
+    private static final String[] PREFERRED_FAMILIES = {
+            "Segoe UI", "Nirmala UI", "Segoe UI Historic", "Segoe UI Symbol", "Gadugi", "Ebrima",
+            "Noto Sans", "Arial Unicode MS", "Lucida Grande", "DejaVu Sans"
+    };
+    private static String[] installedFamilies;
+
+    // 文字列をすべて表示できるフォントを選ぶ (日本語などは代替フォントになる)。
+    // 1 つのフォントでは表示できない文字列 (上下逆さの英語の一部の文字など) は、最初に表示できなかった文字に合わせる
     public static Font font(String text) {
-        return text == null || FONT.canDisplayUpTo(text) < 0 ? FONT : FONT_FALLBACK;
+        if (text == null || FONT.canDisplayUpTo(text) < 0) return FONT;
+        final int missing = FONT_FALLBACK.canDisplayUpTo(text);
+        return missing < 0 ? FONT_FALLBACK : scriptFont(text.codePointAt(missing), FONT_FALLBACK);
     }
 
     private static Font titleFont(String text) {
-        return TITLE_FONT.canDisplayUpTo(text) < 0 ? TITLE_FONT : TITLE_FONT_FALLBACK;
+        if (TITLE_FONT.canDisplayUpTo(text) < 0) return TITLE_FONT;
+        final int missing = TITLE_FONT_FALLBACK.canDisplayUpTo(text);
+        return missing < 0 ? TITLE_FONT_FALLBACK : scriptFont(text.codePointAt(missing), TITLE_FONT_FALLBACK);
+    }
+
+    // 1 つのフォントで表示できるかどうか。できなければ、文字ごとにフォントを変えて描く
+    private static boolean singleFont(String text) {
+        return FONT.canDisplayUpTo(text) < 0 || FONT_FALLBACK.canDisplayUpTo(text) < 0;
+    }
+
+    // 文字ごとに、表示できるフォントを割り当てた文字列
+    private static AttributedString runs(String text) {
+        final AttributedString result = new AttributedString(text);
+        for (int i = 0; i < text.length(); ) {
+            final int codePoint = text.codePointAt(i);
+            final int next = i + Character.charCount(codePoint);
+            final Font font = FONT.canDisplay(codePoint) ? FONT
+                    : FONT_FALLBACK.canDisplay(codePoint) ? FONT_FALLBACK : scriptFont(codePoint, FONT_FALLBACK);
+            result.addAttribute(TextAttribute.FONT, font, i, next);
+            i = next;
+        }
+        return result;
+    }
+
+    // 代替フォントでも表示できない文字の種類のために、その種類の文字を表示できるフォントを探す
+    private static synchronized Font scriptFont(int codePoint, Font dialog) {
+        final Character.UnicodeScript script = Character.UnicodeScript.of(codePoint);
+        final String key = script + "," + dialog.getStyle() + "," + dialog.getSize();
+        if (FONT_BY_SCRIPT.containsKey(key)) {
+            final Font found = FONT_BY_SCRIPT.get(key);
+            return found != null ? found : dialog;
+        }
+        final Font found = findFont(codePoint, dialog);
+        FONT_BY_SCRIPT.put(key, found);
+        return found != null ? found : dialog;
+    }
+
+    private static Font findFont(int codePoint, Font dialog) {
+        if (installedFamilies == null) {
+            try {
+                installedFamilies = GraphicsEnvironment.getLocalGraphicsEnvironment().getAvailableFontFamilyNames();
+            } catch (RuntimeException e) {
+                installedFamilies = new String[0];
+            }
+        }
+        final List<String> candidates = new ArrayList<String>(Arrays.asList(PREFERRED_FAMILIES));
+        candidates.retainAll(Arrays.asList(installedFamilies));
+        candidates.addAll(Arrays.asList(installedFamilies));
+        for (String family : candidates) {
+            final Font font = new Font(family, dialog.getStyle(), dialog.getSize());
+            if (font.canDisplay(codePoint)) return font;
+        }
+        return null;
     }
 
     public static int textWidth(Graphics2D g, String text) {
-        return g.getFontMetrics(font(text)).stringWidth(text);
+        if (text == null || text.isEmpty() || singleFont(text)) return g.getFontMetrics(font(text)).stringWidth(text);
+        return (int) Math.ceil(new TextLayout(runs(text).getIterator(), g.getFontRenderContext()).getAdvance());
     }
 
     // 描画先がない場面 (クリック位置の計算など) で文字列の幅を測るためのもの
@@ -79,10 +154,17 @@ public final class Theme {
     // 文字列を縦方向の中央に描く
     public static void drawText(Graphics2D g, String text, int x, int y, int height, Color color) {
         if (text == null || text.isEmpty()) return;
+        g.setColor(color);
+        if (!singleFont(text)) {
+            // 行の高さは代替フォントに合わせる
+            final FontMetrics metrics = g.getFontMetrics(FONT_FALLBACK);
+            g.setFont(FONT_FALLBACK);
+            g.drawString(runs(text).getIterator(), x, y + (height - metrics.getHeight()) / 2 + metrics.getAscent());
+            return;
+        }
         final Font font = font(text);
         final FontMetrics metrics = g.getFontMetrics(font);
         g.setFont(font);
-        g.setColor(color);
         g.drawString(text, x, y + (height - metrics.getHeight()) / 2 + metrics.getAscent());
     }
 
