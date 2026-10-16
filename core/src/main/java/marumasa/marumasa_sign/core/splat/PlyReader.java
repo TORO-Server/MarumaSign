@@ -303,7 +303,8 @@ final class PlyReader {
         final int stride = vertex.stride;
         final long baseOffset = vertex.byteOffset;
 
-        // 1 パス目: 値の妥当性を確かめながら importance だけを計算する
+        // 1 パス目: 値の妥当性を確かめながら位置と importance を計算する
+        final float[] rawPositions = new float[total * 3];
         float[] importance = new float[total];
         for (int i = 0; i < total; i++) {
             final int row = (int) (baseOffset + (long) i * stride);
@@ -327,6 +328,9 @@ final class PlyReader {
                     || !Float.isFinite(r0) || !Float.isFinite(r1) || !Float.isFinite(r2) || !Float.isFinite(r3)) {
                 throw new IOException("Non-finite float in PLY vertex " + i);
             }
+            rawPositions[i * 3] = x;
+            rawPositions[i * 3 + 1] = y;
+            rawPositions[i * 3 + 2] = z;
             final float opacity = sigmoid(rawOp);
             final float sx = (float) Math.exp(rawS0);
             final float sy = (float) Math.exp(rawS1);
@@ -337,7 +341,7 @@ final class PlyReader {
             importance[i] = SplatLoader.importance(opacity, sx, sy, sz);
         }
 
-        final int[] selected = SplatLoader.selectTop(importance, total, SplatLoader.MAX_SPLATS);
+        final int[] selected = SplatLoader.select(importance, rawPositions, total, SplatLoader.MAX_SPLATS);
         importance = null;
         final int count = selected.length;
 
@@ -353,9 +357,9 @@ final class PlyReader {
             final int i = selected[n];
             final int row = (int) (baseOffset + (long) i * stride);
 
-            positions[n * 3] = readFloat(buf, row, px);
-            positions[n * 3 + 1] = readFloat(buf, row, py);
-            positions[n * 3 + 2] = readFloat(buf, row, pz);
+            positions[n * 3] = rawPositions[i * 3];
+            positions[n * 3 + 1] = rawPositions[i * 3 + 1];
+            positions[n * 3 + 2] = rawPositions[i * 3 + 2];
 
             colors[n * 3] = 0.5f + SplatCloud.SH_C0 * readFloat(buf, row, fdc0);
             colors[n * 3 + 1] = 0.5f + SplatCloud.SH_C0 * readFloat(buf, row, fdc1);
@@ -427,6 +431,7 @@ final class PlyReader {
         final int numProps = vertex.properties.size();
         final float[] rowValues = new float[numProps];
         final int[] rowOffsets = new int[total];
+        final float[] rawPositions = new float[total * 3];
         float[] importance = new float[total];
         final int[] nextCursor = new int[]{cursor};
 
@@ -437,6 +442,9 @@ final class PlyReader {
                 if (!Float.isFinite(v)) throw new IOException("Non-finite value in ASCII PLY");
                 rowValues[p] = v;
             }
+            rawPositions[i * 3] = rowValues[px];
+            rawPositions[i * 3 + 1] = rowValues[py];
+            rawPositions[i * 3 + 2] = rowValues[pz];
             final float opacity = sigmoid(rowValues[popacity]);
             final float sx = (float) Math.exp(rowValues[ps0]);
             final float sy = (float) Math.exp(rowValues[ps1]);
@@ -447,7 +455,7 @@ final class PlyReader {
             importance[i] = SplatLoader.importance(opacity, sx, sy, sz);
         }
 
-        final int[] selected = SplatLoader.selectTop(importance, total, SplatLoader.MAX_SPLATS);
+        final int[] selected = SplatLoader.select(importance, rawPositions, total, SplatLoader.MAX_SPLATS);
         importance = null;
         final int count = selected.length;
 
@@ -459,13 +467,14 @@ final class PlyReader {
         final float[] sh = shDegree > 0 ? new float[count * rest * 3] : new float[0];
 
         for (int n = 0; n < count; n++) {
-            nextCursor[0] = rowOffsets[selected[n]];
+            final int idx = selected[n];
+            nextCursor[0] = rowOffsets[idx];
             for (int p = 0; p < numProps; p++) {
                 rowValues[p] = readAsciiFloat(content, nextCursor);
             }
-            positions[n * 3] = rowValues[px];
-            positions[n * 3 + 1] = rowValues[py];
-            positions[n * 3 + 2] = rowValues[pz];
+            positions[n * 3] = rawPositions[idx * 3];
+            positions[n * 3 + 1] = rawPositions[idx * 3 + 1];
+            positions[n * 3 + 2] = rawPositions[idx * 3 + 2];
 
             colors[n * 3] = 0.5f + SplatCloud.SH_C0 * rowValues[fdc0];
             colors[n * 3 + 1] = 0.5f + SplatCloud.SH_C0 * rowValues[fdc1];
@@ -572,12 +581,18 @@ final class PlyReader {
             }
         }
 
-        // 1 パス目: importance の計算
+        // 1 パス目: 位置と importance の計算
+        final float[] rawPositions = new float[total * 3];
         float[] importance = new float[total];
         for (int i = 0; i < total; i++) {
             final int ci = i >>> 8;
             final int cRow = (int) (chunk.byteOffset + (long) ci * chunk.stride);
             final int vRow = (int) (vertex.byteOffset + (long) i * vertex.stride);
+
+            final int pp = readIntBits(buf, vRow, pPos);
+            rawPositions[i * 3] = lerp(readFloat(buf, cRow, cMinX), readFloat(buf, cRow, cMaxX), unpackUnorm(pp >>> 21, 11));
+            rawPositions[i * 3 + 1] = lerp(readFloat(buf, cRow, cMinY), readFloat(buf, cRow, cMaxY), unpackUnorm(pp >>> 11, 10));
+            rawPositions[i * 3 + 2] = lerp(readFloat(buf, cRow, cMinZ), readFloat(buf, cRow, cMaxZ), unpackUnorm(pp, 11));
 
             final int ps = readIntBits(buf, vRow, pScale);
             final int pc = readIntBits(buf, vRow, pColor);
@@ -592,7 +607,7 @@ final class PlyReader {
             importance[i] = SplatLoader.importance(opacity, sx, sy, sz);
         }
 
-        final int[] selected = SplatLoader.selectTop(importance, total, SplatLoader.MAX_SPLATS);
+        final int[] selected = SplatLoader.select(importance, rawPositions, total, SplatLoader.MAX_SPLATS);
         importance = null;
         final int count = selected.length;
 
@@ -610,14 +625,13 @@ final class PlyReader {
             final int cRow = (int) (chunk.byteOffset + (long) ci * chunk.stride);
             final int vRow = (int) (vertex.byteOffset + (long) i * vertex.stride);
 
-            final int pp = readIntBits(buf, vRow, pPos);
             final int pr = readIntBits(buf, vRow, pRot);
             final int ps = readIntBits(buf, vRow, pScale);
             final int pc = readIntBits(buf, vRow, pColor);
 
-            positions[n * 3] = lerp(readFloat(buf, cRow, cMinX), readFloat(buf, cRow, cMaxX), unpackUnorm(pp >>> 21, 11));
-            positions[n * 3 + 1] = lerp(readFloat(buf, cRow, cMinY), readFloat(buf, cRow, cMaxY), unpackUnorm(pp >>> 11, 10));
-            positions[n * 3 + 2] = lerp(readFloat(buf, cRow, cMinZ), readFloat(buf, cRow, cMaxZ), unpackUnorm(pp, 11));
+            positions[n * 3] = rawPositions[i * 3];
+            positions[n * 3 + 1] = rawPositions[i * 3 + 1];
+            positions[n * 3 + 2] = rawPositions[i * 3 + 2];
 
             scales[n * 3] = (float) Math.exp(lerp(readFloat(buf, cRow, cMinSx), readFloat(buf, cRow, cMaxSx), unpackUnorm(ps >>> 21, 11)));
             scales[n * 3 + 1] = (float) Math.exp(lerp(readFloat(buf, cRow, cMinSy), readFloat(buf, cRow, cMaxSy), unpackUnorm(ps >>> 11, 10)));

@@ -71,6 +71,14 @@ tasks.register('splatCheck', JavaExec) {
     args = providers.gradleProperty('splatArgs').getOrElse('').tokenize(' ')
 }
 
+// ガウシアンスプラッティングの見た目改善の比較画像を生成する
+tasks.register('compareCrop', JavaExec) {
+    classpath = sourceSets.test.runtimeClasspath
+    mainClass = 'marumasa.marumasa_sign.core.splat.CompareCrop'
+    javaLauncher = javaToolchains.launcherFor(java.toolchain)
+    maxHeapSize = '2g'
+}
+
 tasks.withType(JavaCompile).configureEach {
     // Minecraft に依存しないので JDK 8 の API だけに制限する
     options.release = 8

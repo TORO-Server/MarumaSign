@@ -248,8 +248,11 @@ public final class SplatScene {
         private final SplatScene scene;
         private final float[] placement;
         private final float centerX, centerY, centerZ;
-        private final SignImage.Batch batch;
-        private final SignImage.Batch[] batches;
+        private final SignImage.Batch batchA;
+        private final SignImage.Batch batchB;
+        private final SignImage.Batch[] batchesA;
+        private final SignImage.Batch[] batchesB;
+        private volatile SignImage.Batch[] frontBatches;
 
         private float lastNx, lastNy, lastNz;
         private float lastDist = -1f;
@@ -268,19 +271,32 @@ public final class SplatScene {
 
             final int splatCount = scene.cloud.count;
             final int vertexCount = splatCount * 4;
-            this.batch = new SignImage.Batch();
-            this.batch.texture = texture;
-            this.batch.vertexCount = vertexCount;
-            this.batch.vertices = new float[vertexCount * SignImage.Batch.STRIDE];
-            this.batch.colors = new int[vertexCount];
-            this.batch.blend = true;
-            fillUvs(this.batch.vertices, splatCount);
-            this.batches = new SignImage.Batch[]{this.batch};
+
+            this.batchA = new SignImage.Batch();
+            this.batchA.texture = texture;
+            this.batchA.vertexCount = vertexCount;
+            this.batchA.vertices = new float[vertexCount * SignImage.Batch.STRIDE];
+            this.batchA.colors = new int[vertexCount];
+            this.batchA.blend = true;
+            fillUvs(this.batchA.vertices, splatCount);
+            this.batchesA = new SignImage.Batch[]{this.batchA};
+
+            this.batchB = new SignImage.Batch();
+            this.batchB.texture = texture;
+            this.batchB.vertexCount = vertexCount;
+            this.batchB.vertices = new float[vertexCount * SignImage.Batch.STRIDE];
+            this.batchB.colors = new int[vertexCount];
+            this.batchB.blend = true;
+            fillUvs(this.batchB.vertices, splatCount);
+            this.batchesB = new SignImage.Batch[]{this.batchB};
+
+            this.frontBatches = this.batchesA;
         }
 
         public SignImage.Batch[] batches(final float cameraX, final float cameraY, final float cameraZ, Object texture) {
-            batch.texture = texture;
-            if (scene.cloud.count == 0) return batches;
+            final SignImage.Batch[] currentFront = this.frontBatches;
+            currentFront[0].texture = texture;
+            if (scene.cloud.count == 0) return currentFront;
 
             float dx = cameraX - centerX;
             float dy = cameraY - centerY;
@@ -307,15 +323,15 @@ public final class SplatScene {
                 final Scratch scratch = SCRATCH.get();
                 scratch.ensureCapacity(scene.cloud.count);
                 scene.rebuild(placement, cameraX, cameraY, cameraZ, nx, ny, nz,
-                        batch.vertices, batch.colors, scratch.keys, scratch.order, scratch.counts);
-                batch.revision++;
-                return batches;
+                        batchA.vertices, batchA.colors, scratch.keys, scratch.order, scratch.counts);
+                batchA.revision++;
+                return currentFront;
             }
 
             final float dot = nx * lastNx + ny * lastNy + nz * lastNz;
             final float distDiff = Math.abs(dist - lastDist);
             if (dot >= COS_ANGLE_THRESHOLD && distDiff <= lastDist * DIST_RATIO_THRESHOLD) {
-                return batches;
+                return currentFront;
             }
 
             if (updating.compareAndSet(false, true)) {
@@ -323,6 +339,21 @@ public final class SplatScene {
                 lastNy = ny;
                 lastNz = nz;
                 lastDist = dist;
+
+                // ダブルバッファリングにより描画スレッドとの競合を排除する。
+                // 描画スレッドには現在公開中の currentFront を返し、バックグラウンドスレッドは
+                // 非公開側の backBatch に対して頂点と色の書き込みを行う。
+                // 新たな計算タスクが開始されるのは必ず描画スレッドが batches() を呼び出した時点であり、
+                // その時点の frontBatches が描画スレッドに渡され、書き込み先はもう一方 (非公開側) となる。
+                // したがって、公開された直後の Batch に対して裏で書き込みが行われることは構造上発生せず、
+                // synchronized による排他制御を行わずに安全に頂点データを更新できる。
+                // なお、古いバージョン (1.7〜1.13) の ModelArrays では WeakHashMap<Batch, Buffers> と revision で
+                // Batch ごとに頂点バッファをキャッシュしているため、2 つの Batch が交互に公開されても
+                // revision に応じて安全かつ独立にバッファが更新される。
+                final SignImage.Batch backBatch = (currentFront == batchesA) ? batchB : batchA;
+                final SignImage.Batch[] nextBatches = (currentFront == batchesA) ? batchesB : batchesA;
+                final Object currentTexture = texture;
+
                 EXECUTOR.submit(new Runnable() {
                     @Override
                     public void run() {
@@ -334,18 +365,18 @@ public final class SplatScene {
                                     scratch.vertices, scratch.colors, scratch.keys, scratch.order, scratch.counts);
                             final int vLen = splatCount * 4 * SignImage.Batch.STRIDE;
                             final int cLen = splatCount * 4;
-                            synchronized (batch) {
-                                System.arraycopy(scratch.vertices, 0, batch.vertices, 0, vLen);
-                                System.arraycopy(scratch.colors, 0, batch.colors, 0, cLen);
-                                batch.revision++;
-                            }
+                            System.arraycopy(scratch.vertices, 0, backBatch.vertices, 0, vLen);
+                            System.arraycopy(scratch.colors, 0, backBatch.colors, 0, cLen);
+                            backBatch.texture = currentTexture;
+                            backBatch.revision++;
+                            frontBatches = nextBatches;
                         } finally {
                             updating.set(false);
                         }
                     }
                 });
             }
-            return batches;
+            return currentFront;
         }
 
         // テスト用: バックグラウンドの更新が終わるのを待つ

@@ -183,13 +183,21 @@ final class KsplatReader {
         }
         final int total = targetSplats;
 
-        // 1 パス目: 全ガウス分布の値の妥当性を確かめつつ importance を計算する
+        // 1 パス目: 全ガウス分布の値の妥当性を確かめつつ位置と importance を計算する
+        final float[] rawPositions = new float[total * 3];
         float[] importance = new float[total];
         int globalIdx = 0;
         for (int s = 0; s < maxSections && globalIdx < total; s++) {
             final Section sec = sections[s];
             final int limit = Math.min(sec.splatCount, total - globalIdx);
             final int shComps = SplatCloud.restCoefficients(sec.shDegree) * 3;
+            final int fullSplats = sec.fullBuckets * sec.bucketCapacity;
+            int partialBucketIdx = 0;
+            int partialStartLocal = fullSplats;
+            int partialEndLocal = sec.partialBuckets > 0
+                    ? partialStartLocal + buf.getInt(sec.partialBase)
+                    : fullSplats;
+
             for (int local = 0; local < limit; local++, globalIdx++) {
                 final int base = sec.splatDataBase + local * sec.bytesPerSplat;
                 final float sx;
@@ -217,8 +225,30 @@ final class KsplatReader {
                             throw new IOException("Non-finite SH value in .ksplat mode 0");
                         }
                     }
+                    rawPositions[globalIdx * 3] = px;
+                    rawPositions[globalIdx * 3 + 1] = py;
+                    rawPositions[globalIdx * 3 + 2] = pz;
                     opacity = (content[base + 43] & 0xFF) / 255.0f;
                 } else {
+                    final int bucketIndex;
+                    if (local < fullSplats) {
+                        bucketIndex = local / sec.bucketCapacity;
+                    } else {
+                        while (local >= partialEndLocal && partialBucketIdx + 1 < sec.partialBuckets) {
+                            partialBucketIdx++;
+                            partialStartLocal = partialEndLocal;
+                            partialEndLocal += buf.getInt(sec.partialBase + partialBucketIdx * 4);
+                        }
+                        bucketIndex = sec.fullBuckets + partialBucketIdx;
+                    }
+                    final int bOff = sec.bucketsBase + bucketIndex * 12;
+                    final int qx = buf.getShort(base) & 0xFFFF;
+                    final int qy = buf.getShort(base + 2) & 0xFFFF;
+                    final int qz = buf.getShort(base + 4) & 0xFFFF;
+                    rawPositions[globalIdx * 3] = (qx - sec.quantRange) * sec.posScaleFactor + buf.getFloat(bOff);
+                    rawPositions[globalIdx * 3 + 1] = (qy - sec.quantRange) * sec.posScaleFactor + buf.getFloat(bOff + 4);
+                    rawPositions[globalIdx * 3 + 2] = (qz - sec.quantRange) * sec.posScaleFactor + buf.getFloat(bOff + 8);
+
                     sx = halfToFloat(buf.getShort(base + 6) & 0xFFFF);
                     sy = halfToFloat(buf.getShort(base + 8) & 0xFFFF);
                     sz = halfToFloat(buf.getShort(base + 10) & 0xFFFF);
@@ -244,7 +274,7 @@ final class KsplatReader {
             }
         }
 
-        final int[] selected = SplatLoader.selectTop(importance, total, SplatLoader.MAX_SPLATS);
+        final int[] selected = SplatLoader.select(importance, rawPositions, total, SplatLoader.MAX_SPLATS);
         importance = null;
         final int count = selected.length;
         final int rest = SplatCloud.restCoefficients(maxShDegree);
@@ -269,23 +299,17 @@ final class KsplatReader {
                 continue;
             }
 
-            final int fullSplats = sec.fullBuckets * sec.bucketCapacity;
-            int partialBucketIdx = 0;
-            int partialStartLocal = fullSplats;
-            int partialEndLocal = sec.partialBuckets > 0
-                    ? partialStartLocal + buf.getInt(sec.partialBase)
-                    : fullSplats;
-
             while (selPtr < count && selected[selPtr] < sectionEndGlobal) {
-                final int local = selected[selPtr] - sectionStartGlobal;
+                final int global = selected[selPtr];
+                final int local = global - sectionStartGlobal;
                 final int base = sec.splatDataBase + local * sec.bytesPerSplat;
                 final int n = selPtr++;
 
-                if (compressionMode == 0) {
-                    positions[n * 3] = buf.getFloat(base);
-                    positions[n * 3 + 1] = buf.getFloat(base + 4);
-                    positions[n * 3 + 2] = buf.getFloat(base + 8);
+                positions[n * 3] = rawPositions[global * 3];
+                positions[n * 3 + 1] = rawPositions[global * 3 + 1];
+                positions[n * 3 + 2] = rawPositions[global * 3 + 2];
 
+                if (compressionMode == 0) {
                     scales[n * 3] = Math.abs(buf.getFloat(base + 12));
                     scales[n * 3 + 1] = Math.abs(buf.getFloat(base + 16));
                     scales[n * 3 + 2] = Math.abs(buf.getFloat(base + 20));
@@ -301,25 +325,6 @@ final class KsplatReader {
                     colors[n * 3 + 2] = (content[base + 42] & 0xFF) / 255.0f;
                     opacities[n] = (content[base + 43] & 0xFF) / 255.0f;
                 } else {
-                    final int bucketIndex;
-                    if (local < fullSplats) {
-                        bucketIndex = local / sec.bucketCapacity;
-                    } else {
-                        while (local >= partialEndLocal && partialBucketIdx + 1 < sec.partialBuckets) {
-                            partialBucketIdx++;
-                            partialStartLocal = partialEndLocal;
-                            partialEndLocal += buf.getInt(sec.partialBase + partialBucketIdx * 4);
-                        }
-                        bucketIndex = sec.fullBuckets + partialBucketIdx;
-                    }
-                    final int bOff = sec.bucketsBase + bucketIndex * 12;
-                    final int qx = buf.getShort(base) & 0xFFFF;
-                    final int qy = buf.getShort(base + 2) & 0xFFFF;
-                    final int qz = buf.getShort(base + 4) & 0xFFFF;
-                    positions[n * 3] = (qx - sec.quantRange) * sec.posScaleFactor + buf.getFloat(bOff);
-                    positions[n * 3 + 1] = (qy - sec.quantRange) * sec.posScaleFactor + buf.getFloat(bOff + 4);
-                    positions[n * 3 + 2] = (qz - sec.quantRange) * sec.posScaleFactor + buf.getFloat(bOff + 8);
-
                     scales[n * 3] = Math.abs(halfToFloat(buf.getShort(base + 6) & 0xFFFF));
                     scales[n * 3 + 1] = Math.abs(halfToFloat(buf.getShort(base + 8) & 0xFFFF));
                     scales[n * 3 + 2] = Math.abs(halfToFloat(buf.getShort(base + 10) & 0xFFFF));

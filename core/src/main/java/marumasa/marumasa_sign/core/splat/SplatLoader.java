@@ -14,6 +14,17 @@ public final class SplatLoader {
     // 読み込むガウス分布の数の上限。これより多いファイルは、目立つものから順にこの数だけ残す
     public static final int MAX_SPLATS = 150000;
 
+    // 目立つ度合いの計算に使う、表面積の指数 (既定値 0.5: 不透明度 × sqrt(表面積))
+    public static final float DEFAULT_AREA_EXPONENT = 0.5f;
+    static float areaExponent = DEFAULT_AREA_EXPONENT;
+
+    // 背景の遠い分布を切り落とす、中心からの距離の中央値に対する倍率 (既定値 4)
+    public static final float DEFAULT_CROP_FACTOR = 4.0f;
+    static float cropFactor = DEFAULT_CROP_FACTOR;
+
+    // 切り落とし (外れ値の除去) を行うかどうか。SplatCheck の数値比較などで無効にする
+    static boolean cropEnabled = true;
+
     private SplatLoader() {
     }
 
@@ -93,30 +104,117 @@ public final class SplatLoader {
      * 全体が max 個以下なら、すべての添字を返す。
      */
     static int[] selectTop(float[] importance, int count, int max) {
-        if (count <= max) {
+        return select(importance, null, count, max, false);
+    }
+
+    /**
+     * 目立つ度合いと位置から、残す分布の添字を昇順で返す。
+     * 背景の遠い分布を切り落とし、残ったものから目立つ順に最大 max 個を選ぶ。
+     */
+    static int[] select(float[] importance, float[] positions, int count, int max) {
+        return select(importance, positions, count, max, cropEnabled);
+    }
+
+    static int[] select(float[] importance, float[] positions, int count, int max, boolean crop) {
+        if (count <= 0) return new int[0];
+
+        int[] candidates = null;
+        int candCount = count;
+
+        if (crop && positions != null && count > 1) {
+            // 1. 各軸の中央値から中心を求める (省メモリのため 1 つの作業配列を使い回す)
+            final float[] coords = new float[count];
+
+            for (int i = 0; i < count; i++) coords[i] = positions[i * 3];
+            Arrays.sort(coords);
+            final float medX = coords[count / 2];
+
+            for (int i = 0; i < count; i++) coords[i] = positions[i * 3 + 1];
+            Arrays.sort(coords);
+            final float medY = coords[count / 2];
+
+            for (int i = 0; i < count; i++) coords[i] = positions[i * 3 + 2];
+            Arrays.sort(coords);
+            final float medZ = coords[count / 2];
+
+            // 2. 各分布の中心からの距離を計算し、その中央値 dMed を求める
+            final float[] dists = new float[count];
+            for (int i = 0; i < count; i++) {
+                final float dx = positions[i * 3] - medX;
+                final float dy = positions[i * 3 + 1] - medY;
+                final float dz = positions[i * 3 + 2] - medZ;
+                final float d = (float) Math.sqrt(dx * dx + dy * dy + dz * dz);
+                dists[i] = d;
+                coords[i] = d;
+            }
+            Arrays.sort(coords);
+            final float dMed = coords[count / 2];
+
+            // 3. 中心から CROP_FACTOR * dMed より遠い分布を切り落とす
+            final float maxDist = cropFactor * dMed;
+            int kept = 0;
+            for (int i = 0; i < count; i++) {
+                if (dists[i] <= maxDist) kept++;
+            }
+
+            // 安全性チェック: 残る分布が全体の半分未満になる場合は切り落とさない
+            if (kept >= (count + 1) / 2 && kept < count) {
+                candidates = new int[kept];
+                int n = 0;
+                for (int i = 0; i < count; i++) {
+                    if (dists[i] <= maxDist) candidates[n++] = i;
+                }
+                candCount = kept;
+            }
+        }
+
+        if (candCount <= max) {
+            if (candidates != null) return candidates;
             final int[] all = new int[count];
             for (int i = 0; i < count; i++) all[i] = i;
             return all;
         }
-        final float[] sorted = Arrays.copyOf(importance, count);
-        Arrays.sort(sorted);
-        final float threshold = sorted[count - max];
+
+        final float[] candImp = new float[candCount];
+        if (candidates != null) {
+            for (int i = 0; i < candCount; i++) candImp[i] = importance[candidates[i]];
+        } else {
+            System.arraycopy(importance, 0, candImp, 0, count);
+        }
+        Arrays.sort(candImp);
+        final float threshold = candImp[candCount - max];
+
         final int[] selected = new int[max];
         int n = 0;
-        // しきい値より大きいものを先に入れ、残りをしきい値と同じものから入れる
-        for (int i = 0; i < count && n < max; i++) {
-            if (importance[i] > threshold) selected[n++] = i;
-        }
-        for (int i = 0; i < count && n < max; i++) {
-            if (importance[i] == threshold) selected[n++] = i;
+        if (candidates != null) {
+            for (int i = 0; i < candCount && n < max; i++) {
+                final int idx = candidates[i];
+                if (importance[idx] > threshold) selected[n++] = idx;
+            }
+            for (int i = 0; i < candCount && n < max; i++) {
+                final int idx = candidates[i];
+                if (importance[idx] == threshold) selected[n++] = idx;
+            }
+        } else {
+            for (int i = 0; i < count && n < max; i++) {
+                if (importance[i] > threshold) selected[n++] = i;
+            }
+            for (int i = 0; i < count && n < max; i++) {
+                if (importance[i] == threshold) selected[n++] = i;
+            }
         }
         Arrays.sort(selected);
         return selected;
     }
 
-    // 目立つ度合い。不透明度と、分布の広がり (おおよその表面積) の積
+    // 目立つ度合い。不透明度と、分布の広がり (おおよその表面積) のべき乗の積
     static float importance(float opacity, float sx, float sy, float sz) {
-        return opacity * (sx * sy + sy * sz + sz * sx);
+        final float area = sx * sy + sy * sz + sz * sx;
+        if (area <= 0f || opacity <= 0f) return 0f;
+        if (areaExponent == 0.5f) {
+            return opacity * (float) Math.sqrt(area);
+        }
+        return opacity * (float) Math.pow(area, areaExponent);
     }
 
     /**
@@ -160,6 +258,7 @@ public final class SplatLoader {
         final int total = content.length / 32;
         final ByteBuffer buffer = ByteBuffer.wrap(content).order(ByteOrder.LITTLE_ENDIAN);
 
+        final float[] rawPositions = new float[total * 3];
         final float[] importance = new float[total];
         for (int i = 0; i < total; i++) {
             final int o = i * 32;
@@ -173,9 +272,12 @@ public final class SplatLoader {
                     || !Float.isFinite(sx) || !Float.isFinite(sy) || !Float.isFinite(sz)) {
                 throw new IOException("Invalid .splat values");
             }
+            rawPositions[i * 3] = px;
+            rawPositions[i * 3 + 1] = py;
+            rawPositions[i * 3 + 2] = pz;
             importance[i] = importance((content[o + 27] & 0xFF) / 255f, sx, sy, sz);
         }
-        final int[] selected = selectTop(importance, total, MAX_SPLATS);
+        final int[] selected = select(importance, rawPositions, total, MAX_SPLATS);
         final int count = selected.length;
 
         final float[] positions = new float[count * 3];
@@ -184,9 +286,10 @@ public final class SplatLoader {
         final float[] opacities = new float[count];
         final float[] colors = new float[count * 3];
         for (int n = 0; n < count; n++) {
-            final int o = selected[n] * 32;
+            final int idx = selected[n];
+            final int o = idx * 32;
             for (int c = 0; c < 3; c++) {
-                positions[n * 3 + c] = buffer.getFloat(o + c * 4);
+                positions[n * 3 + c] = rawPositions[idx * 3 + c];
                 scales[n * 3 + c] = Math.abs(buffer.getFloat(o + 12 + c * 4));
                 colors[n * 3 + c] = (content[o + 24 + c] & 0xFF) / 255f;
             }

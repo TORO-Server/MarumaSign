@@ -28,6 +28,7 @@ public final class SplatCheck {
         testIsSplat();
         testFlipYZSignTable();
         testMaxSplatsSelection();
+        testCropping();
         testMalformedAndMaliciousInputs();
 
         final File dataDir = findDataDir(args);
@@ -57,6 +58,85 @@ public final class SplatCheck {
             if (c.isDirectory()) return c;
         }
         return null;
+    }
+
+    // 切り落とし (crop) の単体テスト:
+    // 遠い分布が切り落とされること、密集した分布では何も切り落とされないこと、
+    // 残る分布が全体の半分未満になる場合は切り落としが安全に中止されることを検証する
+    private static void testCropping() throws IOException {
+        System.out.println("[3.5/6] Testing SplatLoader cropping...");
+
+        // 1. 遠い分布が消えることの検証
+        // 90 個の近傍点 (半径 1 以内) と 10 個の遠方点 (距離 100 以上)
+        final int nearCount = 90;
+        final int farCount = 10;
+        final int total1 = nearCount + farCount;
+        final byte[] splat1 = new byte[total1 * 32];
+        final ByteBuffer b1 = ByteBuffer.wrap(splat1).order(ByteOrder.LITTLE_ENDIAN);
+        for (int i = 0; i < nearCount; i++) {
+            final int o = i * 32;
+            b1.putFloat(o, (float) Math.sin(i) * 0.5f);
+            b1.putFloat(o + 4, (float) Math.cos(i) * 0.5f);
+            b1.putFloat(o + 8, (float) Math.sin(i * 2) * 0.5f);
+            b1.putFloat(o + 12, 0.1f);
+            b1.putFloat(o + 16, 0.1f);
+            b1.putFloat(o + 20, 0.1f);
+            splat1[o + 27] = (byte) 255; // opacity
+        }
+        for (int i = 0; i < farCount; i++) {
+            final int o = (nearCount + i) * 32;
+            b1.putFloat(o, 100f + i * 10f);
+            b1.putFloat(o + 4, 100f + i * 10f);
+            b1.putFloat(o + 8, 100f + i * 10f);
+            b1.putFloat(o + 12, 0.1f);
+            b1.putFloat(o + 16, 0.1f);
+            b1.putFloat(o + 20, 0.1f);
+            splat1[o + 27] = (byte) 255;
+        }
+        final SplatCloud cloud1 = SplatLoader.load(splat1, "crop_test.splat");
+        if (cloud1.count != nearCount) {
+            throw new AssertionError("Cropping failed: expected " + nearCount + " points, got " + cloud1.count);
+        }
+        for (int i = 0; i < cloud1.count; i++) {
+            final float x = cloud1.positions[i * 3];
+            final float y = cloud1.positions[i * 3 + 1];
+            final float z = cloud1.positions[i * 3 + 2];
+            final float dist = (float) Math.sqrt(x * x + y * y + z * z);
+            if (dist > 10.0f) {
+                throw new AssertionError("Distant point not cropped: dist=" + dist);
+            }
+        }
+
+        // 2. 全体が近くにあるときは何も消えないことの検証
+        final int tightCount = 100;
+        final byte[] splat2 = new byte[tightCount * 32];
+        final ByteBuffer b2 = ByteBuffer.wrap(splat2).order(ByteOrder.LITTLE_ENDIAN);
+        for (int i = 0; i < tightCount; i++) {
+            final int o = i * 32;
+            b2.putFloat(o, (float) Math.sin(i * 0.3) * 1.0f);
+            b2.putFloat(o + 4, (float) Math.cos(i * 0.3) * 1.0f);
+            b2.putFloat(o + 8, (float) Math.sin(i * 0.7) * 1.0f);
+            b2.putFloat(o + 12, 0.1f);
+            b2.putFloat(o + 16, 0.1f);
+            b2.putFloat(o + 20, 0.1f);
+            splat2[o + 27] = (byte) 255;
+        }
+        final SplatCloud cloud2 = SplatLoader.load(splat2, "tight_test.splat");
+        if (cloud2.count != tightCount) {
+            throw new AssertionError("Tight points wrongly cropped: expected " + tightCount + ", got " + cloud2.count);
+        }
+
+        // 3. 残る分布が全体の半分未満になる場合は切り落とさない安全機能の検証
+        final float prevFactor = SplatLoader.cropFactor;
+        try {
+            SplatLoader.cropFactor = 0.01f;
+            final SplatCloud cloud3 = SplatLoader.load(splat2, "safety_test.splat");
+            if (cloud3.count != tightCount) {
+                throw new AssertionError("Safety cancel failed: expected " + tightCount + " points preserved, got " + cloud3.count);
+            }
+        } finally {
+            SplatLoader.cropFactor = prevFactor;
+        }
     }
 
     // 1. isSplat の判定テスト (内容判定・拡張子判定・URL クエリ・非 3DGS ファイルの除外)
@@ -480,103 +560,109 @@ public final class SplatCheck {
     private static void testNumericalComparisons(File dataDir) throws IOException {
         System.out.println("[6/6] Running numerical accuracy comparisons...");
 
-        final SplatCloud refPly = loadFile(dataDir, "lizard_10k.ply");
-        final SplatCloud refPly1k = loadFile(dataDir, "lizard_1k_ascii.ply");
+        final boolean prevCrop = SplatLoader.cropEnabled;
+        SplatLoader.cropEnabled = false;
+        try {
+            final SplatCloud refPly = loadFile(dataDir, "lizard_10k.ply");
+            final SplatCloud refPly1k = loadFile(dataDir, "lizard_1k_ascii.ply");
 
-        System.out.println("\n=== Table A: Comparison against original standard PLY (lizard_10k.ply, N=10,000) ===");
-        System.out.println("| Format | File | N | SH | Pos Max | Pos Mean | Scale Max | Scale Mean | Opacity Max | Opacity Mean | Color Max | Color Mean | Rot Max | Rot Mean | Cov3D Max | SH Max | SH Mean |");
-        System.out.println("|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|");
+            System.out.println("\n=== Table A: Comparison against original standard PLY (lizard_10k.ply, N=10,000) ===");
+            System.out.println("| Format | File | N | SH | Pos Max | Pos Mean | Scale Max | Scale Mean | Opacity Max | Opacity Mean | Color Max | Color Mean | Rot Max | Rot Mean | Cov3D Max | SH Max | SH Mean |");
+            System.out.println("|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|");
 
-        compareAndVerify("PLY (Big-Endian)", loadFile(dataDir, "lizard_10k_be.ply"), refPly, "lizard_10k_be.ply",
-                false, 1e-6f, 1e-6f, 1e-6f, 1e-6f, 1e-6f, 1e-5f);
-        compareAndVerify("PLY (ASCII 1k)", refPly1k, loadSubPly(refPly, 1000), "lizard_1k_ascii.ply",
-                false, 5e-5f, 1e-5f, 1e-5f, 1e-5f, 1e-5f, 1e-5f);
-        compareAndVerify("Compressed PLY", loadFile(dataDir, "lizard_10k.compressed.ply"), refPly, "lizard_10k.compressed.ply",
-                true, 0.03f, 0.01f, 0.005f, 0.01f, 0.01f, 0.05f);
-        compareAndVerify("SOG v2", loadFile(dataDir, "lizard_10k.sog"), refPly, "lizard_10k.sog",
-                true, 0.01f, 0.02f, 0.005f, 0.05f, 0.02f, 0.25f);
-        compareAndVerify("SPZ v2", loadFile(dataDir, "lizard_10k_v2.spz"), refPly, "lizard_10k_v2.spz",
-                false, 1e-5f, 1e-5f, 1e-5f, 1e-5f, 0.02f, 1e-5f);
-        compareAndVerify("SPZ v3", loadFile(dataDir, "lizard_10k_v3.spz"), refPly, "lizard_10k_v3.spz",
-                false, 1e-5f, 1e-5f, 1e-5f, 1e-5f, 0.005f, 1e-5f);
-        compareAndVerify("SPLAT", loadFile(dataDir, "lizard_10k.splat"), refPly, "lizard_10k.splat",
-                false, 1e-6f, 1e-6f, 0.005f, 0.35f, 0.02f, 0.0f);
-        compareAndVerify("KSPLAT (mode 0)", loadFile(dataDir, "lizard_10k_m0.ksplat"), refPly, "lizard_10k_m0.ksplat",
-                true, 1e-5f, 1e-5f, 0.005f, 0.35f, 1e-5f, 1e-5f);
-        compareAndVerify("KSPLAT (mode 1)", loadFile(dataDir, "lizard_10k_m1.ksplat"), refPly, "lizard_10k_m1.ksplat",
-                true, 0.002f, 0.002f, 0.005f, 0.35f, 0.005f, 0.005f);
-        compareAndVerify("KSPLAT (mode 2)", loadFile(dataDir, "lizard_10k_m2.ksplat"), refPly, "lizard_10k_m2.ksplat",
-                true, 0.002f, 0.002f, 0.005f, 0.35f, 0.005f, 0.02f);
+            compareAndVerify("PLY (Big-Endian)", loadFile(dataDir, "lizard_10k_be.ply"), refPly, "lizard_10k_be.ply",
+                    false, 1e-6f, 1e-6f, 1e-6f, 1e-6f, 1e-6f, 1e-5f);
+            compareAndVerify("PLY (ASCII 1k)", refPly1k, loadSubPly(refPly, 1000), "lizard_1k_ascii.ply",
+                    false, 5e-5f, 1e-5f, 1e-5f, 1e-5f, 1e-5f, 1e-5f);
+            compareAndVerify("Compressed PLY", loadFile(dataDir, "lizard_10k.compressed.ply"), refPly, "lizard_10k.compressed.ply",
+                    true, 0.03f, 0.01f, 0.005f, 0.01f, 0.01f, 0.05f);
+            compareAndVerify("SOG v2", loadFile(dataDir, "lizard_10k.sog"), refPly, "lizard_10k.sog",
+                    true, 0.01f, 0.02f, 0.005f, 0.05f, 0.02f, 0.25f);
+            compareAndVerify("SPZ v2", loadFile(dataDir, "lizard_10k_v2.spz"), refPly, "lizard_10k_v2.spz",
+                    false, 1e-5f, 1e-5f, 1e-5f, 1e-5f, 0.02f, 1e-5f);
+            compareAndVerify("SPZ v3", loadFile(dataDir, "lizard_10k_v3.spz"), refPly, "lizard_10k_v3.spz",
+                    false, 1e-5f, 1e-5f, 1e-5f, 1e-5f, 0.005f, 1e-5f);
+            compareAndVerify("SPLAT", loadFile(dataDir, "lizard_10k.splat"), refPly, "lizard_10k.splat",
+                    false, 1e-6f, 1e-6f, 0.005f, 0.35f, 0.02f, 0.0f);
+            compareAndVerify("KSPLAT (mode 0)", loadFile(dataDir, "lizard_10k_m0.ksplat"), refPly, "lizard_10k_m0.ksplat",
+                    true, 1e-5f, 1e-5f, 0.005f, 0.35f, 1e-5f, 1e-5f);
+            compareAndVerify("KSPLAT (mode 1)", loadFile(dataDir, "lizard_10k_m1.ksplat"), refPly, "lizard_10k_m1.ksplat",
+                    true, 0.002f, 0.002f, 0.005f, 0.35f, 0.005f, 0.005f);
+            compareAndVerify("KSPLAT (mode 2)", loadFile(dataDir, "lizard_10k_m2.ksplat"), refPly, "lizard_10k_m2.ksplat",
+                    true, 0.002f, 0.002f, 0.005f, 0.35f, 0.005f, 0.02f);
 
-        System.out.println("\n=== Table B: Cross-Implementation Comparison against @playcanvas/splat-transform Roundtrip PLY ===");
-        System.out.println("| Format | Direct File vs splat-transform PLY | N | SH | Pos Max | Pos Mean | Scale Max | Scale Mean | Opacity Max | Opacity Mean | Color Max | Color Mean | Rot Max | Rot Mean | SH Max | SH Mean |");
-        System.out.println("|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|");
+            System.out.println("\n=== Table B: Cross-Implementation Comparison against @playcanvas/splat-transform Roundtrip PLY ===");
+            System.out.println("| Format | Direct File vs splat-transform PLY | N | SH | Pos Max | Pos Mean | Scale Max | Scale Mean | Opacity Max | Opacity Mean | Color Max | Color Mean | Rot Max | Rot Mean | SH Max | SH Mean |");
+            System.out.println("|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|");
 
-        compareRoundtrip("Compressed PLY", loadFile(dataDir, "lizard_10k.compressed.ply"),
-                loadFile(dataDir, "rt_compressed.ply"), "lizard_10k.compressed.ply vs rt_compressed.ply",
-                5e-5f, 1e-5f, 1e-5f, 1e-5f, 1e-5f, 1e-5f);
-        compareRoundtrip("SOG v2", loadFile(dataDir, "lizard_10k.sog"),
-                loadFile(dataDir, "rt_sog.ply"), "lizard_10k.sog vs rt_sog.ply",
-                5e-4f, 1e-5f, 1e-5f, 1e-5f, 1e-5f, 1e-5f);
-        compareRoundtrip("SPLAT", loadFile(dataDir, "lizard_10k.splat"),
-                loadFile(dataDir, "rt_splat.ply"), "lizard_10k.splat vs rt_splat.ply",
-                1e-5f, 1e-5f, 1e-5f, 1e-5f, 0.01f, 1e-5f);
-        compareRoundtrip("KSPLAT (mode 0)", loadFile(dataDir, "lizard_10k_m0.ksplat"),
-                loadFile(dataDir, "rt_ksplat_m0.ply"), "lizard_10k_m0.ksplat vs rt_ksplat_m0.ply",
-                1e-5f, 1e-5f, 1e-5f, 1e-5f, 1e-5f, 1e-5f);
-        compareRoundtrip("KSPLAT (mode 1)", loadFile(dataDir, "lizard_10k_m1.ksplat"),
-                loadFile(dataDir, "rt_ksplat_m1.ply"), "lizard_10k_m1.ksplat vs rt_ksplat_m1.ply",
-                1e-4f, 1e-4f, 1e-5f, 1e-5f, 1e-4f, 1e-5f);
-        compareRoundtrip("KSPLAT (mode 2)", loadFile(dataDir, "lizard_10k_m2.ksplat"),
-                loadFile(dataDir, "rt_ksplat_m2.ply"), "lizard_10k_m2.ksplat vs rt_ksplat_m2.ply",
-                1e-4f, 1e-4f, 1e-5f, 1e-5f, 1e-4f, 1e-5f);
+            compareRoundtrip("Compressed PLY", loadFile(dataDir, "lizard_10k.compressed.ply"),
+                    loadFile(dataDir, "rt_compressed.ply"), "lizard_10k.compressed.ply vs rt_compressed.ply",
+                    5e-5f, 1e-5f, 1e-5f, 1e-5f, 1e-5f, 1e-5f);
+            compareRoundtrip("SOG v2", loadFile(dataDir, "lizard_10k.sog"),
+                    loadFile(dataDir, "rt_sog.ply"), "lizard_10k.sog vs rt_sog.ply",
+                    5e-4f, 1e-5f, 1e-5f, 1e-5f, 1e-5f, 1e-5f);
+            compareRoundtrip("SPLAT", loadFile(dataDir, "lizard_10k.splat"),
+                    loadFile(dataDir, "rt_splat.ply"), "lizard_10k.splat vs rt_splat.ply",
+                    1e-5f, 1e-5f, 1e-5f, 1e-5f, 0.01f, 1e-5f);
+            compareRoundtrip("KSPLAT (mode 0)", loadFile(dataDir, "lizard_10k_m0.ksplat"),
+                    loadFile(dataDir, "rt_ksplat_m0.ply"), "lizard_10k_m0.ksplat vs rt_ksplat_m0.ply",
+                    1e-5f, 1e-5f, 1e-5f, 1e-5f, 1e-5f, 1e-5f);
+            compareRoundtrip("KSPLAT (mode 1)", loadFile(dataDir, "lizard_10k_m1.ksplat"),
+                    loadFile(dataDir, "rt_ksplat_m1.ply"), "lizard_10k_m1.ksplat vs rt_ksplat_m1.ply",
+                    1e-4f, 1e-4f, 1e-5f, 1e-5f, 1e-4f, 1e-5f);
+            compareRoundtrip("KSPLAT (mode 2)", loadFile(dataDir, "lizard_10k_m2.ksplat"),
+                    loadFile(dataDir, "rt_ksplat_m2.ply"), "lizard_10k_m2.ksplat vs rt_ksplat_m2.ply",
+                    1e-4f, 1e-4f, 1e-5f, 1e-5f, 1e-4f, 1e-5f);
 
-        // splat-transform の read-spz.ts は CoordinateSystem.UNSPECIFIED で展開するため、rt_spz_*.ply はすでに RUB の値が書かれている。
-        // したがって rt_spz_*.ply に対してもう一度 flipYZ を掛けて RUB に戻したものと比較すると完全一致する。
-        final SplatCloud rtSpzV2 = loadFile(dataDir, "rt_spz_v2.ply");
-        SplatLoader.flipYZ(rtSpzV2.count, rtSpzV2.positions, rtSpzV2.rotations, rtSpzV2.shDegree, rtSpzV2.shCoefficients);
-        compareRoundtrip("SPZ v2", loadFile(dataDir, "lizard_10k_v2.spz"),
-                rtSpzV2, "lizard_10k_v2.spz vs rt_spz_v2.ply",
-                1e-5f, 1e-5f, 1e-5f, 1e-5f, 1e-5f, 1e-5f);
+            // splat-transform の read-spz.ts は CoordinateSystem.UNSPECIFIED で展開するため、rt_spz_*.ply はすでに RUB の値が書かれている。
+            // したがって rt_spz_*.ply に対してもう一度 flipYZ を掛けて RUB に戻したものと比較すると完全一致する。
+            final SplatCloud rtSpzV2 = loadFile(dataDir, "rt_spz_v2.ply");
+            SplatLoader.flipYZ(rtSpzV2.count, rtSpzV2.positions, rtSpzV2.rotations, rtSpzV2.shDegree, rtSpzV2.shCoefficients);
+            compareRoundtrip("SPZ v2", loadFile(dataDir, "lizard_10k_v2.spz"),
+                    rtSpzV2, "lizard_10k_v2.spz vs rt_spz_v2.ply",
+                    1e-5f, 1e-5f, 1e-5f, 1e-5f, 1e-5f, 1e-5f);
 
-        final SplatCloud rtSpzV3 = loadFile(dataDir, "rt_spz_v3.ply");
-        SplatLoader.flipYZ(rtSpzV3.count, rtSpzV3.positions, rtSpzV3.rotations, rtSpzV3.shDegree, rtSpzV3.shCoefficients);
-        compareRoundtrip("SPZ v3", loadFile(dataDir, "lizard_10k_v3.spz"),
-                rtSpzV3, "lizard_10k_v3.spz vs rt_spz_v3.ply",
-                1e-5f, 1e-5f, 1e-5f, 1e-5f, 1e-5f, 1e-5f);
+            final SplatCloud rtSpzV3 = loadFile(dataDir, "rt_spz_v3.ply");
+            SplatLoader.flipYZ(rtSpzV3.count, rtSpzV3.positions, rtSpzV3.rotations, rtSpzV3.shDegree, rtSpzV3.shCoefficients);
+            compareRoundtrip("SPZ v3", loadFile(dataDir, "lizard_10k_v3.spz"),
+                    rtSpzV3, "lizard_10k_v3.spz vs rt_spz_v3.ply",
+                    1e-5f, 1e-5f, 1e-5f, 1e-5f, 1e-5f, 1e-5f);
 
-        // SPZ v4: SH 次数 0 / 1 / 2 / 3
-        final SplatCloud rtSpzV4Deg0 = loadFile(dataDir, "rt_spz_v4_deg0.ply");
-        SplatLoader.flipYZ(rtSpzV4Deg0.count, rtSpzV4Deg0.positions, rtSpzV4Deg0.rotations, rtSpzV4Deg0.shDegree, rtSpzV4Deg0.shCoefficients);
-        compareRoundtrip("SPZ v4 (deg 0)", loadFile(dataDir, "lizard_10k_deg0_v4.spz"),
-                rtSpzV4Deg0, "lizard_10k_deg0_v4.spz vs rt_spz_v4_deg0.ply",
-                1e-5f, 1e-5f, 1e-5f, 1e-5f, 1e-5f, 1e-5f);
+            // SPZ v4: SH 次数 0 / 1 / 2 / 3
+            final SplatCloud rtSpzV4Deg0 = loadFile(dataDir, "rt_spz_v4_deg0.ply");
+            SplatLoader.flipYZ(rtSpzV4Deg0.count, rtSpzV4Deg0.positions, rtSpzV4Deg0.rotations, rtSpzV4Deg0.shDegree, rtSpzV4Deg0.shCoefficients);
+            compareRoundtrip("SPZ v4 (deg 0)", loadFile(dataDir, "lizard_10k_deg0_v4.spz"),
+                    rtSpzV4Deg0, "lizard_10k_deg0_v4.spz vs rt_spz_v4_deg0.ply",
+                    1e-5f, 1e-5f, 1e-5f, 1e-5f, 1e-5f, 1e-5f);
 
-        final SplatCloud rtSpzV4Deg1 = loadFile(dataDir, "rt_spz_v4_deg1.ply");
-        SplatLoader.flipYZ(rtSpzV4Deg1.count, rtSpzV4Deg1.positions, rtSpzV4Deg1.rotations, rtSpzV4Deg1.shDegree, rtSpzV4Deg1.shCoefficients);
-        compareRoundtrip("SPZ v4 (deg 1)", loadFile(dataDir, "lizard_10k_deg1_v4.spz"),
-                rtSpzV4Deg1, "lizard_10k_deg1_v4.spz vs rt_spz_v4_deg1.ply",
-                1e-5f, 1e-5f, 1e-5f, 1e-5f, 1e-5f, 1e-5f);
+            final SplatCloud rtSpzV4Deg1 = loadFile(dataDir, "rt_spz_v4_deg1.ply");
+            SplatLoader.flipYZ(rtSpzV4Deg1.count, rtSpzV4Deg1.positions, rtSpzV4Deg1.rotations, rtSpzV4Deg1.shDegree, rtSpzV4Deg1.shCoefficients);
+            compareRoundtrip("SPZ v4 (deg 1)", loadFile(dataDir, "lizard_10k_deg1_v4.spz"),
+                    rtSpzV4Deg1, "lizard_10k_deg1_v4.spz vs rt_spz_v4_deg1.ply",
+                    1e-5f, 1e-5f, 1e-5f, 1e-5f, 1e-5f, 1e-5f);
 
-        final SplatCloud rtSpzV4Deg2 = loadFile(dataDir, "rt_spz_v4_deg2.ply");
-        SplatLoader.flipYZ(rtSpzV4Deg2.count, rtSpzV4Deg2.positions, rtSpzV4Deg2.rotations, rtSpzV4Deg2.shDegree, rtSpzV4Deg2.shCoefficients);
-        compareRoundtrip("SPZ v4 (deg 2)", loadFile(dataDir, "lizard_10k_deg2_v4.spz"),
-                rtSpzV4Deg2, "lizard_10k_deg2_v4.spz vs rt_spz_v4_deg2.ply",
-                1e-5f, 1e-5f, 1e-5f, 1e-5f, 1e-5f, 1e-5f);
+            final SplatCloud rtSpzV4Deg2 = loadFile(dataDir, "rt_spz_v4_deg2.ply");
+            SplatLoader.flipYZ(rtSpzV4Deg2.count, rtSpzV4Deg2.positions, rtSpzV4Deg2.rotations, rtSpzV4Deg2.shDegree, rtSpzV4Deg2.shCoefficients);
+            compareRoundtrip("SPZ v4 (deg 2)", loadFile(dataDir, "lizard_10k_deg2_v4.spz"),
+                    rtSpzV4Deg2, "lizard_10k_deg2_v4.spz vs rt_spz_v4_deg2.ply",
+                    1e-5f, 1e-5f, 1e-5f, 1e-5f, 1e-5f, 1e-5f);
 
-        final SplatCloud rtSpzV4Deg3 = loadFile(dataDir, "rt_spz_v4.ply");
-        SplatLoader.flipYZ(rtSpzV4Deg3.count, rtSpzV4Deg3.positions, rtSpzV4Deg3.rotations, rtSpzV4Deg3.shDegree, rtSpzV4Deg3.shCoefficients);
-        compareRoundtrip("SPZ v4 (deg 3)", loadFile(dataDir, "lizard_10k_v4.spz"),
-                rtSpzV4Deg3, "lizard_10k_v4.spz vs rt_spz_v4.ply",
-                1e-5f, 1e-5f, 1e-5f, 1e-5f, 1e-5f, 1e-5f);
+            final SplatCloud rtSpzV4Deg3 = loadFile(dataDir, "rt_spz_v4.ply");
+            SplatLoader.flipYZ(rtSpzV4Deg3.count, rtSpzV4Deg3.positions, rtSpzV4Deg3.rotations, rtSpzV4Deg3.shDegree, rtSpzV4Deg3.shCoefficients);
+            compareRoundtrip("SPZ v4 (deg 3)", loadFile(dataDir, "lizard_10k_v4.spz"),
+                    rtSpzV4Deg3, "lizard_10k_v4.spz vs rt_spz_v4.ply",
+                    1e-5f, 1e-5f, 1e-5f, 1e-5f, 1e-5f, 1e-5f);
 
-        // 10 万個超の実データ (hornedlizard_v4.spz: 786,233 点 -> MAX_SPLATS=150,000 点選択)
-        final SplatCloud rtHorned = loadFile(dataDir, "rt_hornedlizard_v4.ply");
-        SplatLoader.flipYZ(rtHorned.count, rtHorned.positions, rtHorned.rotations, rtHorned.shDegree, rtHorned.shCoefficients);
-        compareRoundtrip("SPZ v4 (786k)", loadFile(dataDir, "hornedlizard_v4.spz"),
-                rtHorned, "hornedlizard_v4.spz vs rt_hornedlizard_v4.ply",
-                1e-4f, 1e-4f, 1e-4f, 1e-4f, 1e-4f, 1e-4f);
-        System.out.println();
+            // 10 万個超の実データ (hornedlizard_v4.spz: 786,233 点 -> MAX_SPLATS=150,000 点選択)
+            final SplatCloud rtHorned = loadFile(dataDir, "rt_hornedlizard_v4.ply");
+            SplatLoader.flipYZ(rtHorned.count, rtHorned.positions, rtHorned.rotations, rtHorned.shDegree, rtHorned.shCoefficients);
+            compareRoundtrip("SPZ v4 (786k)", loadFile(dataDir, "hornedlizard_v4.spz"),
+                    rtHorned, "hornedlizard_v4.spz vs rt_hornedlizard_v4.ply",
+                    1e-4f, 1e-4f, 1e-4f, 1e-4f, 1e-4f, 1e-4f);
+            System.out.println();
+        } finally {
+            SplatLoader.cropEnabled = prevCrop;
+        }
     }
 
     // 300 万個・SH 3 次 (約 710 MB) のバイナリ PLY を 2 パスで省メモリに読み込めることを検証する

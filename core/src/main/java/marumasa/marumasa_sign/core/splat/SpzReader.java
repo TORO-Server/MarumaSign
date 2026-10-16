@@ -141,9 +141,20 @@ final class SpzReader {
             readFully(gzip, scaleBytes, 0, scaleBytes.length);
             readFully(gzip, rotBytes, 0, rotBytes.length);
 
-            // 1 パス目: importance の計算
+            // 1 パス目: 位置と importance の計算
+            final float posScale = 1.0f / (1 << fractionalBits);
+            final float[] rawPositions = new float[numPoints * 3];
             float[] importance = new float[numPoints];
             for (int i = 0; i < numPoints; i++) {
+                final int po = i * 9;
+                for (int c = 0; c < 3; c++) {
+                    final int co = po + c * 3;
+                    int fixed = (posBytes[co] & 0xFF)
+                            | ((posBytes[co + 1] & 0xFF) << 8)
+                            | ((posBytes[co + 2] & 0xFF) << 16);
+                    if ((fixed & 0x800000) != 0) fixed |= 0xFF000000;
+                    rawPositions[i * 3 + c] = fixed * posScale;
+                }
                 final float opacity = (alphaBytes[i] & 0xFF) / 255.0f;
                 final int so = i * 3;
                 final float sx = (float) Math.exp((scaleBytes[so] & 0xFF) / 16.0f - 10.0f);
@@ -152,7 +163,7 @@ final class SpzReader {
                 importance[i] = SplatLoader.importance(opacity, sx, sy, sz);
             }
 
-            final int[] selected = SplatLoader.selectTop(importance, numPoints, SplatLoader.MAX_SPLATS);
+            final int[] selected = SplatLoader.select(importance, rawPositions, numPoints, SplatLoader.MAX_SPLATS);
             importance = null;
             final int count = selected.length;
 
@@ -163,21 +174,13 @@ final class SpzReader {
             final float[] colors = new float[count * 3];
             final float[] sh = shDegree > 0 ? new float[count * shPerPoint] : new float[0];
 
-            final float posScale = 1.0f / (1 << fractionalBits);
-
             // 2 パス目: 選ばれたガウス分布だけを展開する
             for (int n = 0; n < count; n++) {
                 final int i = selected[n];
 
-                final int po = i * 9;
-                for (int c = 0; c < 3; c++) {
-                    final int co = po + c * 3;
-                    int fixed = (posBytes[co] & 0xFF)
-                            | ((posBytes[co + 1] & 0xFF) << 8)
-                            | ((posBytes[co + 2] & 0xFF) << 16);
-                    if ((fixed & 0x800000) != 0) fixed |= 0xFF000000;
-                    positions[n * 3 + c] = fixed * posScale;
-                }
+                positions[n * 3] = rawPositions[i * 3];
+                positions[n * 3 + 1] = rawPositions[i * 3 + 1];
+                positions[n * 3 + 2] = rawPositions[i * 3 + 2];
 
                 opacities[n] = (alphaBytes[i] & 0xFF) / 255.0f;
 
@@ -354,7 +357,13 @@ final class SpzReader {
             throw new IOException("File size mismatch: total compressed streams end at " + currentOffset + ", file size " + content.length);
         }
 
-        // 1 パス目: alphas (ストリーム 1) と scales (ストリーム 3) を展開して importance を計算
+        // 1 パス目: positions (ストリーム 0), alphas (ストリーム 1), scales (ストリーム 3) を展開して importance を計算
+        final byte[] posBytes = marumasa.marumasa_sign.core.texture.ZstdDecoder.decompress(
+                content, streamOffsets[0], (int) compressedSizes[0], (int) posBytesLen);
+        if (posBytes.length != (int) posBytesLen) {
+            throw new IOException("Decompressed position size mismatch");
+        }
+
         final byte[] alphaBytes = marumasa.marumasa_sign.core.texture.ZstdDecoder.decompress(
                 content, streamOffsets[1], (int) compressedSizes[1], (int) alphaBytesLen);
         if (alphaBytes.length != (int) alphaBytesLen) {
@@ -367,8 +376,19 @@ final class SpzReader {
             throw new IOException("Decompressed scale size mismatch");
         }
 
+        final float posScale = 1.0f / (1 << fractionalBits);
+        final float[] rawPositions = new float[numPoints * 3];
         float[] importance = new float[numPoints];
         for (int i = 0; i < numPoints; i++) {
+            final int po = i * 9;
+            for (int c = 0; c < 3; c++) {
+                final int co = po + c * 3;
+                int fixed = (posBytes[co] & 0xFF)
+                        | ((posBytes[co + 1] & 0xFF) << 8)
+                        | ((posBytes[co + 2] & 0xFF) << 16);
+                if ((fixed & 0x800000) != 0) fixed |= 0xFF000000;
+                rawPositions[i * 3 + c] = fixed * posScale;
+            }
             final float opacity = (alphaBytes[i] & 0xFF) / 255.0f;
             final int so = i * 3;
             final float sx = (float) Math.exp((scaleBytes[so] & 0xFF) / 16.0f - 10.0f);
@@ -377,17 +397,11 @@ final class SpzReader {
             importance[i] = SplatLoader.importance(opacity, sx, sy, sz);
         }
 
-        final int[] selected = SplatLoader.selectTop(importance, numPoints, SplatLoader.MAX_SPLATS);
+        final int[] selected = SplatLoader.select(importance, rawPositions, numPoints, SplatLoader.MAX_SPLATS);
         importance = null;
         final int count = selected.length;
 
         // 残りのストリームを展開
-        final byte[] posBytes = marumasa.marumasa_sign.core.texture.ZstdDecoder.decompress(
-                content, streamOffsets[0], (int) compressedSizes[0], (int) posBytesLen);
-        if (posBytes.length != (int) posBytesLen) {
-            throw new IOException("Decompressed position size mismatch");
-        }
-
         final byte[] colorBytes = marumasa.marumasa_sign.core.texture.ZstdDecoder.decompress(
                 content, streamOffsets[2], (int) compressedSizes[2], (int) colorBytesLen);
         if (colorBytes.length != (int) colorBytesLen) {
@@ -423,21 +437,13 @@ final class SpzReader {
         final float[] colors = new float[count * 3];
         final float[] sh = outShDegree > 0 ? new float[count * outShPerPoint] : new float[0];
 
-        final float posScale = 1.0f / (1 << fractionalBits);
-
         // 2 パス目: 選ばれたガウス分布だけを展開する
         for (int n = 0; n < count; n++) {
             final int i = selected[n];
 
-            final int po = i * 9;
-            for (int c = 0; c < 3; c++) {
-                final int co = po + c * 3;
-                int fixed = (posBytes[co] & 0xFF)
-                        | ((posBytes[co + 1] & 0xFF) << 8)
-                        | ((posBytes[co + 2] & 0xFF) << 16);
-                if ((fixed & 0x800000) != 0) fixed |= 0xFF000000;
-                positions[n * 3 + c] = fixed * posScale;
-            }
+            positions[n * 3] = rawPositions[i * 3];
+            positions[n * 3 + 1] = rawPositions[i * 3 + 1];
+            positions[n * 3 + 2] = rawPositions[i * 3 + 2];
 
             opacities[n] = (alphaBytes[i] & 0xFF) / 255.0f;
 

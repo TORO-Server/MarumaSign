@@ -94,13 +94,26 @@ final class SogReader {
 
         final ImageData scalesImg = decodeWebp(entries, String.valueOf(scaleFiles.get(0)), total);
         final ImageData sh0Img = decodeWebp(entries, String.valueOf(sh0Files.get(0)), total);
+        final ImageData meansLImg = decodeWebp(entries, String.valueOf(meanFiles.get(0)), total);
+        final ImageData meansUImg = decodeWebp(entries, String.valueOf(meanFiles.get(1)), total);
 
-        // 1 パス目: scales と sh0 から importance を計算する
+        final byte[] mL = meansLImg.rgba;
+        final byte[] mU = meansUImg.rgba;
         final byte[] sRgba = scalesImg.rgba;
         final byte[] c0Rgba = sh0Img.rgba;
+
+        // 1 パス目: 位置と importance を計算する
+        final float[] rawPositions = new float[total * 3];
         float[] importance = new float[total];
         for (int i = 0; i < total; i++) {
             final int o4 = i * 4;
+            for (int c = 0; c < 3; c++) {
+                final int u16 = (mL[o4 + c] & 0xFF) | ((mU[o4 + c] & 0xFF) << 8);
+                final float v = meanMins[c] + (meanMaxs[c] - meanMins[c]) * (u16 / 65535.0f);
+                final float pos = (float) Math.copySign(Math.exp(Math.abs(v)) - 1.0, v);
+                if (!Float.isFinite(pos)) throw new IOException("Non-finite position in SOG");
+                rawPositions[i * 3 + c] = pos;
+            }
             final float sx = (float) Math.exp(scaleCodebook[sRgba[o4] & 0xFF]);
             final float sy = (float) Math.exp(scaleCodebook[sRgba[o4 + 1] & 0xFF]);
             final float sz = (float) Math.exp(scaleCodebook[sRgba[o4 + 2] & 0xFF]);
@@ -111,16 +124,11 @@ final class SogReader {
             importance[i] = SplatLoader.importance(opacity, sx, sy, sz);
         }
 
-        final int[] selected = SplatLoader.selectTop(importance, total, SplatLoader.MAX_SPLATS);
+        final int[] selected = SplatLoader.select(importance, rawPositions, total, SplatLoader.MAX_SPLATS);
         importance = null;
         final int count = selected.length;
 
-        final ImageData meansLImg = decodeWebp(entries, String.valueOf(meanFiles.get(0)), total);
-        final ImageData meansUImg = decodeWebp(entries, String.valueOf(meanFiles.get(1)), total);
         final ImageData quatsImg = decodeWebp(entries, String.valueOf(quatFiles.get(0)), total);
-
-        final byte[] mL = meansLImg.rgba;
-        final byte[] mU = meansUImg.rgba;
         final byte[] qRgba = quatsImg.rgba;
 
         int shDegree = 0;
@@ -160,12 +168,7 @@ final class SogReader {
             final int o4 = i * 4;
 
             for (int c = 0; c < 3; c++) {
-                final int u16 = (mL[o4 + c] & 0xFF) | ((mU[o4 + c] & 0xFF) << 8);
-                final float v = meanMins[c] + (meanMaxs[c] - meanMins[c]) * (u16 / 65535.0f);
-                final float pos = (float) Math.copySign(Math.exp(Math.abs(v)) - 1.0, v);
-                if (!Float.isFinite(pos)) throw new IOException("Non-finite position in SOG");
-                positions[n * 3 + c] = pos;
-
+                positions[n * 3 + c] = rawPositions[i * 3 + c];
                 scales[n * 3 + c] = (float) Math.exp(scaleCodebook[sRgba[o4 + c] & 0xFF]);
                 colors[n * 3 + c] = 0.5f + SplatCloud.SH_C0 * sh0Codebook[c0Rgba[o4 + c] & 0xFF];
             }
@@ -229,12 +232,26 @@ final class SogReader {
 
         final ImageData scalesImg = decodeWebp(entries, String.valueOf(scaleFiles.get(0)), total);
         final ImageData sh0Img = decodeWebp(entries, String.valueOf(sh0Files.get(0)), total);
+        final ImageData meansLImg = decodeWebp(entries, String.valueOf(meanFiles.get(0)), total);
+        final ImageData meansUImg = decodeWebp(entries, String.valueOf(meanFiles.get(1)), total);
 
+        final byte[] mL = meansLImg.rgba;
+        final byte[] mU = meansUImg.rgba;
         final byte[] sRgba = scalesImg.rgba;
         final byte[] c0Rgba = sh0Img.rgba;
+
+        // 1 パス目: 位置と importance の計算
+        final float[] rawPositions = new float[total * 3];
         float[] importance = new float[total];
         for (int i = 0; i < total; i++) {
             final int o4 = i * 4;
+            for (int c = 0; c < 3; c++) {
+                final int u16 = (mL[o4 + c] & 0xFF) | ((mU[o4 + c] & 0xFF) << 8);
+                final float v = meanMins[c] + (meanMaxs[c] - meanMins[c]) * (u16 / 65535.0f);
+                final float pos = (float) Math.copySign(Math.exp(Math.abs(v)) - 1.0, v);
+                if (!Float.isFinite(pos)) throw new IOException("Non-finite position in SOG v1");
+                rawPositions[i * 3 + c] = pos;
+            }
             final float sx = (float) Math.exp(lerp(scaleMins[0], scaleMaxs[0], (sRgba[o4] & 0xFF) / 255.0f));
             final float sy = (float) Math.exp(lerp(scaleMins[1], scaleMaxs[1], (sRgba[o4 + 1] & 0xFF) / 255.0f));
             final float sz = (float) Math.exp(lerp(scaleMins[2], scaleMaxs[2], (sRgba[o4 + 2] & 0xFF) / 255.0f));
@@ -246,16 +263,11 @@ final class SogReader {
             importance[i] = SplatLoader.importance(opacity, sx, sy, sz);
         }
 
-        final int[] selected = SplatLoader.selectTop(importance, total, SplatLoader.MAX_SPLATS);
+        final int[] selected = SplatLoader.select(importance, rawPositions, total, SplatLoader.MAX_SPLATS);
         importance = null;
         final int count = selected.length;
 
-        final ImageData meansLImg = decodeWebp(entries, String.valueOf(meanFiles.get(0)), total);
-        final ImageData meansUImg = decodeWebp(entries, String.valueOf(meanFiles.get(1)), total);
         final ImageData quatsImg = decodeWebp(entries, String.valueOf(quatFiles.get(0)), total);
-
-        final byte[] mL = meansLImg.rgba;
-        final byte[] mU = meansUImg.rgba;
         final byte[] qRgba = quatsImg.rgba;
 
         int shDegree = 0;
@@ -295,12 +307,7 @@ final class SogReader {
             final int o4 = i * 4;
 
             for (int c = 0; c < 3; c++) {
-                final int u16 = (mL[o4 + c] & 0xFF) | ((mU[o4 + c] & 0xFF) << 8);
-                final float v = meanMins[c] + (meanMaxs[c] - meanMins[c]) * (u16 / 65535.0f);
-                final float pos = (float) Math.copySign(Math.exp(Math.abs(v)) - 1.0, v);
-                if (!Float.isFinite(pos)) throw new IOException("Non-finite position in SOG v1");
-                positions[n * 3 + c] = pos;
-
+                positions[n * 3 + c] = rawPositions[i * 3 + c];
                 scales[n * 3 + c] = (float) Math.exp(lerp(scaleMins[c], scaleMaxs[c], (sRgba[o4 + c] & 0xFF) / 255.0f));
                 final float fDc = lerp(sh0Mins[c], sh0Maxs[c], (c0Rgba[o4 + c] & 0xFF) / 255.0f);
                 colors[n * 3 + c] = 0.5f + SplatCloud.SH_C0 * fDc;

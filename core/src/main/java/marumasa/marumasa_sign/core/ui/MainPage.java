@@ -296,7 +296,7 @@ public final class MainPage extends Page {
                     info = Lang.get("ui.preview.model", model.model().triangleCount());
                 } else if (splat != null) {
                     image = splat.renderPreview(MODEL_PREVIEW_SIZE);
-                    info = Lang.get("ui.preview.model", splat.cloud().count * 2);
+                    info = Lang.get("ui.preview.splat", splat.cloud().count);
                 } else {
                     if (bytes != null) {
                         final DecodedImage decoded = ImageLoader.decode(bytes);
