@@ -25,7 +25,21 @@ public final class SplatLoader {
      * @param name   ファイル名か URL (拡張子の判定に使う)。わからなければ null
      */
     public static boolean isSplat(byte[] head, int length, String name) {
-        return ".splat".equals(extension(name)) && length >= 32;
+        if (head == null || length <= 0) return false;
+        final int limit = Math.min(length, head.length);
+        final String ext = extension(name);
+        if (PlyReader.isPly(head, limit)) return true;
+        if (SpzReader.isSpz(head, limit)) return true;
+        if (SogReader.isSog(head, limit, ext)) return true;
+        if (KsplatReader.isKsplat(head, limit, ext)) return true;
+        if (".splat".equals(ext) && limit >= 32) {
+            final ByteBuffer buf = ByteBuffer.wrap(head, 0, limit).order(ByteOrder.LITTLE_ENDIAN);
+            for (int i = 0; i < 6; i++) {
+                if (!Float.isFinite(buf.getFloat(i * 4))) return false;
+            }
+            return true;
+        }
+        return false;
     }
 
     /**
@@ -35,7 +49,27 @@ public final class SplatLoader {
      * @param name    ファイル名か URL (拡張子の判定に使う)。わからなければ null
      */
     public static SplatCloud load(byte[] content, String name) throws IOException {
-        if (".splat".equals(extension(name))) return loadSplat(content);
+        if (content == null || content.length == 0) throw new IOException("Empty splat data");
+        final String ext = extension(name);
+        try {
+            if (PlyReader.isPly(content, content.length) || ".ply".equals(ext)) {
+                return PlyReader.load(content);
+            }
+            if (SpzReader.isSpz(content, content.length) || ".spz".equals(ext)) {
+                return SpzReader.load(content);
+            }
+            if (SogReader.isSog(content, content.length, ext) || ".sog".equals(ext)) {
+                return SogReader.load(content);
+            }
+            if (".ksplat".equals(ext)) {
+                return KsplatReader.load(content);
+            }
+            if (".splat".equals(ext)) {
+                return loadSplat(content);
+            }
+        } catch (RuntimeException e) {
+            throw new IOException("Invalid splat data: " + e, e);
+        }
         throw new IOException("Not a Gaussian splatting file");
     }
 
@@ -129,8 +163,17 @@ public final class SplatLoader {
         final float[] importance = new float[total];
         for (int i = 0; i < total; i++) {
             final int o = i * 32;
-            importance[i] = importance((content[o + 27] & 0xFF) / 255f,
-                    buffer.getFloat(o + 12), buffer.getFloat(o + 16), buffer.getFloat(o + 20));
+            final float px = buffer.getFloat(o);
+            final float py = buffer.getFloat(o + 4);
+            final float pz = buffer.getFloat(o + 8);
+            final float sx = Math.abs(buffer.getFloat(o + 12));
+            final float sy = Math.abs(buffer.getFloat(o + 16));
+            final float sz = Math.abs(buffer.getFloat(o + 20));
+            if (!Float.isFinite(px) || !Float.isFinite(py) || !Float.isFinite(pz)
+                    || !Float.isFinite(sx) || !Float.isFinite(sy) || !Float.isFinite(sz)) {
+                throw new IOException("Invalid .splat values");
+            }
+            importance[i] = importance((content[o + 27] & 0xFF) / 255f, sx, sy, sz);
         }
         final int[] selected = selectTop(importance, total, MAX_SPLATS);
         final int count = selected.length;

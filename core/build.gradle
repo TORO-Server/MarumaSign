@@ -46,12 +46,12 @@ tasks.register('textureCheck', JavaExec) {
     args = providers.gradleProperty('textureArgs').getOrElse('').tokenize(' ')
 }
 
-// ガウシアンスプラッティングを PNG に描く。引数は -PsplatArgs="出力先 スプラットのファイル..." で渡す
+// ガウシアンスプラッティングを PNG に描く。引数は -PsplatPreviewArgs="出力先 スプラットのファイル..." で渡す
 tasks.register('splatPreview', JavaExec) {
     classpath = sourceSets.test.runtimeClasspath
     mainClass = 'marumasa.marumasa_sign.core.splat.SplatPreview'
     javaLauncher = javaToolchains.launcherFor(java.toolchain)
-    args = providers.gradleProperty('splatArgs').getOrElse('').tokenize(' ')
+    args = providers.gradleProperty('splatPreviewArgs').getOrElse('').tokenize(' ')
 }
 
 // ガウシアンスプラッティングの計算性能を測る
@@ -62,8 +62,13 @@ tasks.register('splatBenchmark', JavaExec) {
     args = providers.gradleProperty('splatBenchArgs').isPresent() ? providers.gradleProperty('splatBenchArgs').get().tokenize(' ') : []
 }
 
-test {
-    failOnNoDiscoveredTests = false
+// ガウシアンスプラッティングのデコーダの動作と安全性を確認する。引数は -PsplatArgs="ファイル..." で渡す
+tasks.register('splatCheck', JavaExec) {
+    classpath = sourceSets.test.runtimeClasspath
+    mainClass = 'marumasa.marumasa_sign.core.splat.SplatCheck'
+    javaLauncher = javaToolchains.launcherFor(java.toolchain)
+    maxHeapSize = '2g'
+    args = providers.gradleProperty('splatArgs').getOrElse('').tokenize(' ')
 }
 
 tasks.withType(JavaCompile).configureEach {
