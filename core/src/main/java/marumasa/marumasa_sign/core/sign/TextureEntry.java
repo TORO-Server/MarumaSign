@@ -1,11 +1,12 @@
 package marumasa.marumasa_sign.core.sign;
 
 import marumasa.marumasa_sign.core.gltf.GltfScene;
+import marumasa.marumasa_sign.core.splat.SplatScene;
 
 /**
  * URL ごとの画像テクスチャ。読み込み中・失敗の場合は代わりの画像を指す。
  * 動画や音声の場合は、再生中のフレームを映すテクスチャを指す。
- * 3D モデルの場合は、モデルと、その材質のテクスチャを持つ。
+ * 3D モデルやガウシアンスプラッティングの場合は、データとテクスチャを持つ。
  */
 public final class TextureEntry {
 
@@ -30,6 +31,8 @@ public final class TextureEntry {
     private boolean ownsTextures;
     // 3D モデル。画像なら null
     private GltfScene model;
+    // ガウシアンスプラッティング。画像や 3D モデルなら null
+    private SplatScene splat;
 
     TextureEntry(int state, int width, int height, Object texture) {
         set(state, width, height, new Object[]{texture}, new int[]{1}, 0, false);
@@ -50,12 +53,25 @@ public final class TextureEntry {
     // 3D モデルを表示する状態にする。textures はモデルのテクスチャと同じ並び
     void setModel(GltfScene model, Object[] textures) {
         this.model = model;
+        this.splat = null;
         set(LOADED, 1, 1, textures, new int[]{1}, 0, true);
     }
 
     // 3D モデル。画像なら null
     GltfScene model() {
         return model;
+    }
+
+    // ガウシアンスプラッティングを表示する状態にする。texture はガウス分布のテクスチャ
+    void setSplat(SplatScene splat, Object texture) {
+        this.splat = splat;
+        this.model = null;
+        set(LOADED, 1, 1, new Object[]{texture}, new int[]{1}, 0, true);
+    }
+
+    // ガウシアンスプラッティング。画像や 3D モデルなら null
+    SplatScene splat() {
+        return splat;
     }
 
     Object modelTexture(int index) {

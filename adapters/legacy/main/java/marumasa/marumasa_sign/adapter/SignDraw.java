@@ -35,7 +35,8 @@ final class SignDraw {
         final int metadata = sign.getBlockMetadata();
         final float yaw = wall ? wallYaw(metadata) : metadata * 22.5f;
         // x, y, z はカメラから見た位置なので、そのまま看板までの距離になる
-        final SignImage.Batch[] batches = image.batches(yaw, wall, Math.sqrt(x * x + y * y + z * z));
+        final SignImage.Batch[] batches = image.batches(yaw, wall, Math.sqrt(x * x + y * y + z * z),
+                (float) -x, (float) -y, (float) -z);
 
         GL11.glPushMatrix();
         GL11.glTranslated(x, y, z);

@@ -68,7 +68,8 @@ final class SignRendererBase extends BlockEntityRenderer<SignBlockEntity> {
         } else {
             return;
         }
-        final SignImage.Batch[] batches = image.batches(yaw, wall, Math.sqrt(x * x + y * y + z * z));
+        final SignImage.Batch[] batches = image.batches(yaw, wall, Math.sqrt(x * x + y * y + z * z),
+                (float) -x, (float) -y, (float) -z);
 
         GL11.glPushMatrix();
         GL11.glTranslated(x, y, z);

@@ -46,6 +46,25 @@ tasks.register('textureCheck', JavaExec) {
     args = providers.gradleProperty('textureArgs').getOrElse('').tokenize(' ')
 }
 
+// ガウシアンスプラッティングを PNG に描く。引数は -PsplatArgs="出力先 スプラットのファイル..." で渡す
+tasks.register('splatPreview', JavaExec) {
+    classpath = sourceSets.test.runtimeClasspath
+    mainClass = 'marumasa.marumasa_sign.core.splat.SplatPreview'
+    javaLauncher = javaToolchains.launcherFor(java.toolchain)
+    args = providers.gradleProperty('splatArgs').getOrElse('').tokenize(' ')
+}
+
+// ガウシアンスプラッティングの計算性能を測る
+tasks.register('splatBenchmark', JavaExec) {
+    classpath = sourceSets.test.runtimeClasspath
+    mainClass = 'marumasa.marumasa_sign.core.splat.SplatBenchmark'
+    javaLauncher = javaToolchains.launcherFor(java.toolchain)
+    args = providers.gradleProperty('splatBenchArgs').isPresent() ? providers.gradleProperty('splatBenchArgs').get().tokenize(' ') : []
+}
+
+test {
+    failOnNoDiscoveredTests = false
+}
 
 tasks.withType(JavaCompile).configureEach {
     // Minecraft に依存しないので JDK 8 の API だけに制限する

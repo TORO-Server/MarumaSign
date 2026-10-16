@@ -125,6 +125,7 @@ def combinations(libs):
 MEDIA = {
     "image": "test-image.png",
     "model": "test-model.glb",
+    "splat": "test-splat.splat",
     "video": "test-video.mp4",
 }
 

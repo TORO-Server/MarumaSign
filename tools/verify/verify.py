@@ -997,8 +997,10 @@ def run(args):
             if not args.baseline and item_stage == "request" and (result_dir / "item-request.txt").is_file():
                 # 看板の文字を持たせた看板アイテムを渡す。置いた看板と区別できるように、別の URL にする
                 item_image = next((image for image in images if not is_url(image)), REPO / "tools" / "verify" / "test-image.png")
-                host.files["item.png"] = item_image.read_bytes()
-                url = f"http://127.0.0.1:{host.port}/i/item.png"
+                item_ext = item_image.suffix or ".png"
+                item_name = f"item{item_ext}"
+                host.files[item_name] = item_image.read_bytes()
+                url = f"http://127.0.0.1:{host.port}/i/{item_name}"
                 text = url + "|0|0|0|1|1|0|0|0"
                 server.give_sign_item([text[i:i + 15] for i in range(0, 60, 15)])
                 time.sleep(1.0)
