@@ -14,15 +14,12 @@ public final class SplatLoader {
     // 読み込むガウス分布の数の上限。これより多いファイルは、目立つものから順にこの数だけ残す
     public static final int MAX_SPLATS = 150000;
 
-    // 目立つ度合いの計算に使う、表面積の指数 (既定値 0.5: 不透明度 × sqrt(表面積))
-    public static final float DEFAULT_AREA_EXPONENT = 0.5f;
-    static float areaExponent = DEFAULT_AREA_EXPONENT;
+    // 背景の遠い分布を切り落とす、中心からの距離の中央値に対する倍率
+    static final float DEFAULT_CROP_FACTOR = 4.0f;
 
-    // 背景の遠い分布を切り落とす、中心からの距離の中央値に対する倍率 (既定値 4)
-    public static final float DEFAULT_CROP_FACTOR = 4.0f;
+    // 以下の 2 つは SplatCheck が検査のあいだだけ変える。Mod の中では変えない
     static float cropFactor = DEFAULT_CROP_FACTOR;
-
-    // 切り落とし (外れ値の除去) を行うかどうか。SplatCheck の数値比較などで無効にする
+    // 切り落とし (外れ値の除去) を行うかどうか。数値の比較では無効にする
     static boolean cropEnabled = true;
 
     private SplatLoader() {
@@ -207,14 +204,12 @@ public final class SplatLoader {
         return selected;
     }
 
-    // 目立つ度合い。不透明度と、分布の広がり (おおよその表面積) のべき乗の積
+    // 目立つ度合い。不透明度と、分布の広がり (おおよその表面積) の平方根の積。
+    // 表面積そのものを使うと、巨大な背景の分布ばかりが選ばれる
     static float importance(float opacity, float sx, float sy, float sz) {
         final float area = sx * sy + sy * sz + sz * sx;
         if (area <= 0f || opacity <= 0f) return 0f;
-        if (areaExponent == 0.5f) {
-            return opacity * (float) Math.sqrt(area);
-        }
-        return opacity * (float) Math.pow(area, areaExponent);
+        return opacity * (float) Math.sqrt(area);
     }
 
     /**

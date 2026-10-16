@@ -54,29 +54,22 @@ tasks.register('splatPreview', JavaExec) {
     args = providers.gradleProperty('splatPreviewArgs').getOrElse('').tokenize(' ')
 }
 
-// ガウシアンスプラッティングの計算性能を測る
+// ガウシアンスプラッティングの並べ替えと頂点生成の時間を測る。引数は -PsplatBenchArgs="ファイル" で渡す
 tasks.register('splatBenchmark', JavaExec) {
     classpath = sourceSets.test.runtimeClasspath
     mainClass = 'marumasa.marumasa_sign.core.splat.SplatBenchmark'
     javaLauncher = javaToolchains.launcherFor(java.toolchain)
-    args = providers.gradleProperty('splatBenchArgs').isPresent() ? providers.gradleProperty('splatBenchArgs').get().tokenize(' ') : []
+    args = providers.gradleProperty('splatBenchArgs').getOrElse('').tokenize(' ')
 }
 
-// ガウシアンスプラッティングのデコーダの動作と安全性を確認する。引数は -PsplatArgs="ファイル..." で渡す
+// ガウシアンスプラッティングのデコーダの動作と安全性を確認する。
+// -PsplatArgs="テスト用データのフォルダ" を渡すと、実データでの検査と、ほかの実装との数値の比較も行う
 tasks.register('splatCheck', JavaExec) {
     classpath = sourceSets.test.runtimeClasspath
     mainClass = 'marumasa.marumasa_sign.core.splat.SplatCheck'
     javaLauncher = javaToolchains.launcherFor(java.toolchain)
     maxHeapSize = '2g'
     args = providers.gradleProperty('splatArgs').getOrElse('').tokenize(' ')
-}
-
-// ガウシアンスプラッティングの見た目改善の比較画像を生成する
-tasks.register('compareCrop', JavaExec) {
-    classpath = sourceSets.test.runtimeClasspath
-    mainClass = 'marumasa.marumasa_sign.core.splat.CompareCrop'
-    javaLauncher = javaToolchains.launcherFor(java.toolchain)
-    maxHeapSize = '2g'
 }
 
 tasks.withType(JavaCompile).configureEach {

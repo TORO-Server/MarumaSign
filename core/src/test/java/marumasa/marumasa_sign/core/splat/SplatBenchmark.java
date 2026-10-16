@@ -12,7 +12,8 @@ import java.util.Arrays;
 public final class SplatBenchmark {
 
     public static void main(String[] args) throws Exception {
-        final File file = new File(args.length > 0 ? args[0] : "D:\\Dev\\MarumaSign-wt\\splat-data\\nike.splat");
+        if (args.length == 0) throw new IllegalArgumentException("Usage: SplatBenchmark <splat file>");
+        final File file = new File(args[0]);
         System.out.println("Loading " + file.getAbsolutePath() + "...");
         final byte[] content = Files.readAllBytes(file.toPath());
         final SplatCloud cloud = SplatLoader.load(content, file.getName());

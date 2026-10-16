@@ -27,6 +27,8 @@ public final class SignImage {
         public volatile int revision;
         // 半透明の面かどうか。半透明の面は、奥行きを記録せずに描くと重なりが自然になる
         public boolean blend;
+        // 裏を向いた面も描くかどうか。ガウシアンスプラッティングの四角形はカメラの方を向けて作るので、裏面を省く必要がない
+        public boolean doubleSided;
     }
 
     // mesh() の 1 頂点あたりの要素数: x, y, z, u, v, nx, ny, nz

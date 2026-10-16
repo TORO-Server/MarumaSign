@@ -278,6 +278,7 @@ public final class SplatScene {
             this.batchA.vertices = new float[vertexCount * SignImage.Batch.STRIDE];
             this.batchA.colors = new int[vertexCount];
             this.batchA.blend = true;
+            this.batchA.doubleSided = true;
             fillUvs(this.batchA.vertices, splatCount);
             this.batchesA = new SignImage.Batch[]{this.batchA};
 
@@ -287,6 +288,7 @@ public final class SplatScene {
             this.batchB.vertices = new float[vertexCount * SignImage.Batch.STRIDE];
             this.batchB.colors = new int[vertexCount];
             this.batchB.blend = true;
+            this.batchB.doubleSided = true;
             fillUvs(this.batchB.vertices, splatCount);
             this.batchesB = new SignImage.Batch[]{this.batchB};
 
