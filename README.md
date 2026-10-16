@@ -164,6 +164,16 @@ Minecraft 1.14 以降向けの実装のうち、バージョンによって細�
 配布するファイルは `dist/build/libs` に出力されます。
 初回は対応するすべてのバージョンの Minecraft を取得するため、時間がかかります。
 
+時間のほとんどは、バージョンごとの Minecraft (と Forge / NeoForge) の準備です。CI では対象を組に分けて並べてビルドします
+([`.github/workflows/build.yml`](.github/workflows/build.yml))。同じことを手元で行うには、次のようにします。
+
+```bash
+# 対象を選んで、対象ごとの jar を build/prebuilt に集める (組の分け方は python tools/ci_groups.py 8 で見られる)
+./gradlew -PmarumaOnly=mc1_7_10,mc1_20_1 exportRemapped
+# 集めた jar から、Minecraft の準備をせずに配布するファイルを組み立てる
+./gradlew -PmarumaPrebuilt=$PWD/build/prebuilt :dist:assemble
+```
+
 ### 動作確認
 
 ```bash
