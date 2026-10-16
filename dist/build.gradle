@@ -173,6 +173,8 @@ def universalJar = tasks.register('universalJar', Jar) {
     // Minecraft 1.10.2 以前は言語ファイルの名前に大文字を使う
     from('src/main/resources/assets/marumasa_sign/lang') {
         include '*.lang'
+        // 地域のない言語コード (bar など) は古いバージョンにはないので、大文字にしたものは入れない
+        exclude { !it.name.contains('_') }
         into 'assets/marumasa_sign/lang'
         rename { String name ->
             def parts = name.replace('.lang', '').split('_')
@@ -230,6 +232,7 @@ targets.each { target ->
         }
         from('src/main/resources/assets/marumasa_sign/lang') {
             include '*.lang'
+            exclude { !it.name.contains('_') }
             into 'assets/marumasa_sign/lang'
             rename { String name ->
                 def parts = name.replace('.lang', '').split('_')
