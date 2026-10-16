@@ -35,10 +35,30 @@ subprojects {
     }
 }
 
+// 対象ごとの jar を別のビルドで作ってある場合の、その置き場所 (CI で対象を分けてビルドするときに使う)。
+// 指定すると、対象の Minecraft の準備をせずに、置いてある jar から配布するファイルを組み立てる
+ext.marumaPrebuilt = providers.gradleProperty('marumaPrebuilt').map { file(it) }.orNull
+
 // targets.json の各項目に共通のビルド設定を適用する
-marumaTargets.each { target ->
-    project(":targets:${target.name}") {
-        ext.spec = target
-        apply from: rootProject.file('gradle/target.gradle')
+if (marumaPrebuilt == null) {
+    marumaTargets.each { target ->
+        project(":targets:${target.name}") {
+            ext.spec = target
+            apply from: rootProject.file('gradle/target.gradle')
+        }
+    }
+}
+
+// 対象ごとに、ローダー別に名前を付け替えた jar を 1 か所に集める (別のビルドで marumaPrebuilt として使う)。
+// 置き場所は build/prebuilt/<対象>/<ローダー>.jar
+tasks.register('exportRemapped', Sync) {
+    into layout.buildDirectory.dir('prebuilt')
+    marumaTargets.each { target ->
+        target.loaders.each { loaderName, loaderSpec ->
+            from(project(":targets:${target.name}").tasks.named("remap${loaderName.capitalize()}Jar").flatMap { it.archiveFile }) {
+                into target.name
+                rename { "${loaderName}.jar" }
+            }
+        }
     }
 }
