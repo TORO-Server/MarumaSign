@@ -58,9 +58,18 @@ public final class MediaCheck {
         int frames = 0;
         int saved = 0;
         final long begin = System.nanoTime();
+        // 5 秒ごとのフレーム数 (ライブ配信が途切れてからつなぎ直せたかを見る)
+        int periodFrames = 0;
+        long periodEnd = begin + 5_000_000_000L;
         while (System.nanoTime() - begin < seconds * 1_000_000_000L) {
+            if (System.nanoTime() >= periodEnd) {
+                System.out.println(String.format("%.0fs: %d frames in the last 5s", (periodEnd - begin) / 1e9, periodFrames));
+                periodFrames = 0;
+                periodEnd += 5_000_000_000L;
+            }
             if (video && player.pollFrame(pixels)) {
                 frames++;
+                periodFrames++;
                 final double elapsed = (System.nanoTime() - begin) / 1e9;
                 if (saved < 3 && elapsed >= saved * 1.5) {
                     final BufferedImage image = new BufferedImage(size[0], size[1], BufferedImage.TYPE_INT_ARGB);

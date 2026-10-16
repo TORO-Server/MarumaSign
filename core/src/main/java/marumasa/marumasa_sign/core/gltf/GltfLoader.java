@@ -1,5 +1,12 @@
 package marumasa.marumasa_sign.core.gltf;
 
+import marumasa.marumasa_sign.core.gltf.draco.DataType;
+import marumasa.marumasa_sign.core.gltf.draco.DracoDecoder;
+import marumasa.marumasa_sign.core.gltf.draco.DracoMesh;
+import marumasa.marumasa_sign.core.gltf.draco.IntList;
+import marumasa.marumasa_sign.core.gltf.draco.PointAttribute;
+import marumasa.marumasa_sign.core.gltf.meshopt.MeshoptDecoder;
+import marumasa.marumasa_sign.core.texture.TextureDecoder;
 import marumasa.marumasa_sign.core.util.Json;
 
 import javax.imageio.ImageIO;
@@ -12,10 +19,13 @@ import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Base64;
+import java.util.HashSet;
 import java.util.IdentityHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 /**
  * glTF 2.0 (.gltf / .glb) を読み込む。
@@ -52,8 +62,37 @@ public final class GltfLoader {
 
     private static final float INVERSE_GAMMA = 1f / 2.2f;
 
-    // 対応していない圧縮形式。これが必須のファイルは形を読み取れない
-    private static final String[] UNSUPPORTED = {"KHR_draco_mesh_compression", "EXT_meshopt_compression"};
+    // 対応している拡張。未知の必須拡張は拒絶する
+    private static final Set<String> SUPPORTED_EXTENSIONS = new HashSet<String>(Arrays.asList(
+            "KHR_draco_mesh_compression",
+            "EXT_meshopt_compression",
+            "KHR_meshopt_compression",
+            "KHR_mesh_quantization",
+            "EXT_mesh_gpu_instancing",
+            "KHR_materials_pbrSpecularGlossiness",
+            "KHR_materials_unlit",
+            "KHR_materials_emissive_strength",
+            "KHR_materials_clearcoat",
+            "KHR_materials_sheen",
+            "KHR_materials_specular",
+            "KHR_materials_ior",
+            "KHR_materials_transmission",
+            "KHR_materials_volume",
+            "KHR_materials_iridescence",
+            "KHR_materials_anisotropy",
+            "KHR_materials_dispersion",
+            "KHR_materials_diffuse_transmission",
+            "KHR_materials_variants",
+            "KHR_lights_punctual",
+            "EXT_lights_image_based",
+            "KHR_animation_pointer",
+            "KHR_xmp_json_ld",
+            "KHR_texture_transform",
+            "KHR_texture_basisu",
+            "EXT_texture_webp",
+            "EXT_texture_avif",
+            "MSFT_texture_dds"
+    ));
 
     // 先頭のバイト列が GLB かどうか
     public static boolean isGlb(byte[] head, int length) {
@@ -130,6 +169,7 @@ public final class GltfLoader {
     private List<Object> imageList;
     private Pixels[] images;
     private boolean[] imageTried;
+    private byte[][] decompressedViews;
 
     private GltfLoader(Resources resources) {
         this.resources = resources;
@@ -146,12 +186,13 @@ public final class GltfLoader {
         if (!root.containsKey("asset")) throw new IOException("Not a glTF file");
 
         for (Object required : Json.array(root, "extensionsRequired")) {
-            for (String name : UNSUPPORTED) {
-                if (name.equals(required)) throw new IOException("Unsupported glTF extension: " + name);
+            if (required instanceof String && !SUPPORTED_EXTENSIONS.contains((String) required)) {
+                throw new IOException("Unsupported glTF extension: " + required);
             }
         }
 
         bufferViews = Json.array(root, "bufferViews");
+        decompressedViews = new byte[bufferViews.size()][];
         accessors = Json.array(root, "accessors");
         textureList = Json.array(root, "textures");
         samplerList = Json.array(root, "samplers");
@@ -169,6 +210,11 @@ public final class GltfLoader {
             drafts[i] = draft(i < materialList.size() ? Json.object(materialList.get(i)) : Json.object(null));
         }
 
+        model.materials = new GltfModel.Material[drafts.length];
+        for (int i = 0; i < drafts.length; i++) {
+            model.materials[i] = drafts[i].material;
+        }
+
         final List<Object> meshList = Json.array(root, "meshes");
         model.meshes = new GltfModel.Mesh[meshList.size()];
         for (int i = 0; i < model.meshes.length; i++) {
@@ -176,16 +222,15 @@ public final class GltfLoader {
         }
 
         readNodes(model);
+        readLights(model);
         readSkins(model);
         readAnimations(model);
 
         // テクスチャ。0 番は白 1 ピクセル
         final List<GltfModel.Texture> textures = new ArrayList<GltfModel.Texture>();
         textures.add(new GltfModel.Texture(1, 1, new int[]{0xFFFFFFFF}));
-        model.materials = new GltfModel.Material[drafts.length];
         for (int i = 0; i < drafts.length; i++) {
             final Draft draft = drafts[i];
-            model.materials[i] = draft.material;
             if (draft.primitives.isEmpty()) continue;
             if (draft.mapping == null) {
                 draft.material.texture = 0;
@@ -195,6 +240,12 @@ public final class GltfLoader {
             final int[] tilesV = fit(draft, 1, draft.mapping.wrapT, draft.height);
             if (draft.bake != null && tilesU[0] == 1 && tilesV[0] == 1) {
                 final List<GltfBaker.Surface> surfaces = surfaces(model, draft);
+                if (surfaces != null && (model.lights.length > 0 || model.sphericalHarmonics != null)) {
+                    final float[][] globals = computeInitialGlobals(model);
+                    draft.bake.lights = collectLights(model, globals);
+                    draft.bake.lightCount = draft.bake.lights != null ? draft.bake.lights.length : 0;
+                    draft.bake.sphericalHarmonics = model.sphericalHarmonics;
+                }
                 int width = draft.bakeWidth, height = draft.bakeHeight;
                 GltfBaker.Result baked = surfaces == null ? null : GltfBaker.bake(draft.bake, surfaces, width, height);
                 // 層を並べると大きくなりすぎる場合は、細かさを落としてやり直す
@@ -347,16 +398,80 @@ public final class GltfLoader {
         }
     }
 
+    // EXT_meshopt_compression / KHR_meshopt_compression の展開バッファを取得する
+    private byte[] getDecompressedView(int viewIndex) throws IOException {
+        if (viewIndex < 0 || viewIndex >= bufferViews.size()) return null;
+        if (decompressedViews[viewIndex] != null) return decompressedViews[viewIndex];
+        final Map<String, Object> view = Json.object(bufferViews.get(viewIndex));
+        final Map<String, Object> extensions = Json.object(view, "extensions");
+        Map<String, Object> meshopt = Json.object(extensions, "EXT_meshopt_compression");
+        if (meshopt.isEmpty()) meshopt = Json.object(extensions, "KHR_meshopt_compression");
+        if (meshopt.isEmpty()) return null;
+
+        final int bufferIndex = Json.integer(meshopt, "buffer", 0);
+        if (bufferIndex < 0 || bufferIndex >= buffers.length) {
+            throw new IOException("Invalid meshopt buffer index: " + bufferIndex);
+        }
+        final byte[] sourceBuffer = buffers[bufferIndex];
+        final int byteOffset = Json.integer(meshopt, "byteOffset", 0);
+        final int byteLength = Json.integer(meshopt, "byteLength", 0);
+        final int byteStride = Json.integer(meshopt, "byteStride", 0);
+        final int count = Json.integer(meshopt, "count", 0);
+        final String mode = Json.string(meshopt, "mode", "ATTRIBUTES");
+        final String filter = Json.string(meshopt, "filter", "NONE");
+
+        if (byteStride <= 0 || count < 0) {
+            throw new IOException("Invalid meshopt parameters: stride=" + byteStride + ", count=" + count);
+        }
+        final long totalBytes = (long) count * byteStride;
+        if (totalBytes > 1 << 28) {
+            throw new IOException("Meshopt decompressed size exceeds safety limit: " + totalBytes);
+        }
+        final byte[] decompressed = new byte[(int) totalBytes];
+
+        if ("ATTRIBUTES".equals(mode)) {
+            MeshoptDecoder.decodeVertexBuffer(decompressed, 0, count, byteStride, sourceBuffer, byteOffset, byteLength);
+        } else if ("TRIANGLES".equals(mode)) {
+            MeshoptDecoder.decodeIndexBuffer(decompressed, 0, count, byteStride, sourceBuffer, byteOffset, byteLength);
+        } else if ("INDICES".equals(mode)) {
+            MeshoptDecoder.decodeIndexSequence(decompressed, 0, count, byteStride, sourceBuffer, byteOffset, byteLength);
+        } else {
+            throw new IOException("Unsupported meshopt compression mode: " + mode);
+        }
+
+        if ("OCTAHEDRAL".equals(filter)) {
+            MeshoptDecoder.decodeFilterOct(decompressed, 0, count, byteStride);
+        } else if ("QUATERNION".equals(filter)) {
+            MeshoptDecoder.decodeFilterQuat(decompressed, 0, count, byteStride);
+        } else if ("EXPONENTIAL".equals(filter)) {
+            MeshoptDecoder.decodeFilterExp(decompressed, 0, count, byteStride);
+        } else if ("COLOR".equals(filter)) {
+            MeshoptDecoder.decodeFilterColor(decompressed, 0, count, byteStride);
+        } else if (!"NONE".equals(filter) && filter != null) {
+            throw new IOException("Unsupported meshopt filter: " + filter);
+        }
+
+        decompressedViews[viewIndex] = decompressed;
+        return decompressed;
+    }
+
     // バッファビューから count 個の要素を読んで out に入れる
     private void readView(int viewIndex, int byteOffset, int componentType, boolean normalized,
                           int components, int count, double[] out) throws IOException {
         final Map<String, Object> view = Json.object(bufferViews.get(viewIndex));
-        if (Json.object(view, "extensions").containsKey("EXT_meshopt_compression")) {
-            throw new IOException("Unsupported glTF extension: EXT_meshopt_compression");
+        final byte[] decomp = getDecompressedView(viewIndex);
+        final byte[] data;
+        final int viewOffset;
+        final int viewLength;
+        if (decomp != null) {
+            data = decomp;
+            viewOffset = 0;
+            viewLength = decomp.length;
+        } else {
+            data = buffers[Json.integer(view, "buffer", 0)];
+            viewOffset = Json.integer(view, "byteOffset", 0);
+            viewLength = Json.integer(view, "byteLength", 0);
         }
-        final byte[] data = buffers[Json.integer(view, "buffer", 0)];
-        final int viewOffset = Json.integer(view, "byteOffset", 0);
-        final int viewLength = Json.integer(view, "byteLength", 0);
         final int size = componentSize(componentType);
         final int elementSize = size * components;
         int stride = Json.integer(view, "byteStride", 0);
@@ -394,13 +509,15 @@ public final class GltfLoader {
 
         final double[] out;
         if (accessor.containsKey("bufferView")) {
-            // 配列を確保する前に、実際のデータの量で要素数を確かめる
-            final Map<String, Object> view = Json.object(bufferViews.get(Json.integer(accessor, "bufferView", 0)));
-            if ((long) count * components * componentSize(componentType) > Json.integer(view, "byteLength", 0)) {
+            final int viewIndex = Json.integer(accessor, "bufferView", 0);
+            final byte[] decomp = getDecompressedView(viewIndex);
+            final Map<String, Object> view = Json.object(bufferViews.get(viewIndex));
+            final int viewLength = decomp != null ? decomp.length : Json.integer(view, "byteLength", 0);
+            if ((long) count * components * componentSize(componentType) > viewLength) {
                 throw new IOException("Accessor is out of range");
             }
             out = new double[count * components];
-            readView(Json.integer(accessor, "bufferView", 0), Json.integer(accessor, "byteOffset", 0),
+            readView(viewIndex, Json.integer(accessor, "byteOffset", 0),
                     componentType, normalized, components, count, out);
         } else {
             if ((long) count * components > MAX_EMPTY_ACCESSOR) throw new IOException("Accessor is too large");
@@ -468,15 +585,22 @@ public final class GltfLoader {
             if (uri != null) {
                 data = resource(uri);
             } else {
-                final Map<String, Object> view = Json.object(bufferViews.get(Json.integer(json, "bufferView", -1)));
-                final byte[] buffer = buffers[Json.integer(view, "buffer", 0)];
-                final int offset = Json.integer(view, "byteOffset", 0);
-                final int length = Json.integer(view, "byteLength", 0);
-                if (offset < 0 || length < 0 || (long) offset + length > buffer.length) return null;
-                data = new byte[length];
-                System.arraycopy(buffer, offset, data, 0, length);
+                final int viewIndex = Json.integer(json, "bufferView", -1);
+                final byte[] decomp = getDecompressedView(viewIndex);
+                if (decomp != null) {
+                    data = decomp;
+                } else {
+                    final Map<String, Object> view = Json.object(bufferViews.get(viewIndex));
+                    final byte[] buffer = buffers[Json.integer(view, "buffer", 0)];
+                    final int offset = Json.integer(view, "byteOffset", 0);
+                    final int length = Json.integer(view, "byteLength", 0);
+                    if (offset < 0 || length < 0 || (long) offset + length > buffer.length) return null;
+                    data = new byte[length];
+                    System.arraycopy(buffer, offset, data, 0, length);
+                }
             }
-            BufferedImage decoded = ImageIO.read(new ByteArrayInputStream(data));
+            final String mimeType = Json.string(json, "mimeType", null);
+            BufferedImage decoded = TextureDecoder.decode(data, mimeType);
             if (decoded == null) return null;
 
             int width = decoded.getWidth();
@@ -506,16 +630,47 @@ public final class GltfLoader {
     private Pixels textureImage(TexRef ref) {
         if (ref == null || ref.texture < 0 || ref.texture >= textureList.size()) return null;
         final Map<String, Object> texture = Json.object(textureList.get(ref.texture));
-        int source = Json.integer(texture, "source", -1);
-        if (source < 0) {
-            // 別の形式の画像だけが指定されている場合
-            final Map<String, Object> extensions = Json.object(texture, "extensions");
-            for (Object extension : extensions.values()) {
-                source = Json.integer(Json.object(extension), "source", -1);
-                if (source >= 0) break;
+        final Map<String, Object> extensions = Json.object(texture, "extensions");
+
+        // 優先度順に試行: KHR_texture_basisu -> EXT_texture_webp -> MSFT_texture_dds -> EXT_texture_avif -> 他の拡張 -> core source
+        final String[] preferredExtensions = {
+                "KHR_texture_basisu",
+                "EXT_texture_webp",
+                "MSFT_texture_dds",
+                "EXT_texture_avif"
+        };
+
+        for (String extName : preferredExtensions) {
+            if (extensions.containsKey(extName)) {
+                final int extSource = Json.integer(Json.object(extensions, extName), "source", -1);
+                if (extSource >= 0) {
+                    final Pixels pix = image(extSource);
+                    if (pix != null) return pix;
+                }
             }
         }
-        return image(source);
+
+        for (Map.Entry<String, Object> entry : extensions.entrySet()) {
+            boolean alreadyTried = false;
+            for (String extName : preferredExtensions) {
+                if (extName.equals(entry.getKey())) {
+                    alreadyTried = true;
+                    break;
+                }
+            }
+            if (alreadyTried) continue;
+            final int extSource = Json.integer(Json.object(entry.getValue()), "source", -1);
+            if (extSource >= 0) {
+                final Pixels pix = image(extSource);
+                if (pix != null) return pix;
+            }
+        }
+
+        final int coreSource = Json.integer(texture, "source", -1);
+        if (coreSource >= 0) {
+            return image(coreSource);
+        }
+        return null;
     }
 
     private TexRef texRef(Map<String, Object> parent, String name) {
@@ -560,10 +715,119 @@ public final class GltfLoader {
         material.roughness = Json.number(pbr, "roughnessFactor", 1);
         final float metallicFactor = material.metallic, roughnessFactor = material.roughness;
 
+        // KHR_materials_ior
+        final Map<String, Object> iorExt = Json.object(extensions, "KHR_materials_ior");
+        final float ior = Json.number(iorExt, "ior", 1.5f);
+        float f0Dielectric = (ior - 1f) / (ior + 1f);
+        f0Dielectric = f0Dielectric * f0Dielectric;
+        final float[] f0 = {f0Dielectric, f0Dielectric, f0Dielectric};
+
+        // KHR_materials_specular
+        final Map<String, Object> specExt = Json.object(extensions, "KHR_materials_specular");
+        final float specularFactor = Json.number(specExt, "specularFactor", 1f);
+        final float[] specularColorFactor = Json.numbers(specExt, "specularColorFactor", new float[]{1, 1, 1});
+        final TexRef specularRef = texRef(specExt, "specularTexture");
+        final TexRef specularColorRef = texRef(specExt, "specularColorTexture");
+        final Pixels specularImage = textureImage(specularRef);
+        final Pixels specularColorImage = textureImage(specularColorRef);
+
+        // KHR_materials_pbrSpecularGlossiness
+        final Map<String, Object> glossiness = Json.object(extensions, "KHR_materials_pbrSpecularGlossiness");
+        final boolean isSpecGloss = !glossiness.isEmpty();
+        final TexRef specGlossRef = isSpecGloss ? texRef(glossiness, "specularGlossinessTexture") : null;
+        final Pixels specGlossImage = textureImage(specGlossRef);
+        final float[] sgSpecularFactor = Json.numbers(glossiness, "specularFactor", new float[]{1, 1, 1});
+        final float sgGlossinessFactor = Json.number(glossiness, "glossinessFactor", 1f);
+        if (isSpecGloss) {
+            baseFactor = Json.numbers(glossiness, "diffuseFactor", new float[]{1, 1, 1, 1});
+            baseRef = texRef(glossiness, "diffuseTexture");
+            material.metallic = 0;
+            material.roughness = Math.max(0.04f, 1f - sgGlossinessFactor);
+            f0[0] = sgSpecularFactor[0];
+            f0[1] = sgSpecularFactor[1];
+            f0[2] = sgSpecularFactor[2];
+        }
+
+        // KHR_materials_clearcoat
+        final Map<String, Object> ccExt = Json.object(extensions, "KHR_materials_clearcoat");
+        final float clearcoatFactor = Json.number(ccExt, "clearcoatFactor", 0f);
+        final float clearcoatRoughnessFactor = Json.number(ccExt, "clearcoatRoughnessFactor", 0f);
+        final TexRef clearcoatRef = texRef(ccExt, "clearcoatTexture");
+        final TexRef clearcoatRoughnessRef = texRef(ccExt, "clearcoatRoughnessTexture");
+        final TexRef clearcoatNormalRef = texRef(ccExt, "clearcoatNormalTexture");
+        final float clearcoatNormalScale = Json.number(Json.object(ccExt, "clearcoatNormalTexture"), "scale", 1f);
+        final Pixels clearcoatImage = textureImage(clearcoatRef);
+        final Pixels clearcoatRoughnessImage = textureImage(clearcoatRoughnessRef);
+        final Pixels clearcoatNormalImage = textureImage(clearcoatNormalRef);
+        material.clearcoat = clearcoatFactor;
+        material.clearcoatRoughness = clearcoatRoughnessFactor;
+
+        // KHR_materials_sheen
+        final Map<String, Object> sheenExt = Json.object(extensions, "KHR_materials_sheen");
+        final float[] sheenColorFactor = Json.numbers(sheenExt, "sheenColorFactor", new float[]{0, 0, 0});
+        final float sheenRoughnessFactor = Json.number(sheenExt, "sheenRoughnessFactor", 0f);
+        final TexRef sheenColorRef = texRef(sheenExt, "sheenColorTexture");
+        final TexRef sheenRoughnessRef = texRef(sheenExt, "sheenRoughnessTexture");
+        final Pixels sheenColorImage = textureImage(sheenColorRef);
+        final Pixels sheenRoughnessImage = textureImage(sheenRoughnessRef);
+        System.arraycopy(sheenColorFactor, 0, material.sheen, 0, 3);
+        material.sheenRoughness = sheenRoughnessFactor;
+
+        // KHR_materials_iridescence
+        final Map<String, Object> iridExt = Json.object(extensions, "KHR_materials_iridescence");
+        final float iridescenceFactor = Json.number(iridExt, "iridescenceFactor", 0f);
+        final float iridescenceIor = Json.number(iridExt, "iridescenceIor", 1.3f);
+        final float iridescenceThicknessMin = Json.number(iridExt, "iridescenceThicknessMinimum", 100f);
+        final float iridescenceThicknessMax = Json.number(iridExt, "iridescenceThicknessMaximum", 400f);
+        final TexRef iridRef = texRef(iridExt, "iridescenceTexture");
+        final TexRef iridThickRef = texRef(iridExt, "iridescenceThicknessTexture");
+        final Pixels iridImage = textureImage(iridRef);
+        final Pixels iridThickImage = textureImage(iridThickRef);
+        material.iridescence = iridescenceFactor;
+        material.iridescenceIor = iridescenceIor;
+        material.iridescenceThickness = iridescenceThicknessMax;
+
+        // KHR_materials_anisotropy
+        final Map<String, Object> anisoExt = Json.object(extensions, "KHR_materials_anisotropy");
+        final float anisoStrength = Json.number(anisoExt, "anisotropyStrength", 0f);
+        final float anisoRotation = Json.number(anisoExt, "anisotropyRotation", 0f);
+        final TexRef anisoRef = texRef(anisoExt, "anisotropyTexture");
+        final Pixels anisoImage = textureImage(anisoRef);
+        material.anisotropy = anisoStrength;
+
+        // KHR_materials_transmission & KHR_materials_volume
+        final Map<String, Object> transExt = Json.object(extensions, "KHR_materials_transmission");
+        final float transmissionFactor = Json.number(transExt, "transmissionFactor", 0f);
+        final TexRef transRef = texRef(transExt, "transmissionTexture");
+        final Pixels transImage = textureImage(transRef);
+        material.transmission = transmissionFactor;
+
+        final Map<String, Object> volExt = Json.object(extensions, "KHR_materials_volume");
+        final float thicknessFactor = Json.number(volExt, "thicknessFactor", 0f);
+        final float attenuationDistance = Json.number(volExt, "attenuationDistance", Float.POSITIVE_INFINITY);
+        final float[] attenuationColor = Json.numbers(volExt, "attenuationColor", new float[]{1, 1, 1});
+        final TexRef thickRef = texRef(volExt, "thicknessTexture");
+        final Pixels thickImage = textureImage(thickRef);
+        material.thickness = thicknessFactor;
+        material.attenuationDistance = attenuationDistance;
+        System.arraycopy(attenuationColor, 0, material.attenuationColor, 0, 3);
+
+        // KHR_materials_diffuse_transmission
+        final Map<String, Object> dtExt = Json.object(extensions, "KHR_materials_diffuse_transmission");
+        final float dtFactor = Json.number(dtExt, "diffuseTransmissionFactor", 0f);
+        final float[] dtColor = Json.numbers(dtExt, "diffuseTransmissionColorFactor", new float[]{1, 1, 1});
+        final TexRef dtRef = texRef(dtExt, "diffuseTransmissionTexture");
+        final TexRef dtColorRef = texRef(dtExt, "diffuseTransmissionColorTexture");
+        final Pixels dtImage = textureImage(dtRef);
+        final Pixels dtColorImage = textureImage(dtColorRef);
+        material.diffuseTransmission[0] = dtColor[0] * dtFactor;
+        material.diffuseTransmission[1] = dtColor[1] * dtFactor;
+        material.diffuseTransmission[2] = dtColor[2] * dtFactor;
+
         // テクスチャで指定されている金属らしさと粗さは、焼き込まない場合、平均を全体の値として使う
         final TexRef metallicRoughnessRef = texRef(pbr, "metallicRoughnessTexture");
         final Pixels metallicRoughness = textureImage(metallicRoughnessRef);
-        if (metallicRoughness != null) {
+        if (metallicRoughness != null && !isSpecGloss) {
             long green = 0, blue = 0;
             int samples = 0;
             final int step = Math.max(1, metallicRoughness.argb.length / 4096);
@@ -576,18 +840,12 @@ public final class GltfLoader {
             material.metallic *= blue / (255f * samples);
         }
 
-        // 古い形式の材質
-        final Map<String, Object> glossiness = Json.object(extensions, "KHR_materials_pbrSpecularGlossiness");
-        if (!glossiness.isEmpty()) {
-            baseFactor = Json.numbers(glossiness, "diffuseFactor", new float[]{1, 1, 1, 1});
-            baseRef = texRef(glossiness, "diffuseTexture");
-            material.metallic = 0;
-            material.roughness = 1 - Json.number(glossiness, "glossinessFactor", 1);
-        }
-
         final String alphaMode = Json.string(json, "alphaMode", "OPAQUE");
         material.alphaMode = "BLEND".equals(alphaMode) ? GltfModel.ALPHA_BLEND
                 : "MASK".equals(alphaMode) ? GltfModel.ALPHA_MASK : GltfModel.ALPHA_OPAQUE;
+        if (transmissionFactor > 0 || transImage != null) {
+            material.alphaMode = GltfModel.ALPHA_BLEND;
+        }
         final float alphaCutoff = Json.number(json, "alphaCutoff", 0.5f);
         material.doubleSided = Json.bool(json, "doubleSided", false);
         material.unlit = extensions.containsKey("KHR_materials_unlit");
@@ -603,35 +861,69 @@ public final class GltfLoader {
 
         final float[] base = {gamma(baseFactor[0]), gamma(baseFactor[1]), gamma(baseFactor[2]),
                 Math.max(0, Math.min(1, baseFactor[3]))};
+        // 焼き込まない場合の、厚みのある透過の材質の色 (焼き込む場合はピクセルごとに GltfBaker で計算する)
+        final float[] volumeTint = {1, 1, 1};
+        if (transmissionFactor > 0) {
+            // 厚みのテクスチャがあれば、その平均 (G) を全体の厚みとして使う
+            float averageThickness = thicknessFactor;
+            if (thickImage != null && thickImage.argb.length > 0) {
+                long green = 0;
+                int samples = 0;
+                final int step = Math.max(1, thickImage.argb.length / 4096);
+                for (int i = 0; i < thickImage.argb.length; i += step) {
+                    green += (thickImage.argb[i] >> 8) & 0xFF;
+                    samples++;
+                }
+                averageThickness *= green / (255f * samples);
+            }
+            for (int i = 0; i < 3; i++) {
+                volumeTint[i] = gamma(GltfLight.volumeTint(attenuationColor[i], averageThickness, attenuationDistance));
+            }
+        }
 
         final Pixels baseImage = textureImage(baseRef);
         final Pixels emissiveImage = textureImage(emissiveRef);
         final Pixels occlusionImage = textureImage(occlusionRef);
         final TexRef normalRef = material.unlit ? null : texRef(json, "normalTexture");
         final Pixels normalImage = textureImage(normalRef);
-        final TexRef roughnessRef = material.unlit || !glossiness.isEmpty() ? null : metallicRoughnessRef;
+        final TexRef roughnessRef = material.unlit || isSpecGloss ? null : metallicRoughnessRef;
         final Pixels roughnessImage = roughnessRef == null ? null : metallicRoughness;
 
         // テクスチャ座標は、色のテクスチャのものを使う。なければ、ほかに使っているテクスチャのもの
         final TexRef mapping = baseImage != null ? baseRef : emissiveImage != null ? emissiveRef
                 : occlusionImage != null ? occlusionRef : normalImage != null ? normalRef
-                : roughnessImage != null ? roughnessRef : null;
+                : roughnessImage != null ? roughnessRef : specGlossImage != null ? specGlossRef
+                : clearcoatImage != null ? clearcoatRef : sheenColorImage != null ? sheenColorRef
+                : transImage != null ? transRef : dtImage != null ? dtRef : null;
+
+        System.arraycopy(f0, 0, material.f0, 0, 3);
+        if (mapping != null) {
+            material.texOffsetX = mapping.offsetX;
+            material.texOffsetY = mapping.offsetY;
+            material.texScaleX = mapping.scaleX;
+            material.texScaleY = mapping.scaleY;
+            material.texRotation = mapping.rotation;
+        }
+
         if (mapping == null) {
             // テクスチャがない材質は、頂点の色だけで表す
             float alpha = base[3];
+            if (transmissionFactor > 0) alpha = GltfLight.transmittedAlpha(alpha, transmissionFactor);
             if (material.alphaMode == GltfModel.ALPHA_OPAQUE) alpha = 1;
             else if (material.alphaMode == GltfModel.ALPHA_MASK) alpha = alpha >= alphaCutoff ? 1 : 0;
-            material.color[0] = base[0];
-            material.color[1] = base[1];
-            material.color[2] = base[2];
+            material.color[0] = base[0] * volumeTint[0];
+            material.color[1] = base[1] * volumeTint[1];
+            material.color[2] = base[2] * volumeTint[2];
             material.color[3] = alpha;
-            // 発光のテクスチャが読めなかった場合は、全体が光ってしまわないように無視する
             if (glows && emissiveRef == null) System.arraycopy(emissive, 0, material.emissive, 0, 3);
             return draft;
         }
 
         final Pixels size = baseImage != null ? baseImage : emissiveImage != null ? emissiveImage
-                : occlusionImage != null ? occlusionImage : normalImage != null ? normalImage : roughnessImage;
+                : occlusionImage != null ? occlusionImage : normalImage != null ? normalImage
+                : roughnessImage != null ? roughnessImage : specGlossImage != null ? specGlossImage
+                : clearcoatImage != null ? clearcoatImage : sheenColorImage != null ? sheenColorImage
+                : transImage != null ? transImage : dtImage;
         final Pixels emissiveMap = emissiveImage != null && emissiveRef.sameMapping(mapping) ? emissiveImage : null;
         final Pixels occlusionMap = occlusionImage != null && occlusionRef.sameMapping(mapping) ? occlusionImage : null;
         final boolean constantGlow = glows && emissiveRef == null;
@@ -665,6 +957,10 @@ public final class GltfLoader {
                     b += emissive[2];
                 }
 
+                if (transmissionFactor > 0) a = GltfLight.transmittedAlpha(a, transmissionFactor);
+                r *= volumeTint[0];
+                g *= volumeTint[1];
+                b *= volumeTint[2];
                 if (material.alphaMode == GltfModel.ALPHA_OPAQUE) a = 1;
                 else if (material.alphaMode == GltfModel.ALPHA_MASK) a = a >= alphaCutoff ? 1 : 0;
 
@@ -676,10 +972,17 @@ public final class GltfLoader {
         draft.height = height;
         draft.pixels = pixels;
 
-        // ピクセル単位の計算が必要な表現があれば、あとで陰影ごとテクスチャに焼き込む。
-        // 焼き込みでは、別のテクスチャ座標を使っているテクスチャも扱える
+        // ピクセル単位の計算が必要な表現があれば、あとで陰影ごとテクスチャに焼き込む
         final boolean detailed = normalImage != null || roughnessImage != null || emissiveImage != null
-                || (occlusionImage != null && occlusionMap == null);
+                || (occlusionImage != null && occlusionMap == null)
+                || isSpecGloss || specularImage != null || specularColorImage != null
+                || clearcoatFactor > 0 || clearcoatImage != null || clearcoatRoughnessImage != null || clearcoatNormalImage != null
+                || sheenColorFactor[0] > 0 || sheenColorFactor[1] > 0 || sheenColorFactor[2] > 0 || sheenColorImage != null || sheenRoughnessImage != null
+                || iridescenceFactor > 0 || iridImage != null || iridThickImage != null
+                || Math.abs(anisoStrength) > 0.01f || anisoImage != null
+                || transmissionFactor > 0 || transImage != null || thicknessFactor > 0 || thickImage != null
+                || dtFactor > 0 || dtImage != null || dtColorImage != null;
+
         if (!material.unlit && detailed) {
             final GltfBaker.Input input = new GltfBaker.Input();
             input.base = map(draft, baseImage, baseRef);
@@ -687,25 +990,69 @@ public final class GltfLoader {
             input.metallicRoughness = map(draft, roughnessImage, roughnessRef);
             input.occlusion = map(draft, occlusionImage, occlusionRef);
             input.emissive = map(draft, emissiveImage, emissiveRef);
+
+            input.specular = map(draft, specularImage, specularRef);
+            input.specularColor = map(draft, specularColorImage, specularColorRef);
+            input.specularGlossiness = map(draft, specGlossImage, specGlossRef);
+            input.clearcoat = map(draft, clearcoatImage, clearcoatRef);
+            input.clearcoatRoughness = map(draft, clearcoatRoughnessImage, clearcoatRoughnessRef);
+            input.clearcoatNormal = map(draft, clearcoatNormalImage, clearcoatNormalRef);
+            input.sheenColor = map(draft, sheenColorImage, sheenColorRef);
+            input.sheenRoughness = map(draft, sheenRoughnessImage, sheenRoughnessRef);
+            input.iridescence = map(draft, iridImage, iridRef);
+            input.iridescenceThickness = map(draft, iridThickImage, iridThickRef);
+            input.anisotropy = map(draft, anisoImage, anisoRef);
+            input.transmission = map(draft, transImage, transRef);
+            input.thickness = map(draft, thickImage, thickRef);
+            input.diffuseTransmission = map(draft, dtImage, dtRef);
+            input.diffuseTransmissionColor = map(draft, dtColorImage, dtColorRef);
+
             input.baseFactor = new float[]{Math.max(0, baseFactor[0]), Math.max(0, baseFactor[1]), Math.max(0, baseFactor[2]), base[3]};
             if (emissiveImage != null || constantGlow) {
                 input.emissiveFactor = new float[]{Math.max(0, emissiveFactor[0] * strength),
                         Math.max(0, emissiveFactor[1] * strength), Math.max(0, emissiveFactor[2] * strength)};
             }
-            // テクスチャがあればその値を掛け、なければ係数だけを使う
-            input.metallic = glossiness.isEmpty() ? metallicFactor : material.metallic;
-            input.roughness = glossiness.isEmpty() ? roughnessFactor : material.roughness;
+            input.metallic = isSpecGloss ? 0 : metallicFactor;
+            input.roughness = isSpecGloss ? Math.max(0.04f, 1f - sgGlossinessFactor) : roughnessFactor;
             input.normalScale = Json.number(Json.object(json, "normalTexture"), "scale", 1);
             input.occlusionStrength = occlusionStrength;
             input.alphaMode = material.alphaMode;
             input.alphaCutoff = alphaCutoff;
+
+            input.f0 = f0;
+            input.specularFactor = specularFactor;
+            input.specularColorFactor = specularColorFactor;
+            input.clearcoatFactor = clearcoatFactor;
+            input.clearcoatRoughnessFactor = clearcoatRoughnessFactor;
+            input.clearcoatNormalScale = clearcoatNormalScale;
+            input.sheenColorFactor = sheenColorFactor;
+            input.sheenRoughnessFactor = sheenRoughnessFactor;
+            input.iridescenceFactor = iridescenceFactor;
+            input.iridescenceIor = iridescenceIor;
+            input.iridescenceThicknessMin = iridescenceThicknessMin;
+            input.iridescenceThicknessMax = iridescenceThicknessMax;
+            input.anisotropyStrength = anisoStrength;
+            input.anisotropyRotation = anisoRotation;
+            input.transmissionFactor = transmissionFactor;
+            input.thicknessFactor = thicknessFactor;
+            input.attenuationColor = attenuationColor;
+            input.attenuationDistance = attenuationDistance;
+            input.diffuseTransmissionFactor = dtFactor;
+            input.diffuseTransmissionColorFactor = dtColor;
+            input.isSpecGloss = isSpecGloss;
+            input.specGlossSpecularFactor = sgSpecularFactor;
+            input.specGlossGlossinessFactor = sgGlossinessFactor;
+
             draft.bake = input;
-            for (Pixels image : new Pixels[]{baseImage, normalImage, roughnessImage, emissiveImage}) {
+            final Pixels[] allImages = {baseImage, normalImage, roughnessImage, emissiveImage,
+                    specularImage, specularColorImage, specGlossImage, clearcoatImage, clearcoatRoughnessImage,
+                    clearcoatNormalImage, sheenColorImage, sheenRoughnessImage, iridImage, iridThickImage,
+                    anisoImage, transImage, thickImage, dtImage, dtColorImage};
+            for (Pixels image : allImages) {
                 if (image == null) continue;
                 draft.bakeWidth = Math.max(draft.bakeWidth, image.width);
                 draft.bakeHeight = Math.max(draft.bakeHeight, image.height);
             }
-            // 陰影はテクスチャの細かさでしか表せないので、小さな画像しか使っていない材質でも、ある程度の細かさにする
             while (Math.max(draft.bakeWidth, draft.bakeHeight) < MIN_BAKE_SIZE) {
                 draft.bakeWidth *= 2;
                 draft.bakeHeight *= 2;
@@ -751,19 +1098,7 @@ public final class GltfLoader {
         if (model.animations.length > 0) return null;
 
         // 最初の姿勢での、各ノードの変換
-        final float[][] global = new float[model.nodes.length][];
-        for (int index : model.order) {
-            final GltfModel.Node node = model.nodes[index];
-            final float[] local = new float[16];
-            if (node.matrix != null) System.arraycopy(node.matrix, 0, local, 0, 16);
-            else Mat4.compose(node.translation, node.rotation, node.scale, local);
-            if (node.parent < 0) {
-                global[index] = local;
-            } else {
-                global[index] = new float[16];
-                Mat4.multiply(global[node.parent], local, global[index]);
-            }
-        }
+        final float[][] global = computeInitialGlobals(model);
 
         final List<GltfBaker.Surface> surfaces = new ArrayList<GltfBaker.Surface>();
         for (GltfModel.Primitive primitive : draft.primitives) {
@@ -881,38 +1216,200 @@ public final class GltfLoader {
         return mesh;
     }
 
-    private GltfModel.Primitive primitive(Map<String, Object> json, Draft[] drafts) throws IOException {
-        if (Json.object(json, "extensions").containsKey("KHR_draco_mesh_compression")) {
-            throw new IOException("Unsupported glTF extension: KHR_draco_mesh_compression");
+    private boolean isExtensionRequired(String name) {
+        for (Object item : Json.array(root, "extensionsRequired")) {
+            if (name.equals(item)) return true;
         }
+        return false;
+    }
+
+    private double[] readDracoAttribute(PointAttribute pa, int count, int components,
+                                       int accessorComponentType, boolean normalized) throws IOException {
+        final double[] out = new double[count * components];
+        final byte[] data = pa.getBuffer().getBuffer();
+        final ByteBuffer buf = ByteBuffer.wrap(data).order(ByteOrder.LITTLE_ENDIAN);
+        final int dracoType = pa.getDataType();
+        final int dracoCompType;
+        switch (dracoType) {
+            case DataType.INT8: dracoCompType = 5120; break;
+            case DataType.UINT8: dracoCompType = 5121; break;
+            case DataType.INT16: dracoCompType = 5122; break;
+            case DataType.UINT16: dracoCompType = 5123; break;
+            case DataType.UINT32:
+            case DataType.INT32: dracoCompType = 5125; break;
+            default: dracoCompType = 5126; break;
+        }
+        final int effectiveCompType = dracoType == DataType.FLOAT32 ? 5126 : accessorComponentType;
+        final int size = componentSize(effectiveCompType);
+        final int stride = pa.getByteStride();
+        final int baseOffset = pa.getByteOffset();
+
+        for (int p = 0; p < count; p++) {
+            final int entryId = pa.mappedIndex(p);
+            final int entryPos = baseOffset + entryId * stride;
+            for (int c = 0; c < components; c++) {
+                final int pos = entryPos + c * size;
+                if (pos >= 0 && pos + size <= data.length) {
+                    out[p * components + c] = component(buf, pos, effectiveCompType, normalized);
+                }
+            }
+        }
+        return out;
+    }
+
+    private float[] readDracoFloats(PointAttribute pa, int count, int components,
+                                   int accessorComponentType, boolean normalized) throws IOException {
+        final double[] values = readDracoAttribute(pa, count, components, accessorComponentType, normalized);
+        final float[] result = new float[values.length];
+        for (int i = 0; i < result.length; i++) {
+            final float value = (float) values[i];
+            result[i] = Float.isNaN(value) || Float.isInfinite(value) ? 0f : value;
+        }
+        return result;
+    }
+
+    private int[] readDracoInts(PointAttribute pa, int count, int components,
+                                 int accessorComponentType, boolean normalized) throws IOException {
+        final double[] values = readDracoAttribute(pa, count, components, accessorComponentType, normalized);
+        final int[] result = new int[values.length];
+        for (int i = 0; i < result.length; i++) {
+            result[i] = (int) values[i];
+        }
+        return result;
+    }
+
+    private float[] readAttributeFloats(String name, Map<String, Object> attributes,
+                                       DracoMesh dracoMesh, Map<String, Object> dracoAttrs,
+                                       int expectedComponents, int count) throws IOException {
+        if (dracoMesh != null && dracoAttrs != null && dracoAttrs.containsKey(name)) {
+            final int uniqueId = Json.integer(dracoAttrs, name, -1);
+            final PointAttribute pa = dracoMesh.getAttributeByUniqueId(uniqueId);
+            if (pa == null) return null;
+            final int accIndex = Json.integer(attributes, name, -1);
+            int compType = 5126;
+            boolean norm = false;
+            if (accIndex >= 0 && accIndex < accessors.size()) {
+                final Map<String, Object> acc = Json.object(accessors.get(accIndex));
+                compType = Json.integer(acc, "componentType", 5126);
+                norm = Json.bool(acc, "normalized", false);
+            }
+            return readDracoFloats(pa, count, expectedComponents, compType, norm);
+        }
+        if (attributes.containsKey(name)) {
+            final int accIndex = Json.integer(attributes, name, -1);
+            return floats(accIndex);
+        }
+        return null;
+    }
+
+    private int[] readAttributeInts(String name, Map<String, Object> attributes,
+                                     DracoMesh dracoMesh, Map<String, Object> dracoAttrs,
+                                     int expectedComponents, int count) throws IOException {
+        if (dracoMesh != null && dracoAttrs != null && dracoAttrs.containsKey(name)) {
+            final int uniqueId = Json.integer(dracoAttrs, name, -1);
+            final PointAttribute pa = dracoMesh.getAttributeByUniqueId(uniqueId);
+            if (pa == null) return null;
+            final int accIndex = Json.integer(attributes, name, -1);
+            int compType = 5125;
+            boolean norm = false;
+            if (accIndex >= 0 && accIndex < accessors.size()) {
+                final Map<String, Object> acc = Json.object(accessors.get(accIndex));
+                compType = Json.integer(acc, "componentType", 5125);
+                norm = Json.bool(acc, "normalized", false);
+            }
+            return readDracoInts(pa, count, expectedComponents, compType, norm);
+        }
+        if (attributes.containsKey(name)) {
+            final int accIndex = Json.integer(attributes, name, -1);
+            return ints(accIndex);
+        }
+        return null;
+    }
+
+    private GltfModel.Primitive primitive(Map<String, Object> json, Draft[] drafts) throws IOException {
         final Map<String, Object> attributes = Json.object(json, "attributes");
-        if (!attributes.containsKey("POSITION")) return null;
+        final Map<String, Object> extensions = Json.object(json, "extensions");
+        final Map<String, Object> dracoExt = Json.object(extensions, "KHR_draco_mesh_compression");
+
+        DracoMesh dracoMesh = null;
+        Map<String, Object> dracoAttrs = null;
+        if (!dracoExt.isEmpty()) {
+            final int viewIndex = Json.integer(dracoExt, "bufferView", -1);
+            if (viewIndex < 0 || viewIndex >= bufferViews.size()) {
+                throw new IOException("Invalid Draco bufferView: " + viewIndex);
+            }
+            final byte[] decomp = getDecompressedView(viewIndex);
+            final byte[] dracoData;
+            if (decomp != null) {
+                dracoData = decomp;
+            } else {
+                final Map<String, Object> view = Json.object(bufferViews.get(viewIndex));
+                final int bufferIndex = Json.integer(view, "buffer", 0);
+                if (bufferIndex < 0 || bufferIndex >= buffers.length) {
+                    throw new IOException("Invalid buffer index in Draco bufferView: " + bufferIndex);
+                }
+                final byte[] buffer = buffers[bufferIndex];
+                final int offset = Json.integer(view, "byteOffset", 0);
+                final int length = Json.integer(view, "byteLength", 0);
+                if (offset < 0 || length < 0 || (long) offset + length > buffer.length) {
+                    throw new IOException("Draco bufferView is out of range");
+                }
+                dracoData = new byte[length];
+                System.arraycopy(buffer, offset, dracoData, 0, length);
+            }
+
+            try {
+                dracoMesh = DracoDecoder.decodeMesh(dracoData);
+                dracoAttrs = Json.object(dracoExt, "attributes");
+            } catch (IOException e) {
+                final int posAcc = Json.integer(attributes, "POSITION", -1);
+                final boolean hasFallback = posAcc >= 0 && posAcc < accessors.size()
+                        && Json.object(accessors.get(posAcc)).containsKey("bufferView");
+                if (isExtensionRequired("KHR_draco_mesh_compression") || !hasFallback) {
+                    throw e;
+                }
+                dracoMesh = null;
+                dracoAttrs = null;
+            }
+        }
+
+        final boolean hasPosition = (dracoAttrs != null && dracoAttrs.containsKey("POSITION"))
+                || attributes.containsKey("POSITION");
+        if (!hasPosition) return null;
         final int mode = Json.integer(json, "mode", 4);
-        // 点と線は描かない
         if (mode < 4 || mode > 6) return null;
 
         final GltfModel.Primitive primitive = new GltfModel.Primitive();
-        final int position = Json.integer(attributes, "POSITION", -1);
-        primitive.positions = floats(position);
-        if (accessorComponents(position) != 3) throw new IOException("Invalid POSITION accessor");
-        final int count = primitive.positions.length / 3;
+        final int count;
+        if (dracoMesh != null && dracoAttrs != null && dracoAttrs.containsKey("POSITION")) {
+            count = dracoMesh.getNumPoints();
+            primitive.positions = readAttributeFloats("POSITION", attributes, dracoMesh, dracoAttrs, 3, count);
+            if (primitive.positions == null || primitive.positions.length != count * 3) {
+                throw new IOException("Invalid Draco POSITION attribute");
+            }
+        } else {
+            final int position = Json.integer(attributes, "POSITION", -1);
+            primitive.positions = floats(position);
+            if (accessorComponents(position) != 3) throw new IOException("Invalid POSITION accessor");
+            count = primitive.positions.length / 3;
+        }
         primitive.vertexCount = count;
 
-        if (attributes.containsKey("NORMAL")) {
-            final float[] normals = floats(Json.integer(attributes, "NORMAL", -1));
-            if (normals.length == count * 3) primitive.normals = normals;
+        if (attributes.containsKey("NORMAL") || (dracoAttrs != null && dracoAttrs.containsKey("NORMAL"))) {
+            final float[] normals = readAttributeFloats("NORMAL", attributes, dracoMesh, dracoAttrs, 3, count);
+            if (normals != null && normals.length == count * 3) primitive.normals = normals;
         }
 
-        if (attributes.containsKey("TANGENT")) {
-            final float[] tangents = floats(Json.integer(attributes, "TANGENT", -1));
-            if (tangents.length == count * 4) primitive.tangents = tangents;
+        if (attributes.containsKey("TANGENT") || (dracoAttrs != null && dracoAttrs.containsKey("TANGENT"))) {
+            final float[] tangents = readAttributeFloats("TANGENT", attributes, dracoMesh, dracoAttrs, 4, count);
+            if (tangents != null && tangents.length == count * 4) primitive.tangents = tangents;
         }
 
-        if (attributes.containsKey("COLOR_0")) {
+        if (attributes.containsKey("COLOR_0") || (dracoAttrs != null && dracoAttrs.containsKey("COLOR_0"))) {
             final int accessor = Json.integer(attributes, "COLOR_0", -1);
-            final float[] source = floats(accessor);
-            final int components = accessorComponents(accessor);
-            if ((components == 3 || components == 4) && source.length == count * components) {
+            final int components = accessor >= 0 && accessor < accessors.size() ? accessorComponents(accessor) : 4;
+            final float[] source = readAttributeFloats("COLOR_0", attributes, dracoMesh, dracoAttrs, components, count);
+            if (source != null && (components == 3 || components == 4) && source.length == count * components) {
                 final float[] colors = new float[count * 4];
                 for (int i = 0; i < count; i++) {
                     colors[i * 4] = gamma(source[i * components]);
@@ -924,11 +1421,19 @@ public final class GltfLoader {
             }
         }
 
-        readInfluences(primitive, attributes, count);
+        readInfluences(primitive, attributes, dracoMesh, dracoAttrs, count);
 
         // 頂点番号。帯や扇の形式は、三角形の並びに直す
         final int[] source;
-        if (json.containsKey("indices")) {
+        if (dracoMesh != null) {
+            final IntList dracoIndices = dracoMesh.getIndices();
+            source = new int[dracoIndices.getCount()];
+            for (int i = 0; i < source.length; i++) {
+                final int index = dracoIndices.get(i);
+                if (index < 0 || index >= count) throw new IOException("Draco vertex index is out of range");
+                source[i] = index;
+            }
+        } else if (json.containsKey("indices")) {
             source = ints(Json.integer(json, "indices", -1));
             for (int index : source) {
                 if (index < 0 || index >= count) throw new IOException("Vertex index is out of range");
@@ -962,24 +1467,35 @@ public final class GltfLoader {
         final Draft draft = drafts[material];
         draft.primitives.add(primitive);
 
-        primitive.cornerUv = cornerUv(attributes, draft.mapping, primitive.indices, count);
+        primitive.cornerUv = cornerUv(attributes, draft.mapping, primitive.indices, count, dracoMesh, dracoAttrs, true);
+        primitive.rawUv = cornerUv(attributes, draft.mapping, primitive.indices, count, dracoMesh, dracoAttrs, false);
         if (!draft.extraRefs.isEmpty()) {
             final float[][] extra = new float[draft.extraRefs.size()][];
             for (int i = 0; i < extra.length; i++) {
-                extra[i] = cornerUv(attributes, draft.extraRefs.get(i), primitive.indices, count);
+                extra[i] = cornerUv(attributes, draft.extraRefs.get(i), primitive.indices, count, dracoMesh, dracoAttrs, true);
             }
             draft.extraUv.put(primitive, extra);
         }
         return primitive;
     }
 
-    // 三角形の角ごとのテクスチャ座標を、テクスチャの貼り方の指定 (ずらし、回転、拡大) を反映して求める
-    private float[] cornerUv(Map<String, Object> attributes, TexRef mapping, int[] indices, int count) throws IOException {
+    // transform が false なら、指定を反映しない元の座標を返す (アニメーションで貼り方が変わる場合に使う)
+    private float[] cornerUv(Map<String, Object> attributes, TexRef mapping, int[] indices, int count,
+                             DracoMesh dracoMesh, Map<String, Object> dracoAttrs, boolean transform) throws IOException {
         final float[] result = new float[indices.length * 2];
         final String name = mapping == null ? null : "TEXCOORD_" + mapping.texCoord;
-        if (name == null || !attributes.containsKey(name)) return result;
-        final float[] uv = floats(Json.integer(attributes, name, -1));
-        if (uv.length != count * 2) return result;
+        if (name == null) return result;
+        final boolean inDraco = dracoAttrs != null && dracoAttrs.containsKey(name);
+        if (!attributes.containsKey(name) && !inDraco) return result;
+        final float[] uv = readAttributeFloats(name, attributes, dracoMesh, dracoAttrs, 2, count);
+        if (uv == null || uv.length != count * 2) return result;
+        if (!transform) {
+            for (int i = 0; i < indices.length; i++) {
+                result[i * 2] = uv[indices[i] * 2];
+                result[i * 2 + 1] = uv[indices[i] * 2 + 1];
+            }
+            return result;
+        }
         final float cos = (float) Math.cos(mapping.rotation);
         final float sin = (float) Math.sin(mapping.rotation);
         for (int i = 0; i < indices.length; i++) {
@@ -991,16 +1507,22 @@ public final class GltfLoader {
         return result;
     }
 
-    private void readInfluences(GltfModel.Primitive primitive, Map<String, Object> attributes, int count) throws IOException {
-        if (!attributes.containsKey("JOINTS_0") || !attributes.containsKey("WEIGHTS_0")) return;
-        final int sets = attributes.containsKey("JOINTS_1") && attributes.containsKey("WEIGHTS_1") ? 2 : 1;
+    private void readInfluences(GltfModel.Primitive primitive, Map<String, Object> attributes,
+                                DracoMesh dracoMesh, Map<String, Object> dracoAttrs, int count) throws IOException {
+        final boolean hasDracoJoints = dracoAttrs != null && dracoAttrs.containsKey("JOINTS_0");
+        final boolean hasDracoWeights = dracoAttrs != null && dracoAttrs.containsKey("WEIGHTS_0");
+        if ((!attributes.containsKey("JOINTS_0") && !hasDracoJoints) ||
+                (!attributes.containsKey("WEIGHTS_0") && !hasDracoWeights)) return;
+        final boolean hasSecondDraco = dracoAttrs != null && dracoAttrs.containsKey("JOINTS_1") && dracoAttrs.containsKey("WEIGHTS_1");
+        final boolean hasSecondAttr = attributes.containsKey("JOINTS_1") && attributes.containsKey("WEIGHTS_1");
+        final int sets = (hasSecondDraco || hasSecondAttr) ? 2 : 1;
         final int influences = sets * 4;
         final int[] joints = new int[count * influences];
         final float[] weights = new float[count * influences];
         for (int set = 0; set < sets; set++) {
-            final int[] setJoints = ints(Json.integer(attributes, "JOINTS_" + set, -1));
-            final float[] setWeights = floats(Json.integer(attributes, "WEIGHTS_" + set, -1));
-            if (setJoints.length != count * 4 || setWeights.length != count * 4) return;
+            final int[] setJoints = readAttributeInts("JOINTS_" + set, attributes, dracoMesh, dracoAttrs, 4, count);
+            final float[] setWeights = readAttributeFloats("WEIGHTS_" + set, attributes, dracoMesh, dracoAttrs, 4, count);
+            if (setJoints == null || setWeights == null || setJoints.length != count * 4 || setWeights.length != count * 4) return;
             for (int i = 0; i < count; i++) {
                 for (int k = 0; k < 4; k++) {
                     joints[i * influences + set * 4 + k] = setJoints[i * 4 + k];
@@ -1052,8 +1574,9 @@ public final class GltfLoader {
     private void readNodes(GltfModel model) throws IOException {
         final List<Object> list = Json.array(root, "nodes");
         if (list.size() > MAX_NODES) throw new IOException("Model exceeds safety limits (max " + MAX_NODES + " nodes)");
-        final GltfModel.Node[] nodes = new GltfModel.Node[list.size()];
-        for (int i = 0; i < nodes.length; i++) {
+        final List<GltfModel.Node> nodeList = new ArrayList<GltfModel.Node>();
+        final List<List<Integer>> childrenList = new ArrayList<List<Integer>>();
+        for (int i = 0; i < list.size(); i++) {
             final Map<String, Object> json = Json.object(list.get(i));
             final GltfModel.Node node = new GltfModel.Node();
             if (json.containsKey("matrix")) {
@@ -1069,21 +1592,97 @@ public final class GltfLoader {
             if (mesh >= 0 && mesh < model.meshes.length) node.mesh = mesh;
             node.skin = Json.integer(json, "skin", -1);
             if (json.containsKey("weights")) node.weights = Json.numbers(json.get("weights"));
-            nodes[i] = node;
+            final Map<String, Object> nodeExtensions = Json.object(json, "extensions");
+            final Map<String, Object> lightExt = Json.object(nodeExtensions, "KHR_lights_punctual");
+            if (lightExt.containsKey("light")) {
+                node.light = Json.integer(lightExt, "light", -1);
+            }
+            nodeList.add(node);
+            childrenList.add(new ArrayList<Integer>());
         }
+
         // 親子関係。親は 1 つだけなので、2 つ目以降の指定は無視する
-        for (int i = 0; i < nodes.length; i++) {
+        for (int i = 0; i < list.size(); i++) {
             final List<Object> children = Json.array(Json.object(list.get(i)), "children");
-            final List<Integer> valid = new ArrayList<Integer>();
             for (Object item : children) {
                 if (!(item instanceof Double)) continue;
                 final int child = (int) Math.round((Double) item);
-                if (child < 0 || child >= nodes.length || child == i || nodes[child].parent >= 0) continue;
-                nodes[child].parent = i;
-                valid.add(child);
+                if (child < 0 || child >= list.size() || child == i || nodeList.get(child).parent >= 0) continue;
+                nodeList.get(child).parent = i;
+                childrenList.get(i).add(child);
             }
-            nodes[i].children = new int[valid.size()];
-            for (int k = 0; k < valid.size(); k++) nodes[i].children[k] = valid.get(k);
+        }
+
+        // EXT_mesh_gpu_instancing: 各インスタンスを子ノードとして展開する
+        for (int i = 0; i < list.size(); i++) {
+            final Map<String, Object> json = Json.object(list.get(i));
+            final Map<String, Object> extensions = Json.object(json, "extensions");
+            final Map<String, Object> instancing = Json.object(extensions, "EXT_mesh_gpu_instancing");
+            if (instancing.isEmpty()) continue;
+            final GltfModel.Node parentNode = nodeList.get(i);
+            if (parentNode.mesh < 0) continue;
+
+            final Map<String, Object> attributes = Json.object(instancing, "attributes");
+            final int transAcc = Json.integer(attributes, "TRANSLATION", -1);
+            final int rotAcc = Json.integer(attributes, "ROTATION", -1);
+            final int scaleAcc = Json.integer(attributes, "SCALE", -1);
+
+            int instanceCount = -1;
+            if (transAcc >= 0) instanceCount = accessorCount(transAcc);
+            if (rotAcc >= 0) {
+                final int count = accessorCount(rotAcc);
+                if (instanceCount >= 0 && instanceCount != count) throw new IOException("Instancing accessor count mismatch");
+                instanceCount = count;
+            }
+            if (scaleAcc >= 0) {
+                final int count = accessorCount(scaleAcc);
+                if (instanceCount >= 0 && instanceCount != count) throw new IOException("Instancing accessor count mismatch");
+                instanceCount = count;
+            }
+            if (instanceCount <= 0) continue;
+
+            if ((long) nodeList.size() + instanceCount > MAX_NODES) {
+                throw new IOException("Model exceeds safety limits (max " + MAX_NODES + " nodes)");
+            }
+
+            final float[] translations = transAcc >= 0 ? floats(transAcc) : null;
+            final float[] rotations = rotAcc >= 0 ? floats(rotAcc) : null;
+            final float[] scales = scaleAcc >= 0 ? floats(scaleAcc) : null;
+
+            final int origMesh = parentNode.mesh;
+            final int origSkin = parentNode.skin;
+            final float[] origWeights = parentNode.weights;
+            // 元のノード自体は描画しない (各インスタンスが描画する)
+            parentNode.mesh = -1;
+
+            for (int k = 0; k < instanceCount; k++) {
+                final GltfModel.Node instNode = new GltfModel.Node();
+                instNode.parent = i;
+                instNode.mesh = origMesh;
+                instNode.skin = origSkin;
+                instNode.weights = origWeights;
+                if (translations != null) {
+                    instNode.translation = new float[]{translations[k * 3], translations[k * 3 + 1], translations[k * 3 + 2]};
+                }
+                if (rotations != null) {
+                    instNode.rotation = new float[]{rotations[k * 4], rotations[k * 4 + 1], rotations[k * 4 + 2], rotations[k * 4 + 3]};
+                    Mat4.normalize4(instNode.rotation);
+                }
+                if (scales != null) {
+                    instNode.scale = new float[]{scales[k * 3], scales[k * 3 + 1], scales[k * 3 + 2]};
+                }
+                final int instIndex = nodeList.size();
+                nodeList.add(instNode);
+                childrenList.add(new ArrayList<Integer>());
+                childrenList.get(i).add(instIndex);
+            }
+        }
+
+        final GltfModel.Node[] nodes = nodeList.toArray(new GltfModel.Node[0]);
+        for (int i = 0; i < nodes.length; i++) {
+            final List<Integer> ch = childrenList.get(i);
+            nodes[i].children = new int[ch.size()];
+            for (int k = 0; k < ch.size(); k++) nodes[i].children[k] = ch.get(k);
         }
 
         // 表示するシーン
@@ -1162,18 +1761,27 @@ public final class GltfLoader {
                 final Map<String, Object> channelJson = Json.object(channelItem);
                 final Map<String, Object> target = Json.object(channelJson, "target");
                 final int samplerIndex = Json.integer(channelJson, "sampler", -1);
-                final int node = Json.integer(target, "node", -1);
-                if (samplerIndex < 0 || samplerIndex >= samplers.size() || node < 0 || node >= model.nodes.length) continue;
+                if (samplerIndex < 0 || samplerIndex >= samplers.size()) continue;
                 final Map<String, Object> sampler = Json.object(samplers.get(samplerIndex));
 
                 final GltfModel.Channel channel = new GltfModel.Channel();
-                channel.node = node;
-                final String path = Json.string(target, "path", "");
-                if ("translation".equals(path)) channel.path = GltfModel.PATH_TRANSLATION;
-                else if ("rotation".equals(path)) channel.path = GltfModel.PATH_ROTATION;
-                else if ("scale".equals(path)) channel.path = GltfModel.PATH_SCALE;
-                else if ("weights".equals(path)) channel.path = GltfModel.PATH_WEIGHTS;
-                else continue;
+                final Map<String, Object> targetExt = Json.object(target, "extensions");
+                final String pointer = Json.string(Json.object(targetExt, "KHR_animation_pointer"), "pointer", null);
+                if (pointer != null) {
+                    if (!parsePointer(pointer, model, channel)) continue;
+                } else {
+                    final int node = Json.integer(target, "node", -1);
+                    if (node < 0 || node >= model.nodes.length) continue;
+                    channel.targetType = GltfModel.TARGET_NODE;
+                    channel.targetIndex = node;
+                    channel.node = node;
+                    final String path = Json.string(target, "path", "");
+                    if ("translation".equals(path)) channel.path = GltfModel.PATH_TRANSLATION;
+                    else if ("rotation".equals(path)) channel.path = GltfModel.PATH_ROTATION;
+                    else if ("scale".equals(path)) channel.path = GltfModel.PATH_SCALE;
+                    else if ("weights".equals(path)) channel.path = GltfModel.PATH_WEIGHTS;
+                    else continue;
+                }
 
                 final String interpolation = Json.string(sampler, "interpolation", "LINEAR");
                 channel.interpolation = "STEP".equals(interpolation) ? GltfModel.INTERPOLATION_STEP
@@ -1185,8 +1793,20 @@ public final class GltfLoader {
                 final int perKey = channel.interpolation == GltfModel.INTERPOLATION_CUBIC ? 3 : 1;
                 if (channel.values.length % (keys * perKey) != 0) continue;
                 channel.components = channel.values.length / (keys * perKey);
-                final int expected = channel.path == GltfModel.PATH_ROTATION ? 4 : 3;
-                if (channel.path != GltfModel.PATH_WEIGHTS && channel.components != expected) continue;
+
+                int expected;
+                if (channel.targetType == GltfModel.TARGET_NODE) {
+                    expected = channel.path == GltfModel.PATH_ROTATION ? 4 : channel.path == GltfModel.PATH_WEIGHTS ? -1 : 3;
+                } else if (channel.targetType == GltfModel.TARGET_MATERIAL_COLOR) {
+                    expected = 4;
+                } else if (channel.targetType == GltfModel.TARGET_MATERIAL_EMISSIVE || channel.targetType == GltfModel.TARGET_LIGHT_COLOR) {
+                    expected = 3;
+                } else if (channel.targetType == GltfModel.TARGET_MATERIAL_TEX_OFFSET || channel.targetType == GltfModel.TARGET_MATERIAL_TEX_SCALE) {
+                    expected = 2;
+                } else {
+                    expected = 1;
+                }
+                if (expected > 0 && channel.components != expected) continue;
                 if (channel.components == 0) continue;
 
                 duration = Math.max(duration, channel.times[keys - 1]);
@@ -1199,5 +1819,175 @@ public final class GltfLoader {
             animations.add(animation);
         }
         model.animations = animations.toArray(new GltfModel.Animation[0]);
+    }
+
+    private static boolean parsePointer(String pointer, GltfModel model, GltfModel.Channel channel) {
+        if (!pointer.startsWith("/")) return false;
+        final String[] parts = pointer.substring(1).split("/");
+        if (parts.length >= 3 && "nodes".equals(parts[0])) {
+            final int node;
+            try {
+                node = Integer.parseInt(parts[1]);
+            } catch (NumberFormatException e) {
+                return false;
+            }
+            if (node < 0 || node >= model.nodes.length) return false;
+            channel.targetType = GltfModel.TARGET_NODE;
+            channel.targetIndex = node;
+            channel.node = node;
+            final String prop = parts[2];
+            if ("translation".equals(prop)) channel.path = GltfModel.PATH_TRANSLATION;
+            else if ("rotation".equals(prop)) channel.path = GltfModel.PATH_ROTATION;
+            else if ("scale".equals(prop)) channel.path = GltfModel.PATH_SCALE;
+            else if ("weights".equals(prop)) channel.path = GltfModel.PATH_WEIGHTS;
+            else return false;
+            return true;
+        }
+        if (parts.length >= 3 && "materials".equals(parts[0])) {
+            final int mat;
+            try {
+                mat = Integer.parseInt(parts[1]);
+            } catch (NumberFormatException e) {
+                return false;
+            }
+            if (mat < 0 || mat >= model.materials.length) return false;
+            channel.targetIndex = mat;
+            final String last = parts[parts.length - 1];
+            if ("baseColorFactor".equals(last)) {
+                channel.targetType = GltfModel.TARGET_MATERIAL_COLOR;
+            } else if ("emissiveFactor".equals(last) || "emissiveStrength".equals(last)) {
+                channel.targetType = GltfModel.TARGET_MATERIAL_EMISSIVE;
+            } else if ("metallicFactor".equals(last)) {
+                channel.targetType = GltfModel.TARGET_MATERIAL_METALLIC;
+            } else if ("roughnessFactor".equals(last)) {
+                channel.targetType = GltfModel.TARGET_MATERIAL_ROUGHNESS;
+            } else if ("offset".equals(last)) {
+                channel.targetType = GltfModel.TARGET_MATERIAL_TEX_OFFSET;
+            } else if ("scale".equals(last)) {
+                channel.targetType = GltfModel.TARGET_MATERIAL_TEX_SCALE;
+            } else if ("rotation".equals(last)) {
+                channel.targetType = GltfModel.TARGET_MATERIAL_TEX_ROTATION;
+            } else {
+                return false;
+            }
+            return true;
+        }
+        if (parts.length >= 5 && "extensions".equals(parts[0]) && "KHR_lights_punctual".equals(parts[1])
+                && "lights".equals(parts[2])) {
+            final int light;
+            try {
+                light = Integer.parseInt(parts[3]);
+            } catch (NumberFormatException e) {
+                return false;
+            }
+            if (light < 0 || light >= model.lights.length) return false;
+            channel.targetIndex = light;
+            final String prop = parts[4];
+            if ("color".equals(prop)) {
+                channel.targetType = GltfModel.TARGET_LIGHT_COLOR;
+            } else if ("intensity".equals(prop)) {
+                channel.targetType = GltfModel.TARGET_LIGHT_INTENSITY;
+            } else {
+                return false;
+            }
+            return true;
+        }
+        return false;
+    }
+
+    private void readLights(GltfModel model) {
+        final Map<String, Object> extensions = Json.object(root, "extensions");
+        final Map<String, Object> punctual = Json.object(extensions, "KHR_lights_punctual");
+        final List<Object> list = Json.array(punctual, "lights");
+        model.lights = new GltfModel.Light[list.size()];
+        for (int i = 0; i < model.lights.length; i++) {
+            final Map<String, Object> json = Json.object(list.get(i));
+            final GltfModel.Light light = new GltfModel.Light();
+            final String type = Json.string(json, "type", "directional");
+            light.type = "point".equals(type) ? GltfModel.LIGHT_POINT
+                    : "spot".equals(type) ? GltfModel.LIGHT_SPOT : GltfModel.LIGHT_DIRECTIONAL;
+            final float[] color = Json.numbers(json, "color", new float[]{1, 1, 1});
+            System.arraycopy(color, 0, light.color, 0, 3);
+            light.intensity = Json.number(json, "intensity", 1f);
+            light.range = Json.number(json, "range", 0f);
+            final Map<String, Object> spot = Json.object(json, "spot");
+            if (!spot.isEmpty()) {
+                light.innerConeAngle = Json.number(spot, "innerConeAngle", 0f);
+                light.outerConeAngle = Json.number(spot, "outerConeAngle", 0.7853981633974483f);
+            }
+            model.lights[i] = light;
+        }
+
+        // EXT_lights_image_based
+        final Map<String, Object> ibl = Json.object(extensions, "EXT_lights_image_based");
+        final List<Object> iblLights = Json.array(ibl, "lights");
+        if (!iblLights.isEmpty()) {
+            final Map<String, Object> lightJson = Json.object(iblLights.get(0));
+            if (lightJson.containsKey("sphericalHarmonics")) {
+                final List<Object> shList = Json.array(lightJson, "sphericalHarmonics");
+                if (shList.size() == 9) {
+                    final float[] sh = new float[27];
+                    for (int i = 0; i < 9; i++) {
+                        final float[] coef = Json.numbers(shList.get(i));
+                        if (coef.length >= 3) {
+                            sh[i * 3] = coef[0];
+                            sh[i * 3 + 1] = coef[1];
+                            sh[i * 3 + 2] = coef[2];
+                        }
+                    }
+                    model.sphericalHarmonics = sh;
+                }
+            }
+        }
+    }
+
+    static float[][] computeInitialGlobals(GltfModel model) {
+        final float[][] global = new float[model.nodes.length][];
+        for (int index : model.order) {
+            final GltfModel.Node node = model.nodes[index];
+            final float[] local = new float[16];
+            if (node.matrix != null) System.arraycopy(node.matrix, 0, local, 0, 16);
+            else Mat4.compose(node.translation, node.rotation, node.scale, local);
+            if (node.parent < 0) {
+                global[index] = local;
+            } else {
+                global[index] = new float[16];
+                Mat4.multiply(global[node.parent], local, global[index]);
+            }
+        }
+        return global;
+    }
+
+    static GltfLight.LightInstance[] collectLights(GltfModel model, float[][] globalMatrices) {
+        if (model.lights.length == 0) return null;
+        final List<GltfLight.LightInstance> list = new ArrayList<GltfLight.LightInstance>();
+        for (int i : model.order) {
+            final GltfModel.Node node = model.nodes[i];
+            if (node.light < 0 || node.light >= model.lights.length) continue;
+            final GltfModel.Light light = model.lights[node.light];
+            final float[] m = globalMatrices[i];
+            final GltfLight.LightInstance inst = new GltfLight.LightInstance();
+            inst.type = light.type;
+            inst.r = light.color[0];
+            inst.g = light.color[1];
+            inst.b = light.color[2];
+            inst.intensity = light.intensity;
+            inst.range = light.range;
+            inst.innerCos = (float) Math.cos(light.innerConeAngle);
+            inst.outerCos = (float) Math.cos(light.outerConeAngle);
+            inst.px = m[12];
+            inst.py = m[13];
+            inst.pz = m[14];
+            float dx = -m[8], dy = -m[9], dz = -m[10];
+            final float len = (float) Math.sqrt(dx * dx + dy * dy + dz * dz);
+            if (len > 0) {
+                dx /= len; dy /= len; dz /= len;
+            }
+            inst.dx = dx;
+            inst.dy = dy;
+            inst.dz = dz;
+            list.add(inst);
+        }
+        return list.toArray(new GltfLight.LightInstance[0]);
     }
 }

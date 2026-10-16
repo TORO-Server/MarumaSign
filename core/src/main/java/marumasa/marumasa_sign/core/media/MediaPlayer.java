@@ -14,6 +14,7 @@ import java.net.InetAddress;
 import java.net.InetSocketAddress;
 import java.net.ServerSocket;
 import java.net.Socket;
+import java.net.SocketTimeoutException;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 import java.util.ArrayList;
@@ -30,6 +31,19 @@ public final class MediaPlayer {
 
     // FFmpeg に許可する通信の種類。ローカルのファイルなどは読ませない
     static final String PROTOCOLS = "http,https,tcp,tls,crypto,httpproxy";
+    // 通信が止まってから諦めるまでの時間 (マイクロ秒)。止まったライブ配信を待ち続けないようにする
+    static final String NETWORK_TIMEOUT = "15000000";
+
+    // ライブ配信が途切れたとき、つなぎ直すまでの待ち時間 (ミリ秒) とその上限
+    private static final long RECONNECT_MILLIS = 2000;
+    private static final long MAX_RECONNECT_MILLIS = 30000;
+    // この時間 (ミリ秒) 以上続いた再生のあとは、待ち時間を最初の長さに戻す
+    private static final long STABLE_MILLIS = 30000;
+    // 映像の表示がこれ (マイクロ秒) より遅れたら、遅れを取り戻すのをやめて今の位置から表示し直す
+    private static final long RESYNC_MICROS = 1000000;
+    // ライブ配信で、この時間 (ミリ秒) 映像も音声も届かなければ、止まったものとしてつなぎ直す。
+    // FFmpeg は、配信が最初からやり直された HLS などを、終了せずにいつまでも待つことがある
+    private static final long STALL_MILLIS = 15000;
 
     // 映像の長辺の上限 (ピクセル)。これより大きい映像は縮小して受け取る
     private static final int MAX_VIDEO_SIZE = 1280;
@@ -72,6 +86,8 @@ public final class MediaPlayer {
     private volatile boolean audioRunning;
     private volatile long audioWrittenFrames;
     private long startNanos;
+    // 最後に映像か音声が届いた時刻 (System.nanoTime)
+    private volatile long lastDataNanos;
 
     public MediaPlayer(String url, Listener listener) {
         this.url = url;
@@ -103,6 +119,11 @@ public final class MediaPlayer {
 
     public void stop() {
         stopped = true;
+        closeAttempt();
+    }
+
+    // 1 回分の再生で使った FFmpeg と通信と音声の出力を閉じる
+    private void closeAttempt() {
         final Process running = process;
         if (running != null) running.destroyForcibly();
         for (ServerSocket server : new ServerSocket[]{audioServer, videoServer}) {
@@ -151,7 +172,11 @@ public final class MediaPlayer {
             }
             listener.onReady(width, height);
             ready = true;
-            play(info, frameRate);
+            if (info.isLive()) {
+                playLive(info, frameRate);
+            } else {
+                play(info, frameRate);
+            }
         } catch (Exception e) {
             if (!stopped) {
                 MarumaSign.LOGGER.info("Media failure: " + url + " (" + e + ")");
@@ -166,20 +191,70 @@ public final class MediaPlayer {
         }
     }
 
+    // ライブ配信は終わりがないので、途切れたら少し待ってつなぎ直す
+    private void playLive(MediaInfo info, double frameRate) {
+        startWatchdog();
+        long wait = RECONNECT_MILLIS;
+        while (!stopped) {
+            final long started = System.currentTimeMillis();
+            lastDataNanos = System.nanoTime();
+            try {
+                play(info, frameRate);
+                if (!stopped) MarumaSign.LOGGER.info("Live stream ended, reconnecting: " + url);
+            } catch (IOException e) {
+                if (!stopped) MarumaSign.LOGGER.info("Live stream failed, reconnecting: " + url + " (" + e.getMessage() + ")");
+            } finally {
+                closeAttempt();
+            }
+            if (System.currentTimeMillis() - started > STABLE_MILLIS) wait = RECONNECT_MILLIS;
+            final long until = System.currentTimeMillis() + wait;
+            while (!stopped && System.currentTimeMillis() < until) {
+                sleep(100);
+            }
+            wait = Math.min(MAX_RECONNECT_MILLIS, wait * 2);
+        }
+    }
+
+    // 映像も音声も長く届かないときに FFmpeg を止める。止まると playLive がつなぎ直す
+    private void startWatchdog() {
+        final Thread thread = new Thread(new Runnable() {
+            @Override
+            public void run() {
+                while (!stopped) {
+                    sleep(1000);
+                    final Process running = process;
+                    if (running != null && running.isAlive()
+                            && System.nanoTime() - lastDataNanos > STALL_MILLIS * 1000000L) {
+                        MarumaSign.LOGGER.info("Live stream stalled: " + url);
+                        running.destroyForcibly();
+                        lastDataNanos = System.nanoTime();
+                    }
+                }
+            }
+        }, "MarumaSign-MediaWatchdog");
+        thread.setDaemon(true);
+        thread.start();
+    }
+
     private void play(MediaInfo info, double frameRate) throws IOException {
         final List<String> command = new ArrayList<String>();
-        command.add(Ffmpeg.ffmpeg().getPath());
+        command.add(Ffmpeg.requireFfmpeg().getPath());
         add(command, "-hide_banner", "-loglevel", "error", "-nostdin");
         add(command, "-protocol_whitelist", PROTOCOLS);
+        add(command, "-rw_timeout", NETWORK_TIMEOUT);
         // 使える GPU のデコーダーがあれば使う
         add(command, "-hwaccel", "auto");
         final boolean loop = frameRate > 0 || !info.hasVideo;
         if (loop && info.duration > 0) add(command, "-stream_loop", "-1");
+        // MJPEG の配信には時刻の情報がないので、届いた時刻を使う
+        if (info.isLive() && info.isJpegSequence()) add(command, "-use_wallclock_as_timestamps", "1");
         add(command, "-i", url);
 
         if (info.hasVideo) {
             String filter = "scale=" + width + ":" + height + ":flags=bilinear";
-            if (frameRate > 0) filter += ",fps=" + frameRate;
+            // 一定の間隔のフレームにする。映像が音声より遅れて始まる場合は、最初のフレームを繰り返して
+            // 時刻 0 からそろえる (フレームの番号で表示する時刻を決めているため)
+            if (frameRate > 0) filter += ",fps=fps=" + frameRate + ":start_time=0";
             add(command, "-map", "0:v:0", "-vf", filter);
             if (frameRate <= 0) add(command, "-frames:v", "1");
             final ServerSocket server = new ServerSocket();
@@ -193,7 +268,9 @@ public final class MediaPlayer {
         if (info.hasAudio) {
             final ServerSocket server = new ServerSocket(0, 1, InetAddress.getByName("127.0.0.1"));
             audioServer = server;
-            add(command, "-map", "0:a:0", "-vn", "-ac", String.valueOf(CHANNELS), "-ar", String.valueOf(SAMPLE_RATE),
+            // 途切れた部分は無音で埋め、時刻 0 から隙間なく並べる (映像と同じ時刻の基準にする)
+            add(command, "-map", "0:a:0", "-vn", "-af", "aresample=async=1:first_pts=0",
+                    "-ac", String.valueOf(CHANNELS), "-ar", String.valueOf(SAMPLE_RATE),
                     "-f", "s16le", "tcp://127.0.0.1:" + server.getLocalPort());
             startAudioThread(server);
         }
@@ -207,11 +284,13 @@ public final class MediaPlayer {
 
         drain(started.getInputStream(), null);
         if (info.hasVideo) {
-            final Socket socket = videoServer.accept();
-            try {
-                readFrames(socket.getInputStream(), frameRate);
-            } finally {
-                socket.close();
+            final Socket socket = acceptVideo(videoServer, started);
+            if (socket != null) {
+                try {
+                    readFrames(socket.getInputStream(), frameRate);
+                } finally {
+                    socket.close();
+                }
             }
         }
         try {
@@ -222,6 +301,19 @@ public final class MediaPlayer {
         if (!stopped && started.exitValue() != 0 && errors.length() > 0) {
             throw new IOException(errors.toString().trim());
         }
+    }
+
+    // FFmpeg からの映像の接続を待つ。接続する前に FFmpeg が終了した (URL が開けなかったなど) 場合は null
+    private Socket acceptVideo(ServerSocket server, Process started) throws IOException {
+        server.setSoTimeout(500);
+        while (!stopped) {
+            try {
+                return server.accept();
+            } catch (SocketTimeoutException e) {
+                if (!started.isAlive()) return null;
+            }
+        }
+        return null;
     }
 
     private static void add(List<String> command, String... arguments) {
@@ -246,10 +338,17 @@ public final class MediaPlayer {
             } catch (EOFException e) {
                 return;
             }
+            lastDataNanos = System.nanoTime();
             // 最初のフレームが届いた時点を再生の開始とする (それまでの時間は FFmpeg の準備にかかった時間)
             if (index == 0) startNanos = System.nanoTime();
             if (frameMicros > 0) {
                 final long due = index * frameMicros;
+                // 通信が止まるなどして大きく遅れたときは、遅れた分を時計から差し引いて、ここから表示し直す。
+                // 音声に合わせている場合は、音声も同じだけ止まっているので、そのままでよい
+                if (!usesAudioClock() && clockMicros() - due > RESYNC_MICROS) {
+                    startNanos += (clockMicros() - due) * 1000;
+                    lastShown = due;
+                }
                 // 表示する時刻まで待つ
                 long now;
                 while (!stopped && (now = clockMicros()) < due) {
@@ -275,6 +374,11 @@ public final class MediaPlayer {
             return open.getMicrosecondPosition();
         }
         return (System.nanoTime() - startNanos) / 1000;
+    }
+
+    // 実際に鳴った音声の位置を時計にしているかどうか
+    private boolean usesAudioClock() {
+        return audioRunning && line != null;
     }
 
     private static void sleep(long millis) {
@@ -330,6 +434,7 @@ public final class MediaPlayer {
         while (!stopped) {
             final int read = input.read(buffer, filled, buffer.length - filled);
             if (read < 0) break;
+            lastDataNanos = System.nanoTime();
             filled += read;
             // 左右そろった単位でだけ書き込む
             final int usable = filled - filled % BYTES_PER_SAMPLE_FRAME;
