@@ -24,9 +24,22 @@ base {
 
 def basePackage = 'marumasa/marumasa_sign'
 def targets = rootProject.marumaTargets
-targets.each { evaluationDependsOn(":targets:${it.name}") }
+def prebuilt = rootProject.marumaPrebuilt
+if (prebuilt == null) {
+    targets.each { evaluationDependsOn(":targets:${it.name}") }
+}
 evaluationDependsOn(':core')
 evaluationDependsOn(':bootstrap')
+
+// 対象の、ローダーごとに名前を付け替えた jar。marumaPrebuilt を指定したときは、そこに置いてあるものを使う
+def remappedJar = { target, String loaderName ->
+    if (prebuilt != null) {
+        def jar = new File(prebuilt, "${target.name}/${loaderName}.jar")
+        if (!jar.isFile()) throw new GradleException("Prebuilt jar is missing: ${jar}")
+        return layout.file(providers.provider { jar })
+    }
+    return project(":targets:${target.name}").tasks.named("remap${loaderName.capitalize()}Jar").flatMap { it.archiveFile }
+}
 
 /**
  * jar の中のクラスを、パッケージ名を変えて取り出す。
@@ -90,9 +103,9 @@ targets.each { target ->
         if (loaderSpec == null) return
         loaderSpec.versions.each { tableLines << "${loaderName}.${it}=${target.name}" }
 
-        def remapTask = project(":targets:${target.name}").tasks.named("remap${loaderName.capitalize()}Jar")
+        def remapped = remappedJar(target, loaderName)
         relocateTasks << tasks.register("relocate${loaderName.capitalize()}${target.name.capitalize()}", RelocateJar) {
-            input = remapTask.flatMap { it.archiveFile }
+            input = remapped
             fromPrefix = "${basePackage}/adapter"
             toPrefix = "${basePackage}/${loaderName}/${target.name}"
             output = layout.buildDirectory.dir("relocated/${loaderName}/${target.name}")
@@ -105,8 +118,7 @@ targets.each { target ->
 def fabricJars = [:]
 targets.each { target ->
     if (target.loaders.fabric == null) return
-    fabricJars["marumasa_sign-fabric-${target.name}.jar".toString()] =
-            project(":targets:${target.name}").tasks.named('remapFabricJar')
+    fabricJars["marumasa_sign-fabric-${target.name}.jar".toString()] = remappedJar(target, 'fabric')
 }
 
 def generateFabricMetadata = tasks.register('generateFabricMetadata') {
@@ -157,8 +169,8 @@ def universalJar = tasks.register('universalJar', Jar) {
     relocateTasks.each { from(it) }
     from(generateTable)
     from(generateFabricMetadata)
-    fabricJars.each { name, task ->
-        from(task.flatMap { it.archiveFile }) {
+    fabricJars.each { name, jar ->
+        from(jar) {
             into 'META-INF/jars'
             rename { name }
         }
@@ -192,7 +204,7 @@ def litemodTasks = []
 targets.each { target ->
     def loaderSpec = target.loaders.liteloader
     if (loaderSpec == null) return
-    def remapTask = project(":targets:${target.name}").tasks.named('remapLiteloaderJar')
+    def remapped = remappedJar(target, 'liteloader')
 
     def metadata = tasks.register("litemodJson${target.name.capitalize()}") {
         def outputDir = layout.buildDirectory.dir("generated/litemod/${target.name}")
@@ -222,7 +234,7 @@ targets.each { target ->
         duplicatesStrategy = DuplicatesStrategy.FAIL
 
         from(project(':core').sourceSets.main.output)
-        from(remapTask.map { zipTree(it.archiveFile) }) {
+        from(remapped.map { zipTree(it) }) {
             include "${basePackage}/**"
         }
         from(metadata)
