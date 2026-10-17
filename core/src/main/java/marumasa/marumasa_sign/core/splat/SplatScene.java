@@ -435,54 +435,26 @@ public final class SplatScene {
         final int count = cloud.count;
         if (count == 0) return;
 
-        // カメラに正対する平面の正規直交基底 (u: 右, v: 上, n: カメラ向き)
-        float ux = nz, uy = 0f, uz = -nx;
-        final float uLen = (float) Math.sqrt(ux * ux + uz * uz);
-        if (uLen > 1e-4f) {
-            ux /= uLen;
-            uz /= uLen;
-        } else {
-            ux = 1f;
-            uy = 0f;
-            uz = 0f;
-        }
-        float vx = ny * uz - nz * uy;
-        float vy = nz * ux - nx * uz;
-        float vz = nx * uy - ny * ux;
-        final float vLen = (float) Math.sqrt(vx * vx + vy * vy + vz * vz);
-        if (vLen > 0f) {
-            vx /= vLen;
-            vy /= vLen;
-            vz /= vLen;
-        }
-
         final float p0 = p[0], p1 = p[1], p2 = p[2];
         final float p4 = p[4], p5 = p[5], p6 = p[6];
         final float p8 = p[8], p9 = p[9], p10 = p[10];
         final float p12 = p[12], p13 = p[13], p14 = p[14];
 
-        // 基底ベクトルをモデル空間へ引き戻す (A^T * u, A^T * v, -A^T * n)
-        final float tux = p0 * ux + p1 * uy + p2 * uz;
-        final float tuy = p4 * ux + p5 * uy + p6 * uz;
-        final float tuz = p8 * ux + p9 * uy + p10 * uz;
-
-        final float tvx = p0 * vx + p1 * vy + p2 * vz;
-        final float tvy = p4 * vx + p5 * vy + p6 * vz;
-        final float tvz = p8 * vx + p9 * vy + p10 * vz;
-
-        // 奥行き方向 w = -n (カメラから看板へ向かう向き)
-        final float twx = -(p0 * nx + p1 * ny + p2 * nz);
-        final float twy = -(p4 * nx + p5 * ny + p6 * nz);
-        final float twz = -(p8 * nx + p9 * ny + p10 * nz);
-
         final float[] data = splatData;
 
-        // 1. 奥行きを計算して最小・最大を求める (keys に float のビット列を一時保存する)
+        // 1. カメラからの距離を計算して最小・最大を求める (keys に float のビット列を一時保存する)
+        // 四角形は、それぞれの中心からカメラの方へ向ける。並べ替えも、平面への射影ではなくカメラからの距離で行う。
+        // ゲーム側の半透明の描画も四角形の中心とカメラの距離で並べ替えるので、どちらの順で描かれても同じになり、
+        // 奥行きを記録する描画でも、重なった部分はより近い (濃い) ほうのガウス分布が残って、すき間ができない
         float minZ = Float.POSITIVE_INFINITY;
         float maxZ = Float.NEGATIVE_INFINITY;
         for (int i = 0; i < count; i++) {
             final int o = i * DATA_STRIDE;
-            final float z = twx * data[o] + twy * data[o + 1] + twz * data[o + 2];
+            final float px = data[o], py = data[o + 1], pz = data[o + 2];
+            final float dx = cameraX - (p0 * px + p4 * py + p8 * pz + p12);
+            final float dy = cameraY - (p1 * px + p5 * py + p9 * pz + p13);
+            final float dz = cameraZ - (p2 * px + p6 * py + p10 * pz + p14);
+            final float z = (float) Math.sqrt(dx * dx + dy * dy + dz * dz);
             if (z < minZ) minZ = z;
             if (z > maxZ) maxZ = z;
             keys[i] = Float.floatToRawIntBits(z);
@@ -552,6 +524,46 @@ public final class SplatScene {
             final float wx = p0 * px + p4 * py + p8 * pz + p12;
             final float wy = p1 * px + p5 * py + p9 * pz + p13;
             final float wz = p2 * px + p6 * py + p10 * pz + p14;
+
+            // このガウス分布からカメラへ向かう向き n と、それに正対する平面の正規直交基底 (u: 右, v: 上)。
+            // カメラがほぼ中心に重なるときは、モデル全体の中心から見た向きを使う
+            float sx = cameraX - wx, sy = cameraY - wy, sz = cameraZ - wz;
+            final float sLen = (float) Math.sqrt(sx * sx + sy * sy + sz * sz);
+            if (sLen > 1e-5f) {
+                sx /= sLen;
+                sy /= sLen;
+                sz /= sLen;
+            } else {
+                sx = nx;
+                sy = ny;
+                sz = nz;
+            }
+            float ux = sz, uy = 0f, uz = -sx;
+            final float uLen = (float) Math.sqrt(ux * ux + uz * uz);
+            if (uLen > 1e-4f) {
+                ux /= uLen;
+                uz /= uLen;
+            } else {
+                ux = 1f;
+                uz = 0f;
+            }
+            float vx = sy * uz - sz * uy;
+            float vy = sz * ux - sx * uz;
+            float vz = sx * uy - sy * ux;
+            final float vLen = (float) Math.sqrt(vx * vx + vy * vy + vz * vz);
+            if (vLen > 0f) {
+                vx /= vLen;
+                vy /= vLen;
+                vz /= vLen;
+            }
+
+            // 基底ベクトルをモデル空間へ引き戻す (A^T * u, A^T * v)
+            final float tux = p0 * ux + p1 * uy + p2 * uz;
+            final float tuy = p4 * ux + p5 * uy + p6 * uz;
+            final float tuz = p8 * ux + p9 * uy + p10 * uz;
+            final float tvx = p0 * vx + p1 * vy + p2 * vz;
+            final float tvy = p4 * vx + p5 * vy + p6 * vz;
+            final float tvz = p8 * vx + p9 * vy + p10 * vz;
 
             final float s00 = data[o + 3];
             final float s01 = data[o + 4];

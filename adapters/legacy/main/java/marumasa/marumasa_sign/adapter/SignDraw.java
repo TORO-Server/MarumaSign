@@ -30,13 +30,14 @@ final class SignDraw {
         }
     }
 
-    static void draw(SignImage image, TileEntitySign sign, double x, double y, double z) {
+    // x, y, z は描画の原点から見た看板の位置、camX, camY, camZ はブロックの角を原点としたカメラの位置
+    static void draw(SignImage image, TileEntitySign sign, double x, double y, double z,
+                     float camX, float camY, float camZ) {
         final boolean wall = Mc.isWallSign(sign);
         final int metadata = sign.getBlockMetadata();
         final float yaw = wall ? wallYaw(metadata) : metadata * 22.5f;
-        // x, y, z はカメラから見た位置なので、そのまま看板までの距離になる
-        final SignImage.Batch[] batches = image.batches(yaw, wall, Math.sqrt(x * x + y * y + z * z),
-                (float) -x, (float) -y, (float) -z);
+        final SignImage.Batch[] batches = image.batches(yaw, wall, Math.sqrt(camX * camX + camY * camY + camZ * camZ),
+                camX, camY, camZ);
 
         GL11.glPushMatrix();
         GL11.glTranslated(x, y, z);
