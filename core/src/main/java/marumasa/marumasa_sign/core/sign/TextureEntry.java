@@ -75,6 +75,11 @@ public final class TextureEntry {
         return media;
     }
 
+    // 動画や音声の今の音の大きさ (0 - 1)。動画や音声でないか、再生していなければ -1
+    public float mediaGain() {
+        return media == null ? -1f : media.currentGain();
+    }
+
     public int state() {
         return state;
     }

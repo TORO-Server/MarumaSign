@@ -40,6 +40,10 @@ final class MediaSession {
 
     // この tick の間に描画された看板のうち、最も近いものまでの距離
     private double nearestDistance = Double.MAX_VALUE;
+    // 最後に分かった、最も近い看板までの距離。
+    // 看板が視界の外にあると描画されず距離が分からないので、その間はこの値で音量を決める
+    private double lastDistance = Double.MAX_VALUE;
+    private float currentGain;
 
     MediaSession(Platform platform, String url, Listener listener) {
         this.platform = platform;
@@ -118,11 +122,28 @@ final class MediaSession {
             player = null;
             return;
         }
-        // 近いほど大きく聞こえるようにする
-        final double distance = nearestDistance == Double.MAX_VALUE ? 0 : nearestDistance;
-        final double falloff = Math.max(0.0, 1.0 - distance / HEARING_DISTANCE);
-        player.setGain((float) (falloff * falloff * MarumaSign.config().getVolume() / 100.0));
+        // 近いほど大きく聞こえるようにする。
+        // 看板に背を向けると描画されなくなるが、そのときに距離 0 (最大音量) と見なさないよう、前の距離を使う
+        if (nearestDistance != Double.MAX_VALUE) lastDistance = nearestDistance;
+        currentGain = gain(lastDistance, MarumaSign.config().getVolume());
+        player.setGain(currentGain);
         nearestDistance = Double.MAX_VALUE;
+    }
+
+    // 今の音の大きさ (0 - 1)。再生していなければ -1
+    float currentGain() {
+        return player == null ? -1f : currentGain;
+    }
+
+    /**
+     * 看板までの距離と設定の音量から、再生する音の大きさ (0 - 1) を求める。
+     *
+     * @param distance 看板までの距離 (ブロック)。分からなければ Double.MAX_VALUE で、音は出さない
+     * @param volume   設定の音量 (0 - 100)
+     */
+    static float gain(double distance, int volume) {
+        final double falloff = Math.max(0.0, 1.0 - distance / HEARING_DISTANCE);
+        return (float) (falloff * falloff * volume / 100.0);
     }
 
     void close() {
