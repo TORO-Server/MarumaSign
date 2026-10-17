@@ -46,6 +46,31 @@ tasks.register('textureCheck', JavaExec) {
     args = providers.gradleProperty('textureArgs').getOrElse('').tokenize(' ')
 }
 
+// ガウシアンスプラッティングを PNG に描く。引数は -PsplatPreviewArgs="出力先 スプラットのファイル..." で渡す
+tasks.register('splatPreview', JavaExec) {
+    classpath = sourceSets.test.runtimeClasspath
+    mainClass = 'marumasa.marumasa_sign.core.splat.SplatPreview'
+    javaLauncher = javaToolchains.launcherFor(java.toolchain)
+    args = providers.gradleProperty('splatPreviewArgs').getOrElse('').tokenize(' ')
+}
+
+// ガウシアンスプラッティングの並べ替えと頂点生成の時間を測る。引数は -PsplatBenchArgs="ファイル" で渡す
+tasks.register('splatBenchmark', JavaExec) {
+    classpath = sourceSets.test.runtimeClasspath
+    mainClass = 'marumasa.marumasa_sign.core.splat.SplatBenchmark'
+    javaLauncher = javaToolchains.launcherFor(java.toolchain)
+    args = providers.gradleProperty('splatBenchArgs').getOrElse('').tokenize(' ')
+}
+
+// ガウシアンスプラッティングのデコーダの動作と安全性を確認する。
+// -PsplatArgs="テスト用データのフォルダ" を渡すと、実データでの検査と、ほかの実装との数値の比較も行う
+tasks.register('splatCheck', JavaExec) {
+    classpath = sourceSets.test.runtimeClasspath
+    mainClass = 'marumasa.marumasa_sign.core.splat.SplatCheck'
+    javaLauncher = javaToolchains.launcherFor(java.toolchain)
+    maxHeapSize = '2g'
+    args = providers.gradleProperty('splatArgs').getOrElse('').tokenize(' ')
+}
 
 tasks.withType(JavaCompile).configureEach {
     // Minecraft に依存しないので JDK 8 の API だけに制限する

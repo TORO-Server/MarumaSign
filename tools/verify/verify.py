@@ -288,12 +288,12 @@ class Server:
             self.process.stdin.write(text + "\n")
             self.process.stdin.flush()
 
-    def move_player(self, distance):
+    def move_player(self, dx, dz):
         """プレイヤーを、いまの場所から離れた場所へ移動させる。"""
         if version_key(self.minecraft) >= (1, 13, 0):
-            self.command(f"execute as {PLAYER} at @s run tp @s ~{distance} ~ ~")
+            self.command(f"execute as {PLAYER} at @s run tp @s ~{dx} ~ ~{dz}")
         else:
-            self.command(f"tp {PLAYER} ~{distance} ~ ~")
+            self.command(f"tp {PLAYER} ~{dx} ~ ~{dz}")
 
     def give_sign_item(self, lines):
         """看板の文字をデータとして持つ看板アイテムを、プレイヤーに渡す。データの書き方はバージョンによって違う。"""
@@ -652,6 +652,7 @@ def analyze_screenshot(path):
     width, height = image.size
     pixels = image.load()
     sums = {name: [0, 0, 0] for name in TEST_COLORS}
+    hits = set()
     for y in range(height):
         for x in range(width):
             name = classify(*pixels[x, y])
@@ -660,7 +661,33 @@ def analyze_screenshot(path):
                 entry[0] += 1
                 entry[1] += x
                 entry[2] += y
-    return judge_colours(sums, width, height)
+                hits.add((x, y))
+    visible, detail = judge_colours(sums, width, height)
+    if visible:
+        visible, detail = judge_coverage(hits)
+    return visible, detail
+
+
+def judge_coverage(hits):
+    """絵の範囲が、すき間なく塗られているかを調べる。
+
+    四角形の重なりや並び順がおかしいと、色の配置は正しくても、縞模様や網目のように背景が透けて見える。
+    中央の白い円にかからない、上と下の帯で、テスト画像の色のピクセルの割合を見る
+    (正しく描けていれば 0.45 以上、縞模様になると 0.35 以下だった)。
+    """
+    xs = sorted(x for x, _ in hits)
+    ys = sorted(y for _, y in hits)
+    # 外れ値に左右されないよう、2 - 98 パーセンタイルを絵の範囲とする
+    x0, x1 = xs[len(xs) * 2 // 100], xs[len(xs) * 98 // 100]
+    y0, y1 = ys[len(ys) * 2 // 100], ys[len(ys) * 98 // 100]
+    band = (y1 - y0) * 2 // 5
+    coverage = []
+    for top in (y0, y1 - band):
+        area = [(x, y) for x in range(x0, x1 + 1) for y in range(top, top + band + 1)]
+        coverage.append(sum((point in hits) for point in area) / max(1, len(area)))
+    if min(coverage) < 0.40:
+        return False, f"test image has gaps (coverage of the top and bottom bands: {coverage[0]:.2f}, {coverage[1]:.2f})"
+    return True, "test image visible"
 
 
 # シェーダーを使っているときの判定で見る位置 (画面の幅と高さに対する割合) と、そこにあるはずの色合い (色相の範囲、度)。
@@ -989,7 +1016,9 @@ def run(args):
                     # 次のファイルは、前の看板が見えない場所で確認する
                     # 前の看板が読み込まれている範囲 (描画距離 4 チャンク) の外まで離れる。
                     # 遠くへ飛ばしすぎると、古いバージョンでは移動先の地形がなかなか届かない
-                    server.move_player(112)
+                    # (1.8 では、一方向に 3 回 (336 ブロック) 進むと届かなかった) ので、四角形を描くように向きを変えて、
+                    # 最初の場所の近くにとどまる
+                    server.move_player(*[(112, 0), (0, 112), (-112, 0), (0, -112)][current % 4])
                     time.sleep(1.0)
                     (result_dir / f"moved-{current}.txt").write_text("done\n")
                     current += 1
@@ -997,8 +1026,10 @@ def run(args):
             if not args.baseline and item_stage == "request" and (result_dir / "item-request.txt").is_file():
                 # 看板の文字を持たせた看板アイテムを渡す。置いた看板と区別できるように、別の URL にする
                 item_image = next((image for image in images if not is_url(image)), REPO / "tools" / "verify" / "test-image.png")
-                host.files["item.png"] = item_image.read_bytes()
-                url = f"http://127.0.0.1:{host.port}/i/item.png"
+                item_ext = item_image.suffix or ".png"
+                item_name = f"item{item_ext}"
+                host.files[item_name] = item_image.read_bytes()
+                url = f"http://127.0.0.1:{host.port}/i/{item_name}"
                 text = url + "|0|0|0|1|1|0|0|0"
                 server.give_sign_item([text[i:i + 15] for i in range(0, 60, 15)])
                 time.sleep(1.0)

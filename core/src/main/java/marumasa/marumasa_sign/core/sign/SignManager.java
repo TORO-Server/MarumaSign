@@ -7,6 +7,7 @@ import marumasa.marumasa_sign.core.gltf.GltfScene;
 import marumasa.marumasa_sign.core.image.DecodedImage;
 import marumasa.marumasa_sign.core.image.ImageLoader;
 import marumasa.marumasa_sign.core.media.Ffmpeg;
+import marumasa.marumasa_sign.core.splat.SplatScene;
 
 import java.awt.BasicStroke;
 import java.awt.Color;
@@ -95,6 +96,16 @@ public final class SignManager {
             }
 
             @Override
+            public void onSplat(final SplatScene scene) {
+                platform.execute(new Runnable() {
+                    @Override
+                    public void run() {
+                        registerSplat(url, created, scene);
+                    }
+                });
+            }
+
+            @Override
             public void onMedia() {
                 platform.execute(new Runnable() {
                     @Override
@@ -155,6 +166,20 @@ public final class SignManager {
             for (Object texture : created) {
                 MarumaSign.releaseTexture(platform, texture);
             }
+            fail(url, entry);
+        }
+    }
+
+    private void registerSplat(String url, TextureEntry entry, SplatScene scene) {
+        if (textures.get(url) != entry) return;
+        Object created = null;
+        try {
+            created = platform.createTexture(SplatScene.TEXTURE_SIZE, SplatScene.TEXTURE_SIZE, SplatScene.gaussianTexture());
+            entry.setSplat(scene, created);
+            MarumaSign.LOGGER.info("Load: " + url + " (" + scene.cloud().count + " splats)");
+        } catch (RuntimeException | Error e) {
+            MarumaSign.LOGGER.error("Failed to register splat: " + url, e);
+            MarumaSign.releaseTexture(platform, created);
             fail(url, entry);
         }
     }

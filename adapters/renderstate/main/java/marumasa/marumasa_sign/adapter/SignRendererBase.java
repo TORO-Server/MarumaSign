@@ -40,6 +40,8 @@ abstract class SignRendererBase implements BlockEntityRenderer<SignBlockEntity, 
         boolean spectator;
         // カメラから看板までの距離 (ブロック)
         double distance;
+        // ブロックの角を原点としたカメラの位置
+        float cameraX, cameraY, cameraZ;
     }
 
     private static Field renderersField;
@@ -87,7 +89,11 @@ abstract class SignRendererBase implements BlockEntityRenderer<SignBlockEntity, 
         // スペクテイターには看板そのものも見せる
         SignBoards.track(sign, state.image != null && !state.spectator);
         if (state.image == null) return;
-        state.distance = Math.sqrt(sign.getBlockPos().distToCenterSqr(cameraPosition));
+        final BlockPos pos = sign.getBlockPos();
+        state.distance = Math.sqrt(pos.distToCenterSqr(cameraPosition));
+        state.cameraX = (float) (cameraPosition.x - pos.getX());
+        state.cameraY = (float) (cameraPosition.y - pos.getY());
+        state.cameraZ = (float) (cameraPosition.z - pos.getZ());
 
         final BlockState blockState = sign.getBlockState();
         if (blockState.getBlock() instanceof WallSignBlock) {
@@ -115,7 +121,8 @@ abstract class SignRendererBase implements BlockEntityRenderer<SignBlockEntity, 
             return;
         }
 
-        submitBatches(image.batches(state.yaw, state.wall, state.distance), poseStack, collector, state.lightCoords);
+        submitBatches(image.batches(state.yaw, state.wall, state.distance, state.cameraX, state.cameraY, state.cameraZ),
+                poseStack, collector, state.lightCoords);
         MarumaSign.drawn(image);
     }
 

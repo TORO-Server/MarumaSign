@@ -661,20 +661,23 @@ abstract class SignRendererBase implements BlockEntityRenderer<SignBlockEntity> 
             return true;
         }
 
-        for (SignImage.Batch batch : image.batches(yaw, wall, distance(sign))) {
+        final Vec3 camera = mc.gameRenderer.getMainCamera().getPosition();
+        final double signX = sign.getBlockPos().getX();
+        final double signY = sign.getBlockPos().getY();
+        final double signZ = sign.getBlockPos().getZ();
+        final double dx = signX + 0.5 - camera.x;
+        final double dy = signY + 0.5 - camera.y;
+        final double dz = signZ + 0.5 - camera.z;
+        final double distance = Math.sqrt(dx * dx + dy * dy + dz * dz);
+        final float camX = (float) (camera.x - signX);
+        final float camY = (float) (camera.y - signY);
+        final float camZ = (float) (camera.z - signZ);
+
+        for (SignImage.Batch batch : image.batches(yaw, wall, distance, camX, camY, camZ)) {
             Mc.quads(buffers.getBuffer(((Tex) batch.texture).renderType), poseStack, batch, light);
         }
         MarumaSign.drawn(image);
         return mc.player != null && mc.player.isSpectator();
-    }
-
-    // カメラから看板までの距離 (ブロック)
-    private double distance(SignBlockEntity sign) {
-        final Vec3 camera = mc.gameRenderer.getMainCamera().getPosition();
-        final double x = sign.getBlockPos().getX() + 0.5 - camera.x;
-        final double y = sign.getBlockPos().getY() + 0.5 - camera.y;
-        final double z = sign.getBlockPos().getZ() + 0.5 - camera.z;
-        return Math.sqrt(x * x + y * y + z * z);
     }
 
     // 以下のメソッドはバージョンによって有無や引数が違う。
@@ -1212,19 +1215,22 @@ final class SignRendererBase extends BlockEntityRenderer<SignBlockEntity> {
             return;
         }
 
-        for (SignImage.Batch batch : image.batches(yaw, wall, distance(sign))) {
+        final Vec3 camera = mc.gameRenderer.getMainCamera().getPosition();
+        final double signX = sign.getBlockPos().getX();
+        final double signY = sign.getBlockPos().getY();
+        final double signZ = sign.getBlockPos().getZ();
+        final double dx = signX + 0.5 - camera.x;
+        final double dy = signY + 0.5 - camera.y;
+        final double dz = signZ + 0.5 - camera.z;
+        final double distance = Math.sqrt(dx * dx + dy * dy + dz * dz);
+        final float camX = (float) (camera.x - signX);
+        final float camY = (float) (camera.y - signY);
+        final float camZ = (float) (camera.z - signZ);
+
+        for (SignImage.Batch batch : image.batches(yaw, wall, distance, camX, camY, camZ)) {
             Mc.quads(buffers.getBuffer(((Tex) batch.texture).renderType), poseStack, batch, light);
         }
         MarumaSign.drawn(image);
-    }
-
-    // カメラから看板までの距離 (ブロック)
-    private double distance(SignBlockEntity sign) {
-        final Vec3 camera = mc.gameRenderer.getMainCamera().getPosition();
-        final double x = sign.getBlockPos().getX() + 0.5 - camera.x;
-        final double y = sign.getBlockPos().getY() + 0.5 - camera.y;
-        final double z = sign.getBlockPos().getZ() + 0.5 - camera.z;
-        return Math.sqrt(x * x + y * y + z * z);
     }
 
     @Override
@@ -1483,7 +1489,8 @@ final class SignRendererBase extends BlockEntityRenderer<SignBlockEntity> {
         } else {
             return;
         }
-        final SignImage.Batch[] batches = image.batches(yaw, wall, Math.sqrt(x * x + y * y + z * z));
+        final SignImage.Batch[] batches = image.batches(yaw, wall, Math.sqrt(x * x + y * y + z * z),
+                (float) -x, (float) -y, (float) -z);
 
         GL11.glPushMatrix();
         GL11.glTranslated(x, y, z);
@@ -1511,7 +1518,8 @@ final class SignRendererBase extends BlockEntityRenderer<SignBlockEntity> {
             Minecraft.getInstance().getTextureManager().bind(((Tex) batch.texture).id);
             if (batch.colors != null) {
                 // 3D モデルは裏を向いた面と、透明な部分を描かない
-                GL11.glEnable(GL11.GL_CULL_FACE);
+                if (batch.doubleSided) GL11.glDisable(GL11.GL_CULL_FACE);
+                else GL11.glEnable(GL11.GL_CULL_FACE);
                 GL11.glEnable(GL11.GL_ALPHA_TEST);
                 GL11.glAlphaFunc(GL11.GL_GREATER, 0.1f);
                 GL11.glDepthMask(!batch.blend);

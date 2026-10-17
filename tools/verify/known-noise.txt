@@ -28,6 +28,8 @@ Exception in thread "Server Shutdown Thread"
 # 確認用のアカウントは実在しないので、Minecraft 自体がスキンの情報を取りに行って失敗することがある (通信の状況によって出たり出なかったりする)
 Couldn't look up profile properties for
 MinecraftClientHttpException
+# 同じ失敗の例外に付く、呼び出し元の行 (Forge 26.3 ではこの行だけが警告として拾われる)
+at \S*com\.mojang\.authlib\.minecraft\.client\.MinecraftClient\.
 
 # 影 Mod がシェーダーパックを組み立てるときに出す、パックの内容についての知らせ。
 # ワールドに入ったときに出るので、ワールドに入れない基準の取得 (起動が済んでから接続するバージョン) では基準に入らない
