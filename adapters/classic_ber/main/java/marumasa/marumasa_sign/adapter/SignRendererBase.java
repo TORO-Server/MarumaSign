@@ -8,6 +8,7 @@ import net.minecraft.client.Minecraft;
 import net.minecraft.client.renderer.MultiBufferSource;
 import net.minecraft.client.renderer.blockentity.BlockEntityRenderDispatcher;
 import net.minecraft.client.renderer.blockentity.BlockEntityRenderer;
+import net.minecraft.core.BlockPos;
 import net.minecraft.world.level.block.StandingSignBlock;
 import net.minecraft.world.level.block.WallSignBlock;
 import net.minecraft.world.level.block.entity.BlockEntityType;
@@ -73,7 +74,8 @@ abstract class SignRendererBase implements BlockEntityRenderer<SignBlockEntity> 
             return true;
         }
 
-        for (SignImage.Batch batch : image.batches(yaw, wall, distance(sign))) {
+        final BlockPos pos = sign.getBlockPos();
+        for (SignImage.Batch batch : image.batches(yaw, wall, distance(sign), pos.getX(), pos.getY(), pos.getZ())) {
             Mc.quads(buffers.getBuffer(((Tex) batch.texture).renderType), poseStack, batch, light);
         }
         MarumaSign.drawn(image);

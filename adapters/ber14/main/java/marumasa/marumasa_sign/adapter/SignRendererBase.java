@@ -6,6 +6,7 @@ import marumasa.marumasa_sign.core.util.Reflect;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.renderer.blockentity.BlockEntityRenderDispatcher;
 import net.minecraft.client.renderer.blockentity.BlockEntityRenderer;
+import net.minecraft.core.BlockPos;
 import net.minecraft.world.level.block.StandingSignBlock;
 import net.minecraft.world.level.block.WallSignBlock;
 import net.minecraft.world.level.block.entity.SignBlockEntity;
@@ -68,7 +69,9 @@ final class SignRendererBase extends BlockEntityRenderer<SignBlockEntity> {
         } else {
             return;
         }
-        final SignImage.Batch[] batches = image.batches(yaw, wall, Math.sqrt(x * x + y * y + z * z));
+        final BlockPos pos = sign.getBlockPos();
+        final SignImage.Batch[] batches = image.batches(yaw, wall, Math.sqrt(x * x + y * y + z * z),
+                pos.getX(), pos.getY(), pos.getZ());
 
         GL11.glPushMatrix();
         GL11.glTranslated(x, y, z);

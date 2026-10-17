@@ -1,6 +1,6 @@
 # MarumaSign
 
-看板に画像・動画・音声・3D モデルを表示する Minecraft の Mod です。
+看板に画像・動画・音声・3D モデル・PDF を表示する Minecraft の Mod です。
 
 https://www.curseforge.com/minecraft/mc-mods/marumasign
 
@@ -110,12 +110,25 @@ glTF 2.0 の `.glb` と `.gltf` を表示できます。
 - カメラの定義は使いません
 - 上に挙げていない拡張が必須 (`extensionsRequired`) のモデルは読み込めません
 
+#### PDF
+
+`.pdf` を表示できます。最初は 1 ページ目を表示します。
+
+看板の絵に照準 (画面中央の十字) を合わせている間だけ、絵の下側にページ送りの帯が表示されます。
+帯の左右のボタンに照準を合わせて使用キー (右クリック) を押すと、前のページ・次のページに切り替わり、
+中央には「現在のページ / 総ページ数」が表示されます。照準を外すと帯は消えます。
+
+- ページの切り替えは自分の画面だけで、ほかのプレイヤーには伝わりません。同じ PDF の看板は、すべて同じページを表示します。
+- 照準が絵に合っている間の使用キーは、ページ送りのためだけに使い、ブロックを置いたり看板を編集したりはしません。
+- 埋め込まれていないフォントを使う PDF を初めて表示するときは、パソコンにあるフォントを調べるため、表示まで時間がかかることがあります (結果はホームフォルダの `.pdfbox.cache` に保存され、2 回目からは速くなります)。
+- ファイルは 64 MB までです。
+
 ### 看板のフォーマット
 
 `[URL]|[X軸位置]|[Y軸位置]|[Z軸位置]|[横幅]|[高さ]|[Z軸回転]|[Y軸回転]|[X軸回転]`
 
 看板の 4 行 (Minecraft 1.20 以降は表と裏の合計 8 行) をつなげた文字列が、この形式になっていると表示されます。
-動画・音声・3D モデルでも同じ形式です。
+動画・音声・3D モデル・PDF でも同じ形式です。
 
 ### 看板のアイテム
 
@@ -181,7 +194,7 @@ python tools/verify/matrix.py
 ```
 
 バニラのサーバーを起動し、各ローダーを入れた実際のクライアントで接続して、
-画像・3D モデル・動画を看板に書き込んで表示するまでと、看板の文字を持たせた看板アイテムの見た目を自動で確認します。
+画像・3D モデル・動画・PDF を看板に書き込んで表示するまで (PDF はページ送りの操作も) と、看板の文字を持たせた看板アイテムの見た目を自動で確認します。
 [portablemc](https://github.com/mindstorm38/portablemc)、Pillow、FFmpeg が必要です。
 `tools/verify/verify.py --image` には、ファイルのほかにライブ配信などの URL も `|` で区切って指定できます。
 
@@ -207,6 +220,8 @@ python tools/check_linkage.py
 ./gradlew :core:uiPreview
 # 3D モデルを PNG に描く (出力先, アニメーションの時刻, モデルのファイル...)
 ./gradlew :core:gltfCheck -PgltfArgs="build/gltf 0.5 model.glb"
+# PDF の看板の表示とページ送りを確かめ、ページと帯を PNG に書き出す (PDF のファイル, 出力先)
+./gradlew :core:pdfCheck -PpdfArgs="tools/verify/test-pdf.pdf build/pdf"
 ```
 
 ### 取り込んでいるソースコード
@@ -221,6 +236,12 @@ python tools/check_linkage.py
 | [TwelveMonkeys ImageIO](https://github.com/haraldk/TwelveMonkeys) | BSD 3-Clause | WebP の展開 (`core/texture/webp`) |
 | [bcdec](https://github.com/iOrange/bcdec) | MIT | BC6H と BC7 の展開 (`core/texture/Bptc.java`) |
 | [Basis Universal](https://github.com/BinomialLLC/basis_universal) | Apache 2.0 | KTX2 の ETC1S と UASTC の展開 (`core/texture/BasisEtc1s.java`, `Uastc.java`) |
+
+次のライブラリは、そのまま配布する jar に同梱しています。他の Mod とぶつからないよう、パッケージ名を `marumasa.marumasa_sign.lib` の下に変えています。
+
+| ライブラリ | ライセンス | 使っているところ |
+| --- | --- | --- |
+| [Apache PDFBox](https://pdfbox.apache.org/) (pdfbox, fontbox) 2.0 | Apache 2.0 | PDF の読み込みと描画 (`core/pdf`) |
 
 ## 貢献者
 

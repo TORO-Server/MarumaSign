@@ -126,6 +126,8 @@ MEDIA = {
     "image": "test-image.png",
     "model": "test-model.glb",
     "video": "test-video.mp4",
+    # 2 ページの PDF。ページ送りの操作も確かめる
+    "pdf": "test-pdf.pdf",
 }
 
 

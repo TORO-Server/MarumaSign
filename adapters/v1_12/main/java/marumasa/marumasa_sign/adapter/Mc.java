@@ -4,9 +4,12 @@ import net.minecraft.block.BlockWallSign;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.renderer.OpenGlHelper;
 import net.minecraft.client.renderer.tileentity.TileEntityRendererDispatcher;
+import net.minecraft.entity.Entity;
 import net.minecraft.init.Items;
 import net.minecraft.item.ItemStack;
 import net.minecraft.tileentity.TileEntitySign;
+import net.minecraft.util.math.RayTraceResult;
+import net.minecraft.util.math.Vec3d;
 import net.minecraft.util.text.TextComponentString;
 
 import java.io.File;
@@ -98,10 +101,28 @@ final class Mc {
         OpenGlHelper.setLightmapTextureCoords(OpenGlHelper.lightmapTexUnit, light % 65536, light / 65536);
     }
 
+    // ---------- 照準 ----------
+
+    // 照準の視線 {目の位置 x, y, z, 視線の向き x, y, z, 照準が合っているブロックまでの距離 (なければ -1)}
+    static double[] crosshair() {
+        final Entity viewer = mc.getRenderViewEntity();
+        if (viewer == null || !inWorld() || mc.currentScreen != null) return null;
+        final Vec3d eye = viewer.getPositionEyes(1f);
+        final Vec3d look = viewer.getLook(1f);
+        final RayTraceResult target = mc.objectMouseOver;
+        final double hit = target != null && target.typeOfHit == RayTraceResult.Type.BLOCK && target.hitVec != null
+                ? target.hitVec.distanceTo(eye) : -1;
+        return new double[]{eye.x, eye.y, eye.z, look.x, look.y, look.z, hit};
+    }
+
     // ---------- 動作確認用 ----------
 
     static void look(float pitch) {
         if (mc.player != null) mc.player.rotationPitch = pitch;
+    }
+
+    static void turn(float yaw) {
+        if (mc.player != null) mc.player.rotationYaw = yaw;
     }
 
     // ホットバーにある看板を手に持つ

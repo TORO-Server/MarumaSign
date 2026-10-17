@@ -26,6 +26,8 @@ public final class TextureEntry {
     private volatile int revision;
     // 動画や音声の再生。画像なら null
     private MediaSession media;
+    // PDF の表示。PDF でなければ null
+    private PdfSession pdf;
     // frames のテクスチャをこのエントリが所有しているかどうか (共用の画像を指しているだけなら false)
     private boolean ownsTextures;
     // 3D モデル。画像なら null
@@ -73,6 +75,20 @@ public final class TextureEntry {
 
     MediaSession media() {
         return media;
+    }
+
+    void setPdf(PdfSession pdf) {
+        this.pdf = pdf;
+    }
+
+    // PDF の表示。PDF でなければ null
+    PdfSession pdf() {
+        return pdf;
+    }
+
+    // PDF なら true
+    public boolean isPdf() {
+        return pdf != null;
     }
 
     public int state() {
