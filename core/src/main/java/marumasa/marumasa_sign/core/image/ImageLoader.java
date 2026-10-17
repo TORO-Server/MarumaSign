@@ -9,6 +9,7 @@ import marumasa.marumasa_sign.core.gltf.GltfLoader;
 import marumasa.marumasa_sign.core.gltf.GltfScene;
 import marumasa.marumasa_sign.core.media.Ffmpeg;
 import marumasa.marumasa_sign.core.net.Http;
+import marumasa.marumasa_sign.core.pdf.PdfFile;
 
 import javax.imageio.ImageIO;
 import java.awt.image.BufferedImage;
@@ -39,7 +40,10 @@ public final class ImageLoader {
         // 3D モデルだったとき
         void onModel(GltfScene scene);
 
-        // 画像でも 3D モデルでもなかったとき。動画や音声として再生できるかもしれない
+        // PDF だったとき。firstPage は最初のページを画像にしたもの
+        void onPdf(PdfFile file, DecodedImage firstPage);
+
+        // 画像でも 3D モデルでも PDF でもなかったとき。動画や音声として再生できるかもしれない
         void onMedia();
 
         void onFailed();
@@ -106,13 +110,15 @@ public final class ImageLoader {
         final String url = request.url;
         MarumaSign.LOGGER.info("Start: " + url);
         try {
-            // 先頭だけを読んで、画像でも 3D モデルでもなければ残りは読まない
+            // 先頭だけを読んで、画像でも 3D モデルでも PDF でもなければ残りは読まない
             final boolean[] image = new boolean[1];
+            final boolean[] pdf = new boolean[1];
             final byte[] content = Http.download(url, new Http.HeadCheck() {
                 @Override
                 public boolean accept(byte[] head, int length) {
                     image[0] = isSupportedImage(head, length);
-                    return image[0] || GltfLoader.isGlb(head, length) || GltfLoader.looksLikeJson(head, length);
+                    pdf[0] = PdfFile.isPdf(head, length);
+                    return image[0] || pdf[0] || GltfLoader.isGlb(head, length) || GltfLoader.looksLikeJson(head, length);
                 }
             }, MAX_MODEL_SIZE);
             if (content == null) {
@@ -126,6 +132,16 @@ public final class ImageLoader {
                     throw new IOException("Content size exceeds the limit of " + Http.MAX_SIZE + " bytes.");
                 }
                 request.callback.onLoaded(decode(content));
+                return;
+            }
+            if (pdf[0]) {
+                final PdfFile file = PdfFile.open(content);
+                try {
+                    request.callback.onPdf(file, file.render(0, PdfFile.PAGE_SIZE));
+                } catch (IOException | RuntimeException e) {
+                    file.close();
+                    throw e;
+                }
                 return;
             }
             request.callback.onModel(model(url, content));

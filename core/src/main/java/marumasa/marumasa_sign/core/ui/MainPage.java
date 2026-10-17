@@ -11,6 +11,7 @@ import marumasa.marumasa_sign.core.image.DecodedImage;
 import marumasa.marumasa_sign.core.image.ImageLoader;
 import marumasa.marumasa_sign.core.media.MediaTools;
 import marumasa.marumasa_sign.core.net.Http;
+import marumasa.marumasa_sign.core.pdf.PdfFile;
 import marumasa.marumasa_sign.core.sign.SignSpec;
 
 import java.awt.image.BufferedImage;
@@ -194,6 +195,8 @@ public final class MainPage extends Page {
 
     // プレビューの画像の一辺の長さ (3D モデルの場合)
     private static final int MODEL_PREVIEW_SIZE = 256;
+    // PDF のプレビューの、長い辺の大きさ
+    private static final int PDF_PREVIEW_SIZE = 384;
 
     // ファイルの先頭のバイト列を読む
     private static byte[] readHead(File file) throws IOException {
@@ -223,6 +226,21 @@ public final class MainPage extends Page {
         return ImageLoader.isModel(head, head.length);
     }
 
+    // PDF ファイルかどうか
+    private static boolean isPdfFile(File file) throws IOException {
+        final byte[] head = readHead(file);
+        return PdfFile.isPdf(head, head.length);
+    }
+
+    // PDF の最初のページを、プレビューの大きさの画像にする
+    private static BufferedImage pdfPreview(PdfFile pdf) throws IOException {
+        try {
+            return toBufferedImage(pdf.render(0, PDF_PREVIEW_SIZE));
+        } finally {
+            pdf.close();
+        }
+    }
+
     private static BufferedImage toBufferedImage(DecodedImage image) {
         final BufferedImage result = new BufferedImage(image.width, image.height, BufferedImage.TYPE_INT_ARGB);
         result.setRGB(0, 0, image.width, image.height, image.frames[0], 0, image.width);
@@ -247,23 +265,38 @@ public final class MainPage extends Page {
             String info = "";
             try {
                 final boolean[] isImage = new boolean[1];
+                final boolean[] isPdf = new boolean[1];
                 GltfScene model = null;
+                PdfFile pdf = null;
                 final byte[] bytes;
                 if (Http.isHttpUrl(text)) {
                     bytes = Http.download(text, new Http.HeadCheck() {
                         @Override
                         public boolean accept(byte[] head, int length) {
                             isImage[0] = ImageLoader.isSupportedImage(head, length);
-                            return isImage[0] || ImageLoader.isModel(head, length);
+                            isPdf[0] = PdfFile.isPdf(head, length);
+                            return isImage[0] || isPdf[0] || ImageLoader.isModel(head, length);
                         }
                     }, ImageLoader.MAX_MODEL_SIZE);
-                    if (bytes != null && !isImage[0]) model = ImageLoader.model(text, bytes);
+                    if (bytes != null && isPdf[0]) {
+                        pdf = PdfFile.open(bytes);
+                    } else if (bytes != null && !isImage[0]) {
+                        model = ImageLoader.model(text, bytes);
+                    }
                 } else {
                     final File file = new File(text);
                     bytes = readImageFile(file);
-                    if (bytes == null && isModelFile(file)) model = loadModelFile(file);
+                    if (bytes == null && isPdfFile(file)) {
+                        pdf = PdfFile.open(file);
+                    } else if (bytes == null && isModelFile(file)) {
+                        model = loadModelFile(file);
+                    }
                 }
-                if (model != null) {
+                if (pdf != null) {
+                    final int pages = pdf.pageCount();
+                    image = pdfPreview(pdf);
+                    info = Lang.get("ui.preview.pdf", pages);
+                } else if (model != null) {
                     image = GltfPreview.render(model, 0f, MODEL_PREVIEW_SIZE);
                     info = Lang.get("ui.preview.model", model.model().triangleCount());
                 } else {
@@ -378,6 +411,15 @@ public final class MainPage extends Page {
             try {
                 ImageLoader.decode(bytes);
             } catch (IOException e) {
+                throw new IOException(Lang.get("ui.status.not_image"));
+            }
+        } else if (isPdfFile(file)) {
+            if (file.length() > PdfFile.MAX_SIZE) throw new IOException(Lang.get("ui.status.file_too_large", 64));
+            try {
+                // 表示できる PDF かどうかを確かめる
+                PdfFile.open(file).close();
+            } catch (IOException e) {
+                MarumaSign.LOGGER.info("Could not load the PDF: " + e.getMessage());
                 throw new IOException(Lang.get("ui.status.not_image"));
             }
         } else if (isModelFile(file)) {

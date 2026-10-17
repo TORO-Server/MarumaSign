@@ -53,10 +53,23 @@ public interface Platform {
 
     void setClipboard(String text);
 
+    /**
+     * 照準 (画面中央) の視線。PDF のページ送りの操作に使う。ワールドに入っていなければ null。
+     * {目の位置 x, y, z, 視線の向き (長さ 1) x, y, z, 照準が合っているブロックまでの距離 (合っていなければ -1)}
+     */
+    default double[] crosshair() {
+        return null;
+    }
+
     // ---------- 動作確認用 ----------
 
     // 視線の上下の向きを変える (度。下向きが正)
     void selfTestLook(float pitch);
+
+    // 視線の向きを変える (度。yaw は南が 0 で西が 90、pitch は下向きが正)
+    default void selfTestLook(float yaw, float pitch) {
+        selfTestLook(pitch);
+    }
 
     // 看板を手に持ち、見ているブロックに使用する
     void selfTestUseItem();
