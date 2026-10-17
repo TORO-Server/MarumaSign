@@ -611,6 +611,29 @@ def close_minecraft_window():
         ctypes.windll.user32.PostMessageW(window, 0x0010, 0, 0)  # WM_CLOSE
 
 
+def raise_priority(*processes):
+    """サーバーとクライアント (ランチャーが起動した子プロセスも含む) の優先度を上げる。
+
+    同じ PC でビルドなどの重い処理が動いていると、クライアントの起動が遅れて時間切れになる
+    (Forge の起動画面がタイムアウトする) ため。Windows では、通常より高い優先度は子プロセスに引き継がれないので、
+    起動後に子プロセスをたどって設定する。psutil がなければ何もしない。
+    """
+    try:
+        import psutil
+    except ImportError:
+        return
+    for process in processes:
+        if process is None or process.poll() is not None:
+            continue
+        try:
+            root = psutil.Process(process.pid)
+            for target in [root] + root.children(recursive=True):
+                if target.nice() != psutil.ABOVE_NORMAL_PRIORITY_CLASS:
+                    target.nice(psutil.ABOVE_NORMAL_PRIORITY_CLASS)
+        except (psutil.Error, OSError):
+            pass
+
+
 def grab_screen(path):
     """Minecraft のウィンドウだけを画像として保存する。"""
     try:
@@ -623,11 +646,26 @@ def grab_screen(path):
     if not windows:
         return False
     import ctypes
-    # 他のウィンドウに隠れていると写らないので、手前に出してから撮る
+    user32 = ctypes.windll.user32
+    # 他のウィンドウに隠れていると写らないので、手前に出してから撮る。
+    # スタートメニューなどが開いていると手前に出せないことがあるので、本当に一番手前になったかを確かめ、
+    # なっていなければ少し待ってやり直す (確認中に PC を操作すると、その画面が写り込んで失敗していた)
     window, box = windows[0]
-    ctypes.windll.user32.ShowWindow(window, 9)  # SW_RESTORE
-    ctypes.windll.user32.SetForegroundWindow(window)
-    time.sleep(0.7)
+    for attempt in range(10):
+        user32.ShowWindow(window, 9)  # SW_RESTORE
+        user32.SetForegroundWindow(window)
+        time.sleep(0.7)
+        if user32.GetForegroundWindow() == window:
+            break
+        log("another window is in front of Minecraft; waiting before taking the screenshot")
+        time.sleep(2.0)
+    # 枠を除いた描画領域の位置を、画像の横に記録しておく (ホットバーの枠の位置を求めるのに使う)
+    from ctypes import wintypes
+    client = wintypes.RECT()
+    origin = wintypes.POINT(0, 0)
+    if user32.GetClientRect(window, ctypes.byref(client)) and user32.ClientToScreen(window, ctypes.byref(origin)):
+        Path(str(path) + ".json").write_text(json.dumps({
+            "x": origin.x - box[0], "y": origin.y - box[1], "width": client.right, "height": client.bottom}))
     try:
         ImageGrab.grab(bbox=box, all_screens=True).save(path)
         return True
@@ -675,8 +713,32 @@ def judge_coverage(hits):
     中央の白い円にかからない、上と下の帯で、テスト画像の色のピクセルの割合を見る
     (正しく描けていれば 0.45 以上、縞模様になると 0.35 以下だった)。
     """
-    xs = sorted(x for x, _ in hits)
-    ys = sorted(y for _, y in hits)
+    # 絵の範囲は、色のあるピクセルのうち一番大きなまとまりとする。
+    # 画面の下の体力の表示 (赤) などは絵から離れているので含めない。縞模様でも 1 つのまとまりになるよう、
+    # 少し離れた (4 ピクセル以内の) ピクセルどうしもつながっているとみなす
+    reach = 4
+    cells = {(x // reach, y // reach) for x, y in hits}
+    seen = set()
+    best = set()
+    for cell in cells:
+        if cell in seen:
+            continue
+        group = {cell}
+        stack = [cell]
+        seen.add(cell)
+        while stack:
+            cx, cy = stack.pop()
+            for nx in (cx - 1, cx, cx + 1):
+                for ny in (cy - 1, cy, cy + 1):
+                    if (nx, ny) in cells and (nx, ny) not in seen:
+                        seen.add((nx, ny))
+                        group.add((nx, ny))
+                        stack.append((nx, ny))
+        if len(group) > len(best):
+            best = group
+    picture = [(x, y) for x, y in hits if (x // reach, y // reach) in best]
+    xs = sorted(x for x, _ in picture)
+    ys = sorted(y for _, y in picture)
     # 外れ値に左右されないよう、2 - 98 パーセンタイルを絵の範囲とする
     x0, x1 = xs[len(xs) * 2 // 100], xs[len(xs) * 98 // 100]
     y0, y1 = ys[len(ys) * 2 // 100], ys[len(ys) * 98 // 100]
@@ -726,34 +788,57 @@ def analyze_screenshot_shaded(path):
     return True, "test image visible (shaded)"
 
 
-def analyze_item_view(path):
-    """画面の下にあるホットバーに、テスト画像の見た目になった看板アイテムが写っているかを調べる。"""
+def analyze_item_view(path, names=("item",)):
+    """画面の下にあるホットバーに、テスト画像の見た目になった看板アイテムが、渡した数だけ写っているかを調べる。
+
+    1 つ目の枠には置く用の看板があり、渡したアイテムは 2 つ目以降の空いた枠に、渡した順に入る。
+    枠の位置は、ウィンドウの描画領域の大きさと GUI の倍率 (自動) から求める。
+    """
     from PIL import Image
 
     image = Image.open(path).convert("RGB")
     width, height = image.size
-    # ホットバーは画面の下の中央にある。手に持ったアイテム (右下) と、すぐ上にある体力の表示 (赤) は範囲に入れない
-    region = image.crop((int(width * 0.28), int(height * 0.905), int(width * 0.72), height))
-    pixels = region.load()
-    sums = {name: [0, 0, 0] for name in TEST_COLORS}
-    for y in range(region.height):
-        for x in range(region.width):
-            name = classify(*pixels[x, y])
-            if name is not None:
-                entry = sums[name]
-                entry[0] += 1
-                entry[1] += x
-                entry[2] += y
-    counts = {name: entry[0] for name, entry in sums.items()}
-    # 枠 1 つ分の小さな絵なので、色ごとに少しでも写っていればよい
-    if any(count < 12 for count in counts.values()):
-        return False, f"item picture not found in the hotbar (pixels: {counts})"
-    centre = {name: (entry[1] / entry[0], entry[2] / entry[0]) for name, entry in sums.items()}
-    ordered = (centre["red"][0] < centre["green"][0] and centre["blue"][0] < centre["yellow"][0]
-               and centre["red"][1] < centre["blue"][1] and centre["green"][1] < centre["yellow"][1])
-    if not ordered:
-        return False, f"item picture is mirrored or rotated (centres: {centre})"
-    return True, "item picture visible"
+    pixels = image.load()
+    # 描画領域の位置。撮影時の記録がなければ、Windows のウィンドウの枠の標準的な太さとみなす
+    meta = Path(str(path) + ".json")
+    if meta.is_file():
+        area = json.loads(meta.read_text())
+    else:
+        area = {"x": 8, "y": 31, "width": width - 16, "height": height - 39}
+    # GUI の倍率 (自動): 320x240 の画面が収まる最大の整数倍
+    scale = 1
+    while area["width"] // (scale + 1) >= 320 and area["height"] // (scale + 1) >= 240:
+        scale += 1
+    # ホットバーは幅 182、高さ 22 で画面の下の中央にあり、枠は 20 ごと、アイテムの絵は枠の内側 16 x 16
+    left = area["x"] + (area["width"] - 182 * scale) // 2
+    top = area["y"] + area["height"] - 22 * scale
+
+    results = []
+    for index, name in enumerate(names):
+        slot = index + 1
+        x0, y0 = left + (3 + 20 * slot) * scale, top + 3 * scale
+        sums = {colour: [0, 0, 0] for colour in TEST_COLORS}
+        for y in range(y0, min(height, y0 + 16 * scale)):
+            for x in range(x0, min(width, x0 + 16 * scale)):
+                colour = classify(*pixels[x, y])
+                if colour is not None:
+                    entry = sums[colour]
+                    entry[0] += 1
+                    entry[1] += x
+                    entry[2] += y
+        counts = {colour: entry[0] for colour, entry in sums.items()}
+        # 枠 1 つ分の小さな絵なので、色ごとに少しでも写っていればよい
+        if any(count < 12 for count in counts.values()):
+            results.append((False, f"{name}: item picture not found (pixels: {counts})"))
+            continue
+        centre = {colour: (entry[1] / entry[0], entry[2] / entry[0]) for colour, entry in sums.items()}
+        ordered = (centre["red"][0] < centre["green"][0] and centre["blue"][0] < centre["yellow"][0]
+                   and centre["red"][1] < centre["blue"][1] and centre["green"][1] < centre["yellow"][1])
+        if not ordered:
+            results.append((False, f"{name}: item picture is mirrored or rotated (centres: {centre})"))
+            continue
+        results.append((True, f"{name}: item picture visible"))
+    return all(ok for ok, _ in results), ", ".join(detail for _, detail in results)
 
 
 def analyze_sign_view(path):
@@ -893,7 +978,7 @@ def run(args):
     prepare_work_dir(work_dir, mod, args.lang)
     result = {
         "minecraft": args.minecraft, "loader": args.loader, "loader_version": args.loader_version,
-        "mod": mod.name if mod else None, "ok": False, "detail": "",
+        "mod": mod.name if mod else None, "ok": False, "detail": "", "work_dir": str(work_dir),
     }
     shader_setup = None
     if shaders:
@@ -986,6 +1071,8 @@ def run(args):
         while time.time() < deadline:
             if client.poll() is not None:
                 break
+            if sys.platform == "win32" and int(time.time() - started_at) % 5 == 0:
+                raise_priority(client, server.process)
             if server.joined.is_set() and not joined_handled:
                 joined_handled = True
                 joined_at = time.time()
@@ -1024,21 +1111,27 @@ def run(args):
                     current += 1
                     stage = "view"
             if not args.baseline and item_stage == "request" and (result_dir / "item-request.txt").is_file():
-                # 看板の文字を持たせた看板アイテムを渡す。置いた看板と区別できるように、別の URL にする
-                item_image = next((image for image in images if not is_url(image)), REPO / "tools" / "verify" / "test-image.png")
-                item_ext = item_image.suffix or ".png"
-                item_name = f"item{item_ext}"
-                host.files[item_name] = item_image.read_bytes()
-                url = f"http://127.0.0.1:{host.port}/i/{item_name}"
-                text = url + "|0|0|0|1|1|0|0|0"
-                server.give_sign_item([text[i:i + 15] for i in range(0, 60, 15)])
+                # 看板の文字を持たせた看板アイテムを、確かめるファイルの種類ごとに 1 つずつ渡す。
+                # 画像・3D モデル・ガウシアンスプラッティング・動画で、アイテムとしての描き方がそれぞれ違うため。
+                # 置いた看板と区別できるように、別の URL にする。アイテムはホットバーの空いた枠に順に入る
+                item_files = [image for image in images if not is_url(image)] or [REPO / "tools" / "verify" / "test-image.png"]
+                url = None
+                for number, item_image in enumerate(item_files):
+                    item_name = f"item{number}{item_image.suffix or '.png'}"
+                    host.files[item_name] = item_image.read_bytes()
+                    url = f"http://127.0.0.1:{host.port}/i/{item_name}"
+                    text = url + "|0|0|0|1|1|0|0|0"
+                    server.give_sign_item([text[i:i + 15] for i in range(0, 60, 15)])
+                    time.sleep(0.5)
+                result["item_media"] = [item_image.name for item_image in item_files]
                 time.sleep(1.0)
+                # Mod には最後に渡したものを知らせる。それが描かれるまで待ってから画面を記録してもらう
                 (result_dir / "item-given.txt").write_text(url)
                 item_stage = "view"
             elif not args.baseline and item_stage == "view" and (result_dir / "item-view.txt").is_file():
                 shot = work_dir / "screenshot-item.png"
                 if grab_screen(shot):
-                    result["item_visible"], result["item_detail"] = analyze_item_view(shot)
+                    result["item_visible"], result["item_detail"] = analyze_item_view(shot, result.get("item_media", ["item"]))
                 item_stage = "done"
             if args.baseline and joined_handled and time.time() - joined_at > (75 if shaders else 25):
                 # 基準の取得では、ワールドに入ってしばらくしたら終了する

@@ -13,6 +13,7 @@ import argparse
 import hashlib
 import io
 import json
+import shutil
 import sys
 import zipfile
 from pathlib import Path
@@ -130,6 +131,22 @@ MEDIA = {
 }
 
 
+def keep_failed_attempt(work_dir):
+    """やり直す前に、失敗した回の画面とログを「作業フォルダ名-failed」に写しておく (やり直すと作業フォルダは消える)。"""
+    if not work_dir or not Path(work_dir).is_dir():
+        return
+    target = Path(work_dir + "-failed")
+    shutil.rmtree(target, ignore_errors=True)
+    target.mkdir(parents=True)
+    source = Path(work_dir)
+    for pattern in ("*.png", "*.log", "logs/*.log", "selftest/*"):
+        for path in source.glob(pattern):
+            if path.is_file():
+                destination = target / path.relative_to(source)
+                destination.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(path, destination)
+
+
 def run_one(root, loader, minecraft, loader_version, mod, baseline, timeout, media=("image",), shaders=False,
             shader_pack=None, shader_mod=None):
     args = SimpleNamespace(
@@ -185,7 +202,8 @@ def main():
         digest = combination_digest(mod, loader, minecraft)
         previous = summary.get(key, {})
         if (args.skip_passed and previous.get("clean") and previous.get("mod_sha256") == digest
-                and set(args.media) <= set(previous.get("media", []))):
+                and set(args.media) <= set(previous.get("media", []))
+                and {MEDIA[kind] for kind in args.media} <= set(previous.get("item_media", []))):
             continue
 
         baseline_file = root / "baselines" / (f"{loader}-{minecraft}" + suffix.replace("+", "-").replace(":", "-") + ".json")
@@ -221,6 +239,7 @@ def main():
             verify.log(f"=== retry {key} ({str(result.get('detail'))[:200]} / {result.get('image_detail')}"
                        f" / {result.get('sign_detail')} / {result.get('item_detail')}"
                        f" / {(result.get('new_client_findings', []) + result.get('new_server_findings', []))[:3]})")
+            keep_failed_attempt(result.get("work_dir"))
             result = run_one(root, loader, minecraft, loader_version, mod, False, args.timeout, args.media, args.shaders,
                              args.shader_pack, args.shader_mod)
         summary[key] = {
@@ -234,6 +253,8 @@ def main():
             "mod": mod.name,
             "mod_sha256": digest,
             "media": list(args.media),
+            # 看板アイテムとして確かめたファイル
+            "item_media": result.get("item_media", []) if result.get("item_visible") else [],
             "shader_mod": result.get("shader_mod"),
             "shader_pack": result.get("shader_pack"),
             "new_client_findings": result.get("new_client_findings", [])[:8],
