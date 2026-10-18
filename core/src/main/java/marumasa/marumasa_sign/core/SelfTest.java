@@ -95,8 +95,17 @@ final class SelfTest {
     // 読み込みが完了した看板が描画されたとき
     void onDrawn(SignImage image) {
         final String url = expectedUrl;
-        if (url != null && url.equals(image.spec.url)) drawnCount++;
+        if (url != null && url.equals(image.spec.url)) {
+            drawnCount++;
+            drawnImage = image;
+        }
     }
+
+    // 確認中の看板として最後に描画されたもの
+    private volatile SignImage drawnImage;
+    // 動画や音声の看板で、正面を向いているときの音の大きさ
+    private float facingGain;
+    private int facingDrawn;
 
     private void next(int nextStep) {
         step = nextStep;
@@ -208,8 +217,28 @@ final class SelfTest {
                 // 次に、看板そのものが消えていることを確認できるように、看板の位置を見下ろす
                 if (ticksInStep >= 60 && ticksInStep < 140) platform.selfTestLook(50f);
                 if (ticksInStep == 90) writeFile("sign-view-" + index + ".txt", "ready\n");
-                if (ticksInStep >= 140) platform.selfTestLook(0f);
-                if (ticksInStep == 150) {
+                if (ticksInStep >= 140 && ticksInStep < 150) platform.selfTestLook(0f);
+                // 動画や音声の看板では、真上を向いて看板が視界から外れても、音が大きくならないことを確かめる
+                final SignImage image = drawnImage;
+                final float gain = image == null ? -1f : image.textureEntry().mediaGain();
+                if (ticksInStep == 150 && gain >= 0) {
+                    facingGain = gain;
+                    facingDrawn = drawnCount;
+                }
+                final boolean checkGain = facingDrawn > 0;
+                if (checkGain && ticksInStep >= 150 && ticksInStep < 190) platform.selfTestLook(-90f);
+                if (checkGain && ticksInStep >= 190) platform.selfTestLook(0f);
+                if (checkGain && ticksInStep == 190) {
+                    if (summary.length() > 0) summary.append(", ");
+                    summary.append(String.format(java.util.Locale.ROOT, "%s volume facing %.3f, looking away %.3f (drawn %d times while away)",
+                            new File(images[index]).getName(), facingGain, gain, drawnCount - facingDrawn));
+                    if (gain > facingGain + 0.01f) {
+                        finish(false, summary + ": louder when looking away");
+                        return;
+                    }
+                }
+                if (ticksInStep == (checkGain ? 200 : 150)) {
+                    facingDrawn = 0;
                     if (summary.length() > 0) summary.append(", ");
                     summary.append(new File(images[index]).getName()).append(" rendered ").append(drawnCount).append(" times");
                     if (index + 1 < images.length) {
