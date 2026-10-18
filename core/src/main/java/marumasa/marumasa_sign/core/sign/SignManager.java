@@ -8,6 +8,7 @@ import marumasa.marumasa_sign.core.image.DecodedImage;
 import marumasa.marumasa_sign.core.image.ImageLoader;
 import marumasa.marumasa_sign.core.media.Ffmpeg;
 import marumasa.marumasa_sign.core.splat.SplatScene;
+import marumasa.marumasa_sign.core.pdf.PdfFile;
 
 import java.awt.BasicStroke;
 import java.awt.Color;
@@ -33,6 +34,9 @@ public final class SignManager {
     private final Map<String, TextureEntry> textures = new ConcurrentHashMap<String, TextureEntry>();
     // 再生中の動画や音声
     private final List<MediaSession> sessions = new ArrayList<MediaSession>();
+    // 表示中の PDF と、そのページ送りの操作
+    private final List<PdfSession> pdfs = new ArrayList<PdfSession>();
+    private final PdfControls controls;
     private boolean ffmpegNoticeShown;
 
     // 読み込み中・読み込み失敗のときに表示するテクスチャ
@@ -46,6 +50,12 @@ public final class SignManager {
     public SignManager(Platform platform, ImageLoader loader) {
         this.platform = platform;
         this.loader = loader;
+        this.controls = new PdfControls(platform);
+    }
+
+    // PDF のページ送りの操作
+    public PdfControls pdfControls() {
+        return controls;
     }
 
     /**
@@ -61,7 +71,7 @@ public final class SignManager {
         final SignSpec spec = SignSpec.parse(text);
         if (spec == null) return null;
 
-        image = new SignImage(spec, texture(spec.url));
+        image = new SignImage(spec, texture(spec.url), controls);
         signs.put(text, image);
         return image;
     }
@@ -101,6 +111,16 @@ public final class SignManager {
                     @Override
                     public void run() {
                         registerSplat(url, created, scene);
+                    }
+                });
+            }
+
+            @Override
+            public void onPdf(final PdfFile file, final DecodedImage firstPage) {
+                platform.execute(new Runnable() {
+                    @Override
+                    public void run() {
+                        registerPdf(url, created, file, firstPage);
                     }
                 });
             }
@@ -182,6 +202,18 @@ public final class SignManager {
             MarumaSign.releaseTexture(platform, created);
             fail(url, entry);
         }
+    }
+
+    private void registerPdf(String url, TextureEntry entry, PdfFile file, DecodedImage firstPage) {
+        if (textures.get(url) != entry) {
+            file.close();
+            return;
+        }
+        final PdfSession session = new PdfSession(platform, url, file, entry);
+        entry.setPdf(session);
+        pdfs.add(session);
+        session.start(firstPage);
+        MarumaSign.LOGGER.info("Load: " + url + " (PDF, " + file.pageCount() + " pages)");
     }
 
     // 画像ではなかった URL を、動画や音声として再生する
@@ -284,6 +316,11 @@ public final class SignManager {
             session.close();
         }
         sessions.clear();
+        for (PdfSession pdf : pdfs) {
+            pdf.close();
+        }
+        pdfs.clear();
+        controls.close();
         for (TextureEntry entry : textures.values()) {
             for (Object frame : entry.ownedTextures()) {
                 MarumaSign.releaseTexture(platform, frame);

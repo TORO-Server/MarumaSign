@@ -128,6 +128,8 @@ MEDIA = {
     "model": "test-model.glb",
     "splat": "test-splat.splat",
     "video": "test-video.mp4",
+    # 2 ページの PDF。ページ送りの操作も確かめる
+    "pdf": "test-pdf.pdf",
 }
 
 

@@ -11,6 +11,7 @@ import marumasa.marumasa_sign.core.media.Ffmpeg;
 import marumasa.marumasa_sign.core.net.Http;
 import marumasa.marumasa_sign.core.splat.SplatLoader;
 import marumasa.marumasa_sign.core.splat.SplatScene;
+import marumasa.marumasa_sign.core.pdf.PdfFile;
 
 import javax.imageio.ImageIO;
 import java.awt.image.BufferedImage;
@@ -44,7 +45,10 @@ public final class ImageLoader {
         // ガウシアンスプラッティングだったとき
         void onSplat(SplatScene scene);
 
-        // 画像でも 3D モデルでもガウシアンスプラッティングでもなかったとき。動画や音声として再生できるかもしれない
+        // PDF だったとき。firstPage は最初のページを画像にしたもの
+        void onPdf(PdfFile file, DecodedImage firstPage);
+
+        // 画像でも 3D モデルでもガウシアンスプラッティングでも PDF でもなかったとき。動画や音声として再生できるかもしれない
         void onMedia();
 
         void onFailed();
@@ -64,6 +68,7 @@ public final class ImageLoader {
     private static final int KIND_IMAGE = 1;
     private static final int KIND_MODEL = 2;
     private static final int KIND_SPLAT = 3;
+    private static final int KIND_PDF = 4;
 
     private static final class Request {
         final String url;
@@ -118,7 +123,7 @@ public final class ImageLoader {
         final String url = request.url;
         MarumaSign.LOGGER.info("Start: " + url);
         try {
-            // 先頭だけを読んで、画像・3D モデル・ガウシアンスプラッティングのどれでもなければ残りは読まない
+            // 先頭だけを読んで、画像・3D モデル・ガウシアンスプラッティング・PDF のどれでもなければ残りは読まない
             final int[] kind = new int[]{KIND_NONE};
             final String[] resolvedName = new String[]{url};
             final byte[] content = Http.download(url, new Http.ContentCheck() {
@@ -128,6 +133,10 @@ public final class ImageLoader {
                     if (isSupportedImage(head, length)) {
                         kind[0] = KIND_IMAGE;
                         return Http.MAX_SIZE;
+                    }
+                    if (PdfFile.isPdf(head, length)) {
+                        kind[0] = KIND_PDF;
+                        return PdfFile.MAX_SIZE;
                     }
                     if (GltfLoader.isGlb(head, length)) {
                         kind[0] = KIND_MODEL;
@@ -156,6 +165,16 @@ public final class ImageLoader {
             }
             if (kind[0] == KIND_SPLAT) {
                 request.callback.onSplat(splat(resolvedName[0], content));
+                return;
+            }
+            if (kind[0] == KIND_PDF) {
+                final PdfFile file = PdfFile.open(content);
+                try {
+                    request.callback.onPdf(file, file.render(0, PdfFile.PAGE_SIZE));
+                } catch (IOException | RuntimeException e) {
+                    file.close();
+                    throw e;
+                }
                 return;
             }
             request.callback.onModel(model(resolvedName[0], content));

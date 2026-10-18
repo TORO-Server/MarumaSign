@@ -3,6 +3,8 @@ package marumasa.marumasa_sign.core.sign;
 import marumasa.marumasa_sign.core.gltf.GltfScene;
 import marumasa.marumasa_sign.core.splat.SplatScene;
 
+import java.util.Arrays;
+
 /**
  * 看板 1 種類 (文字列 1 つ) に対応する、表示する画像や 3D モデルと、その形。
  * 描画に必要な座標計算はすべてここで行い、各バージョンの実装は頂点を並べるだけにする。
@@ -76,9 +78,13 @@ public final class SignImage {
     private float modelDepth;
     private final float[] point = new float[3];
 
-    SignImage(SignSpec spec, TextureEntry texture) {
+    // PDF のページ送りの操作。なければ null
+    private final PdfControls controls;
+
+    SignImage(SignSpec spec, TextureEntry texture, PdfControls controls) {
         this.spec = spec;
         this.texture = texture;
+        this.controls = controls;
     }
 
     public TextureEntry textureEntry() {
@@ -236,6 +242,37 @@ public final class SignImage {
      * @param cameraZ  ブロックの角を原点としたカメラの Z 座標
      */
     public Batch[] batches(float signYaw, boolean wall, double distance, float cameraX, float cameraY, float cameraZ) {
+        return batches(signYaw, wall, distance, cameraX, cameraY, cameraZ, 0, 0, 0, false);
+    }
+
+    /**
+     * 描画する四角形を返す。描画のたびに呼ぶ。
+     * 看板の位置も渡すと、PDF の看板に照準が合っているときに、ページ送りの帯も返す。
+     *
+     * @param signYaw  看板の向き (度)。立て看板は rotation * 22.5、壁掛け看板は向いている方角の角度
+     * @param wall     壁掛け看板かどうか
+     * @param distance カメラから看板までの距離 (ブロック)。動画や音声の音量に使う
+     * @param cameraX  ブロックの角を原点としたカメラの X 座標。cameraY, cameraZ も同じ
+     * @param blockX   看板のブロックの位置 (ワールド座標)。blockY, blockZ も同じ
+     */
+    public Batch[] batches(float signYaw, boolean wall, double distance, float cameraX, float cameraY, float cameraZ,
+                           int blockX, int blockY, int blockZ) {
+        return batches(signYaw, wall, distance, cameraX, cameraY, cameraZ, blockX, blockY, blockZ, true);
+    }
+
+    private Batch[] batches(float signYaw, boolean wall, double distance, float cameraX, float cameraY, float cameraZ,
+                            int blockX, int blockY, int blockZ, boolean placed) {
+        final Batch[] batches = imageBatches(signYaw, wall, distance, cameraX, cameraY, cameraZ);
+        final PdfSession pdf = texture.pdf();
+        if (!placed || pdf == null || controls == null || model != null || splat != null) return batches;
+        final Batch bar = controls.overlay(pdf, mesh(signYaw, wall), blockX, blockY, blockZ);
+        if (bar == null) return batches;
+        final Batch[] withBar = Arrays.copyOf(batches, batches.length + 1);
+        withBar[batches.length] = bar;
+        return withBar;
+    }
+
+    private Batch[] imageBatches(float signYaw, boolean wall, double distance, float cameraX, float cameraY, float cameraZ) {
         ensureBuilt();
         final int index = meshIndex(signYaw, wall);
         if (model != null) return modelBatches(index, signYaw, wall);

@@ -791,6 +791,36 @@ SHADED_POINTS = [
 ]
 
 
+def analyze_page_two(path):
+    """PDF の 2 ページ目 (テスト画像を 180 度回したもの) が写っているかを調べる。"""
+    from PIL import Image
+
+    image = Image.open(path).convert("RGB")
+    image.thumbnail((640, 640))
+    width, height = image.size
+    pixels = image.load()
+    sums = {name: [0, 0, 0] for name in TEST_COLORS}
+    for y in range(height):
+        for x in range(width):
+            name = classify(*pixels[x, y])
+            if name is not None:
+                entry = sums[name]
+                entry[0] += 1
+                entry[1] += x
+                entry[2] += y
+    counts = {name: entry[0] for name, entry in sums.items()}
+    minimum = width * height // 400
+    if any(count < minimum for count in counts.values()):
+        return False, f"page 2 colours not found (pixels: {counts})"
+    centre = {name: (entry[1] / entry[0], entry[2] / entry[0]) for name, entry in sums.items()}
+    # 180 度回っているので、赤と緑、青と黄の左右と、上下が入れ替わる
+    turned = (centre["red"][0] > centre["green"][0] and centre["blue"][0] > centre["yellow"][0]
+              and centre["red"][1] > centre["blue"][1] and centre["green"][1] > centre["yellow"][1])
+    if not turned:
+        return False, f"page 2 not shown (centres: {centre})"
+    return True, "page 2 visible"
+
+
 def analyze_screenshot_shaded(path):
     """シェーダーを使っているときの、テスト画像の判定。
 
@@ -1114,6 +1144,13 @@ def run(args):
                     result["screenshot"] = str(work_dir / "screenshot.png")
             if not args.baseline and current < len(media):
                 entry = media[current]
+                # PDF では、ページ送りの帯が出た状態、2 ページ目に進んだ状態、帯が消えた状態を記録する
+                for key in ("pdf-ui", "pdf-page", "pdf-hidden"):
+                    if key not in entry and (result_dir / f"{key}-{current}.txt").is_file():
+                        shot = work_dir / f"screenshot-{key}-{current}.png"
+                        entry[key] = grab_screen(shot)
+                        if key == "pdf-page" and entry[key]:
+                            entry["pdf_page_two"], entry["pdf_detail"] = analyze_page_two(shot)
                 if stage == "view" and (result_dir / f"view-{current}.txt").is_file():
                     # 画像の全体が写っている状態
                     shot = work_dir / f"screenshot-{current}.png"
@@ -1199,6 +1236,10 @@ def run(args):
         result["sign_hidden"] = all(entry.get("sign_hidden") for entry in media)
         result["image_detail"] = ", ".join(f"{entry['name']}: {entry.get('detail', 'not captured')}" for entry in media)
         result["sign_detail"] = ", ".join(f"{entry['name']}: {entry.get('sign_detail', 'not captured')}" for entry in media)
+        pdfs = [entry for entry in media if str(entry["name"]).lower().endswith(".pdf")]
+        result["pdf_ok"] = all(entry.get("pdf_page_two") for entry in pdfs)
+        if pdfs:
+            result["pdf_detail"] = ", ".join(f"{entry['name']}: {entry.get('pdf_detail', 'not captured')}" for entry in pdfs)
 
     result_file = result_dir / "result.txt"
     if result_file.is_file():
@@ -1249,6 +1290,7 @@ def run(args):
         result["new_client_findings"] = [line for line in client_findings if is_new(line, baseline["client"])]
         result["new_server_findings"] = [line for line in server_findings if is_new(line, baseline["server"])]
         result["clean"] = (result["ok"] and bool(result.get("image_visible")) and bool(result.get("sign_hidden"))
+                           and bool(result.get("pdf_ok", True))
                            and bool(result.get("item_visible"))
                            and (not shaders or bool(result.get("shaders_active")))
                            and not result["new_client_findings"] and not result["new_server_findings"])

@@ -91,6 +91,7 @@ public final class Adapter {
             MarumaSign.init(new PlatformImpl(loaderName));
             active = true;
             registerKey(mc);
+            UseKey.install(mc);
         }
         if (!active) return;
 
@@ -140,6 +141,9 @@ package marumasa.marumasa_sign.adapter;
 import marumasa.marumasa_sign.core.Platform;
 import net.minecraft.client.KeyMapping;
 import net.minecraft.client.Minecraft;
+import net.minecraft.world.entity.Entity;
+import net.minecraft.world.phys.HitResult;
+import net.minecraft.world.phys.Vec3;
 
 import java.io.File;
 
@@ -233,8 +237,26 @@ final class PlatformImpl implements Platform {
     }
 
     @Override
+    public double[] crosshair() {
+        final Entity viewer = mc.getCameraEntity();
+        if (viewer == null || mc.level == null || Mc.screen(mc) != null) return null;
+        final Vec3 eye = viewer.getEyePosition(1f);
+        final Vec3 look = viewer.getViewVector(1f);
+        final HitResult target = mc.hitResult;
+        final double hit = target != null && target.getType() == HitResult.Type.BLOCK ? target.getLocation().distanceTo(eye) : -1;
+        return new double[]{eye.x, eye.y, eye.z, look.x, look.y, look.z, hit};
+    }
+
+    @Override
     public void selfTestLook(float pitch) {
         if (mc.player != null) Mc.look(mc, pitch);
+    }
+
+    @Override
+    public void selfTestLook(float yaw, float pitch) {
+        if (mc.player == null) return;
+        Mc.turn(mc, yaw);
+        Mc.look(mc, pitch);
     }
 
     @Override
@@ -252,6 +274,51 @@ final class PlatformImpl implements Platform {
     @Override
     public void quit() {
         mc.stop();
+    }
+}
+''')
+
+write("modern", "UseKey.java", r'''
+package marumasa.marumasa_sign.adapter;
+
+import com.mojang.blaze3d.platform.InputConstants;
+import marumasa.marumasa_sign.core.MarumaSign;
+import marumasa.marumasa_sign.core.util.Reflect;
+import net.minecraft.client.KeyMapping;
+import net.minecraft.client.Minecraft;
+
+/**
+ * 使用キー (右クリック) の代わり。ゲームより先にクリックを受け取り、PDF の看板のページ送りに使ったものはゲームに渡さない。
+ * ゲームの設定にある使用キーをこれに置き換える (名前と分類、キーの割り当ては元のものを引き継ぐ)。
+ */
+final class UseKey extends KeyMapping {
+
+    private UseKey(KeyMapping original) {
+        super(original.getName(), InputConstants.Type.MOUSE, 1, original.getCategory());
+    }
+
+    @Override
+    public boolean consumeClick() {
+        while (super.consumeClick()) {
+            if (!MarumaSign.useClicked()) return true;
+            // 押し続けたままだと、ゲームが続けて使用するので、離されたことにする
+            KeyMapping.set(InputConstants.getKey(saveString()), false);
+        }
+        return false;
+    }
+
+    // 設定の使用キーを置き換える
+    static void install(Minecraft mc) {
+        final KeyMapping original = mc.options.keyUse;
+        if (original instanceof UseKey) return;
+        final UseKey replacement = new UseKey(original);
+        replacement.setKey(InputConstants.getKey(original.saveString()));
+        Reflect.set(Reflect.fieldHolding(mc.options, original), mc.options, replacement);
+        final KeyMapping[] mappings = mc.options.keyMappings;
+        for (int i = 0; i < mappings.length; i++) {
+            if (mappings[i] == original) mappings[i] = replacement;
+        }
+        KeyMapping.resetMapping();
     }
 }
 ''')
@@ -596,6 +663,7 @@ import net.minecraft.client.Minecraft;
 import net.minecraft.client.renderer.MultiBufferSource;
 import net.minecraft.client.renderer.blockentity.BlockEntityRenderDispatcher;
 import net.minecraft.client.renderer.blockentity.BlockEntityRenderer;
+import net.minecraft.core.BlockPos;
 import net.minecraft.world.level.block.StandingSignBlock;
 import net.minecraft.world.level.block.WallSignBlock;
 import net.minecraft.world.level.block.entity.BlockEntityType;
@@ -662,9 +730,10 @@ abstract class SignRendererBase implements BlockEntityRenderer<SignBlockEntity> 
         }
 
         final Vec3 camera = mc.gameRenderer.getMainCamera().getPosition();
-        final double signX = sign.getBlockPos().getX();
-        final double signY = sign.getBlockPos().getY();
-        final double signZ = sign.getBlockPos().getZ();
+        final BlockPos pos = sign.getBlockPos();
+        final double signX = pos.getX();
+        final double signY = pos.getY();
+        final double signZ = pos.getZ();
         final double dx = signX + 0.5 - camera.x;
         final double dy = signY + 0.5 - camera.y;
         final double dz = signZ + 0.5 - camera.z;
@@ -673,7 +742,8 @@ abstract class SignRendererBase implements BlockEntityRenderer<SignBlockEntity> 
         final float camY = (float) (camera.y - signY);
         final float camZ = (float) (camera.z - signZ);
 
-        for (SignImage.Batch batch : image.batches(yaw, wall, distance, camX, camY, camZ)) {
+        for (SignImage.Batch batch : image.batches(yaw, wall, distance, camX, camY, camZ,
+                pos.getX(), pos.getY(), pos.getZ())) {
             Mc.quads(buffers.getBuffer(((Tex) batch.texture).renderType), poseStack, batch, light);
         }
         MarumaSign.drawn(image);
@@ -892,6 +962,10 @@ final class Mc {{
 
     static void look(Minecraft mc, float pitch) {{
         {look};
+    }}
+
+    static void turn(Minecraft mc, float yaw) {{
+        {look.replace("XRot", "YRot").replace("xRot", "yRot").replace("pitch", "yaw")};
     }}
 
     // ホットバーにある看板を手に持つ
@@ -1148,6 +1222,7 @@ import net.minecraft.client.Minecraft;
 import net.minecraft.client.renderer.MultiBufferSource;
 import net.minecraft.client.renderer.blockentity.BlockEntityRenderDispatcher;
 import net.minecraft.client.renderer.blockentity.BlockEntityRenderer;
+import net.minecraft.core.BlockPos;
 import net.minecraft.world.level.block.StandingSignBlock;
 import net.minecraft.world.level.block.WallSignBlock;
 import net.minecraft.world.level.block.entity.BlockEntityType;
@@ -1216,9 +1291,10 @@ final class SignRendererBase extends BlockEntityRenderer<SignBlockEntity> {
         }
 
         final Vec3 camera = mc.gameRenderer.getMainCamera().getPosition();
-        final double signX = sign.getBlockPos().getX();
-        final double signY = sign.getBlockPos().getY();
-        final double signZ = sign.getBlockPos().getZ();
+        final BlockPos pos = sign.getBlockPos();
+        final double signX = pos.getX();
+        final double signY = pos.getY();
+        final double signZ = pos.getZ();
         final double dx = signX + 0.5 - camera.x;
         final double dy = signY + 0.5 - camera.y;
         final double dz = signZ + 0.5 - camera.z;
@@ -1227,7 +1303,8 @@ final class SignRendererBase extends BlockEntityRenderer<SignBlockEntity> {
         final float camY = (float) (camera.y - signY);
         final float camZ = (float) (camera.z - signZ);
 
-        for (SignImage.Batch batch : image.batches(yaw, wall, distance, camX, camY, camZ)) {
+        for (SignImage.Batch batch : image.batches(yaw, wall, distance, camX, camY, camZ,
+                pos.getX(), pos.getY(), pos.getZ())) {
             Mc.quads(buffers.getBuffer(((Tex) batch.texture).renderType), poseStack, batch, light);
         }
         MarumaSign.drawn(image);
@@ -1427,6 +1504,7 @@ import marumasa.marumasa_sign.core.util.Reflect;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.renderer.blockentity.BlockEntityRenderDispatcher;
 import net.minecraft.client.renderer.blockentity.BlockEntityRenderer;
+import net.minecraft.core.BlockPos;
 import net.minecraft.world.level.block.StandingSignBlock;
 import net.minecraft.world.level.block.WallSignBlock;
 import net.minecraft.world.level.block.entity.SignBlockEntity;
@@ -1489,8 +1567,9 @@ final class SignRendererBase extends BlockEntityRenderer<SignBlockEntity> {
         } else {
             return;
         }
+        final BlockPos pos = sign.getBlockPos();
         final SignImage.Batch[] batches = image.batches(yaw, wall, Math.sqrt(x * x + y * y + z * z),
-                (float) -x, (float) -y, (float) -z);
+                (float) -x, (float) -y, (float) -z, pos.getX(), pos.getY(), pos.getZ());
 
         GL11.glPushMatrix();
         GL11.glTranslated(x, y, z);

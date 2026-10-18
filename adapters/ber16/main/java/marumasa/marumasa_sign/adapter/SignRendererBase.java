@@ -8,6 +8,7 @@ import net.minecraft.client.Minecraft;
 import net.minecraft.client.renderer.MultiBufferSource;
 import net.minecraft.client.renderer.blockentity.BlockEntityRenderDispatcher;
 import net.minecraft.client.renderer.blockentity.BlockEntityRenderer;
+import net.minecraft.core.BlockPos;
 import net.minecraft.world.level.block.StandingSignBlock;
 import net.minecraft.world.level.block.WallSignBlock;
 import net.minecraft.world.level.block.entity.BlockEntityType;
@@ -76,9 +77,10 @@ final class SignRendererBase extends BlockEntityRenderer<SignBlockEntity> {
         }
 
         final Vec3 camera = mc.gameRenderer.getMainCamera().getPosition();
-        final double signX = sign.getBlockPos().getX();
-        final double signY = sign.getBlockPos().getY();
-        final double signZ = sign.getBlockPos().getZ();
+        final BlockPos pos = sign.getBlockPos();
+        final double signX = pos.getX();
+        final double signY = pos.getY();
+        final double signZ = pos.getZ();
         final double dx = signX + 0.5 - camera.x;
         final double dy = signY + 0.5 - camera.y;
         final double dz = signZ + 0.5 - camera.z;
@@ -87,7 +89,8 @@ final class SignRendererBase extends BlockEntityRenderer<SignBlockEntity> {
         final float camY = (float) (camera.y - signY);
         final float camZ = (float) (camera.z - signZ);
 
-        for (SignImage.Batch batch : image.batches(yaw, wall, distance, camX, camY, camZ)) {
+        for (SignImage.Batch batch : image.batches(yaw, wall, distance, camX, camY, camZ,
+                pos.getX(), pos.getY(), pos.getZ())) {
             Mc.quads(buffers.getBuffer(((Tex) batch.texture).renderType), poseStack, batch, light);
         }
         MarumaSign.drawn(image);

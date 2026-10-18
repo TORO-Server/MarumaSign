@@ -91,6 +91,97 @@ abstract class RelocateJar extends DefaultTask {
     }
 }
 
+/**
+ * core のクラスと、core が使うライブラリ (PDFBox) を 1 か所にまとめる。
+ * ライブラリは、他の Mod や Minecraft 自身が持つ同じライブラリとぶつからないよう、パッケージ名を変える。
+ * jar の中のファイル (フォントなど) も同じように移し、それを指す文字列 ("/org/apache/pdfbox/..." など) も書き換える。
+ */
+abstract class ShadeCore extends DefaultTask {
+    @InputFiles
+    abstract ConfigurableFileCollection getClasses()
+
+    @InputFiles
+    abstract ConfigurableFileCollection getLibraries()
+
+    // 移す前のパッケージ (/ 区切り) -> 移した先
+    @Input
+    abstract MapProperty<String, String> getPackages()
+
+    @OutputDirectory
+    abstract DirectoryProperty getOutput()
+
+    @TaskAction
+    void shade() {
+        def outputDir = output.get().asFile
+        outputDir.deleteDir()
+        outputDir.mkdirs()
+
+        def packages = packages.get()
+        def mapPath = { String path ->
+            for (entry in packages) {
+                if (path == entry.key || path.startsWith(entry.key + '/')) return entry.value + path.substring(entry.key.length())
+            }
+            return path
+        }
+        def remapper = new Remapper() {
+            @Override
+            String map(String internalName) {
+                return mapPath(internalName)
+            }
+
+            @Override
+            Object mapValue(Object value) {
+                // jar の中のファイルを指す絶対パス
+                if (value instanceof String && value.startsWith('/')) return '/' + mapPath(value.substring(1))
+                return super.mapValue(value)
+            }
+        }
+        def write = { String path, byte[] bytes ->
+            def file = new File(outputDir, path)
+            file.parentFile.mkdirs()
+            file.bytes = bytes
+        }
+        def remap = { byte[] bytes ->
+            def writer = new ClassWriter(0)
+            new ClassReader(bytes).accept(new ClassRemapper(writer, remapper), 0)
+            return writer.toByteArray()
+        }
+
+        classes.files.each { root ->
+            if (!root.isDirectory()) return
+            root.eachFileRecurse(groovy.io.FileType.FILES) { file ->
+                def path = root.toPath().relativize(file.toPath()).toString().replace('\\', '/')
+                write(path.endsWith('.class') ? mapPath(path) : path, path.endsWith('.class') ? remap(file.bytes) : file.bytes)
+            }
+        }
+        libraries.files.each { jar ->
+            // ライセンスの全文は、ほかの取り込んだライブラリと同じ場所に、ライブラリの名前を付けて置く
+            def library = jar.name.replaceAll(/-[0-9][^-]*\.jar$/, '')
+            new ZipFile(jar).withCloseable { zip ->
+                zip.entries().each { entry ->
+                    if (entry.directory) return
+                    def bytes = zip.getInputStream(entry).bytes
+                    if (entry.name.startsWith('META-INF/')) {
+                        if (entry.name == 'META-INF/LICENSE') write("marumasa_sign/licenses/${library}.txt", bytes)
+                        if (entry.name == 'META-INF/NOTICE') write("marumasa_sign/licenses/${library}-notice.txt", bytes)
+                        return
+                    }
+                    write(mapPath(entry.name), entry.name.endsWith('.class') ? remap(bytes) : bytes)
+                }
+            }
+        }
+    }
+}
+
+def shadeCore = tasks.register('shadeCore', ShadeCore) {
+    classes.from(project(':core').sourceSets.main.output.classesDirs)
+    libraries.from(project(':core').configurations.bundled)
+    packages.put('org/apache/pdfbox', "${basePackage}/lib/pdfbox")
+    packages.put('org/apache/fontbox', "${basePackage}/lib/fontbox")
+    packages.put('org/apache/commons/logging', "${basePackage}/lib/logging")
+    output = layout.buildDirectory.dir('shaded/core')
+}
+
 // ---------- 統合 jar (Forge / NeoForge / Fabric) ----------
 
 // 「ローダー.バージョン = 実装の名前」の対応表
@@ -164,7 +255,8 @@ def universalJar = tasks.register('universalJar', Jar) {
     destinationDirectory = layout.buildDirectory.dir('libs')
     duplicatesStrategy = DuplicatesStrategy.FAIL
 
-    from(project(':core').sourceSets.main.output)
+    from(shadeCore)
+    from(project(':core').tasks.named('processResources'))
     from(project(':bootstrap').sourceSets.main.output)
     relocateTasks.each { from(it) }
     from(generateTable)
@@ -233,7 +325,8 @@ targets.each { target ->
         destinationDirectory = layout.buildDirectory.dir('libs')
         duplicatesStrategy = DuplicatesStrategy.FAIL
 
-        from(project(':core').sourceSets.main.output)
+        from(shadeCore)
+        from(project(':core').tasks.named('processResources'))
         from(remapped.map { zipTree(it) }) {
             include "${basePackage}/**"
         }

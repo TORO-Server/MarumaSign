@@ -19,7 +19,8 @@ final class FileBrowserPage extends Page {
     private static final String[] EXTENSIONS = {
             ".png", ".jpg", ".jpeg", ".gif", ".apng",
             ".glb", ".gltf",
-            ".ply", ".spz", ".sog", ".splat", ".ksplat"
+            ".ply", ".spz", ".sog", ".splat", ".ksplat",
+            ".pdf"
     };
 
     private final MainPage owner;

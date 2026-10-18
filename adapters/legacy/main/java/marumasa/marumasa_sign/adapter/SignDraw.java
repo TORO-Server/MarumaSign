@@ -37,7 +37,7 @@ final class SignDraw {
         final int metadata = sign.getBlockMetadata();
         final float yaw = wall ? wallYaw(metadata) : metadata * 22.5f;
         final SignImage.Batch[] batches = image.batches(yaw, wall, Math.sqrt(camX * camX + camY * camY + camZ * camZ),
-                camX, camY, camZ);
+                camX, camY, camZ, (int) Mc.x(sign), (int) Mc.y(sign), (int) Mc.z(sign));
 
         GL11.glPushMatrix();
         GL11.glTranslated(x, y, z);

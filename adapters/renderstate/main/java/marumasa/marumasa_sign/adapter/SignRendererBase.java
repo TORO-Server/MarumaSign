@@ -121,7 +121,8 @@ abstract class SignRendererBase implements BlockEntityRenderer<SignBlockEntity, 
             return;
         }
 
-        submitBatches(image.batches(state.yaw, state.wall, state.distance, state.cameraX, state.cameraY, state.cameraZ),
+        submitBatches(image.batches(state.yaw, state.wall, state.distance, state.cameraX, state.cameraY, state.cameraZ,
+                        pos.getX(), pos.getY(), pos.getZ()),
                 poseStack, collector, state.lightCoords);
         MarumaSign.drawn(image);
     }
