@@ -229,11 +229,20 @@ def main():
                                 "mod": mod.name, "mod_sha256": digest,
                                 "shader_mod": baseline.get("shader_mod"), "shader_pack": baseline.get("shader_pack")}
                 summary_file.write_text(json.dumps(summary, indent=2, ensure_ascii=False), encoding="utf-8")
+                # 失敗した基準は使えないので消しておく。次の確認でも基準から取り直し、対象外として記録し直せるように
+                baseline_file.unlink(missing_ok=True)
                 continue
 
         verify.log(f"=== verify {key}")
         result = run_one(root, loader, minecraft, loader_version, mod, False, args.timeout, args.media, args.shaders,
                              args.shader_pack, args.shader_mod)
+        if "No shader mod is available" in str(result.get("detail")):
+            # 基準を取った後で、使える影 Mod がないと分かった組み合わせ。確認の対象から外す
+            verify.log(f"=== skip {key}: no shader mod")
+            summary.pop(key, None)
+            selected.discard(key)
+            summary_file.write_text(json.dumps(summary, indent=2, ensure_ascii=False), encoding="utf-8")
+            continue
         if not result.get("clean"):
             # 他の処理と重なって時間切れになることがあるので、1 回だけやり直す
             verify.log(f"=== retry {key} ({str(result.get('detail'))[:200]} / {result.get('image_detail')}"
@@ -242,6 +251,15 @@ def main():
             keep_failed_attempt(result.get("work_dir"))
             result = run_one(root, loader, minecraft, loader_version, mod, False, args.timeout, args.media, args.shaders,
                              args.shader_pack, args.shader_mod)
+        if args.shaders and result.get("shaders_fell_back"):
+            # 影 Mod がシェーダーパックを読み込めず、通常の描画に戻した。この Mod の結果ではないので、対象外として扱う
+            verify.log(f"=== {key}: the shader mod could not load the shader pack")
+            summary[key] = {"ok": False, "clean": False, "baseline_failed": True,
+                            "detail": "shader pack could not be loaded by the shader mod (it fell back to vanilla shaders)",
+                            "mod": mod.name, "mod_sha256": digest,
+                            "shader_mod": result.get("shader_mod"), "shader_pack": result.get("shader_pack")}
+            summary_file.write_text(json.dumps(summary, indent=2, ensure_ascii=False), encoding="utf-8")
+            continue
         summary[key] = {
             "ok": bool(result.get("ok")),
             "clean": bool(result.get("clean")),

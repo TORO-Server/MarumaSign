@@ -634,6 +634,29 @@ def raise_priority(*processes):
             pass
 
 
+def covered(window, box):
+    """Minecraft のウィンドウの上に、他のウィンドウ (タスクバーの縮小表示や通知など、常に手前に出るもの) が重なっているか。
+
+    ウィンドウの中のいくつかの点 (中央と、ホットバーのある下の部分) で、そこに見えているウィンドウを調べる。
+    """
+    import ctypes
+    from ctypes import wintypes
+
+    user32 = ctypes.windll.user32
+    user32.WindowFromPoint.restype = wintypes.HWND
+    user32.WindowFromPoint.argtypes = [wintypes.POINT]
+    user32.GetAncestor.restype = wintypes.HWND
+    user32.GetAncestor.argtypes = [wintypes.HWND, ctypes.c_uint]
+    left, top, right, bottom = box
+    width, height = right - left, bottom - top
+    points = [(0.5, 0.5)] + [(fx, 0.95) for fx in (0.30, 0.40, 0.50, 0.60, 0.70)] + [(0.5, 0.1)]
+    for fx, fy in points:
+        found = user32.WindowFromPoint(wintypes.POINT(int(left + width * fx), int(top + height * fy)))
+        if found and user32.GetAncestor(found, 2) != window:  # GA_ROOT
+            return True
+    return False
+
+
 def grab_screen(path):
     """Minecraft のウィンドウだけを画像として保存する。"""
     try:
@@ -651,13 +674,19 @@ def grab_screen(path):
     # スタートメニューなどが開いていると手前に出せないことがあるので、本当に一番手前になったかを確かめ、
     # なっていなければ少し待ってやり直す (確認中に PC を操作すると、その画面が写り込んで失敗していた)
     window, box = windows[0]
-    for attempt in range(10):
+    for attempt in range(15):
         user32.ShowWindow(window, 9)  # SW_RESTORE
         user32.SetForegroundWindow(window)
         time.sleep(0.7)
-        if user32.GetForegroundWindow() == window:
+        if user32.GetForegroundWindow() == window and not covered(window, box):
             break
         log("another window is in front of Minecraft; waiting before taking the screenshot")
+        if attempt == 1:
+            # タスクバーの縮小表示などは画面の下の端に出て、開いたままになることがある。
+            # ウィンドウを画面の左上に動かして、重ならないようにする (大きさは変えないので、ゲームの画面は同じ)
+            user32.SetWindowPos(window, None, 0, 0, 0, 0, 0x0001 | 0x0004)  # SWP_NOSIZE | SWP_NOZORDER
+            time.sleep(0.5)
+            box = next((found for handle, found in minecraft_windows() if handle == window), box)
         time.sleep(2.0)
     # 枠を除いた描画領域の位置を、画像の横に記録しておく (ホットバーの枠の位置を求めるのに使う)
     from ctypes import wintypes
@@ -1187,6 +1216,7 @@ def run(args):
         client_log_file = find_client_log(work_dir)
         log_text = client_log_file.read_text(encoding="utf-8", errors="replace") if client_log_file.is_file() else ""
         result["shaders_active"] = shadermods.is_active(log_text)
+        result["shaders_fell_back"] = shadermods.fell_back(log_text)
     client_findings = scan_log(find_client_log(work_dir))
     result["client_log"] = str(find_client_log(work_dir))
     client_findings = unique(client_findings) if client_findings is not None else ["(no client log)"]

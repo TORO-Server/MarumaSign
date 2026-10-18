@@ -103,6 +103,7 @@ final class SignRendererBase extends BlockEntityRenderer<SignBlockEntity> {
                 GL11.glAlphaFunc(GL11.GL_GREATER, 0.1f);
                 GL11.glDepthMask(!batch.blend);
                 ModelArrays.draw(batch);
+                if (batch.blend && batch.doubleSided) depthPass(batch);
                 continue;
             }
             final float[] mesh = batch.vertices;
@@ -124,6 +125,20 @@ final class SignRendererBase extends BlockEntityRenderer<SignBlockEntity> {
             GL11.glEnd();
         }
         GL11.glPopAttrib();
+    }
+
+    /**
+     * 半透明の面 (ガウシアンスプラッティング) の、ほぼ不透明な部分の奥行きだけを記録する。
+     * 色は奥行きを記録せずに描くので、そのままだと後から描かれる空や雲 (影 Mod では特に) に上書きされてしまう。
+     * 色を描き終えてから奥行きだけを書くので、重なりの順番には影響しない。
+     */
+    private static void depthPass(SignImage.Batch batch) {
+        GL11.glColorMask(false, false, false, false);
+        GL11.glDepthMask(true);
+        GL11.glAlphaFunc(GL11.GL_GREATER, 0.5f);
+        ModelArrays.draw(batch);
+        GL11.glAlphaFunc(GL11.GL_GREATER, 0.1f);
+        GL11.glColorMask(true, true, true, true);
     }
 
     @Override

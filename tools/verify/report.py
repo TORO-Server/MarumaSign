@@ -131,7 +131,10 @@ def main():
             "",
             "- Forge 1.21.1 + OptiFine 1.21.1 HD U J1: OptiFine の読み込み中にゲームが終了する",
             "- Forge 1.14.2 + OptiFine 1.14.2 HD U F1: ゲームが起動しない",
+            "- Forge 1.14.3 + OptiFine 1.14.3 HD U F2: Forge が OptiFine を「unsupported」として読み込まず、起動時の警告の画面で止まる",
             "- OptiFine 1.8.9 + MakeUp Ultra Fast: 画面が真っ黒になる",
+            "- 対象外と書いたマスのうち Iris のもの (1.17 - 1.18 など): その版の Iris (1.1.x) が新しいシェーダーパックの"
+            "空のシェーダーを組み立てられず (MC_RENDER_STAGE_STARS が未定義)、シェーダーなしの描画に戻る",
             "",
             "| Minecraft | " + " | ".join(LOADER_NAMES[loader] for loader in LOADERS) + " |",
             "| --- | " + " | ".join("---" for _ in LOADERS) + " |",

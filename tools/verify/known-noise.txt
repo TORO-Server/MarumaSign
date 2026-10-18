@@ -28,6 +28,8 @@ Exception in thread "Server Shutdown Thread"
 # 確認用のアカウントは実在しないので、Minecraft 自体がスキンの情報を取りに行って失敗することがある (通信の状況によって出たり出なかったりする)
 Couldn't look up profile properties for
 MinecraftClientHttpException
+# Minecraft 自体が Realms (Mojang のサーバー) の状態を問い合わせて、相手のサーバーの一時的な障害 (502 など) で失敗したときに出す
+Realms Notification Availability checker
 # 同じ失敗の例外に付く、呼び出し元の行 (Forge 26.3 ではこの行だけが警告として拾われる)
 at \S*com\.mojang\.authlib\.minecraft\.client\.MinecraftClient\.
 
