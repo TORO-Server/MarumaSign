@@ -15,8 +15,7 @@ import java.io.IOException;
  * PDF ファイル 1 つ。ページを画像にする。
  * PDF の読み込みと描画には PDFBox を使う (配布する jar の中では別のパッケージに移してある)。
  * 1 つのファイルを同時に複数のスレッドから描かないよう、操作はすべて同期する。
- * 埋め込まれていないフォントを使う PDF を初めて描くとき、PDFBox はパソコンのフォントをすべて調べて、
- * その結果をホームフォルダ (.pdfbox.cache) に保存する。フォントが多いと時間がかかるが、2 回目からは速い。
+ * 埋め込まれていないフォントの代わりは、SystemFonts の一覧から探す (PDFBox の標準の一覧は、作るのに時間がかかるため)。
  */
 public final class PdfFile {
 
@@ -54,6 +53,7 @@ public final class PdfFile {
     }
 
     public static PdfFile open(byte[] content) throws IOException {
+        SystemFonts.install();
         try {
             return new PdfFile(PDDocument.load(content));
         } catch (RuntimeException e) {
@@ -64,6 +64,7 @@ public final class PdfFile {
 
     public static PdfFile open(File file) throws IOException {
         if (file.length() > MAX_SIZE) throw new IOException("Content size exceeds the limit of " + MAX_SIZE + " bytes.");
+        SystemFonts.install();
         try {
             return new PdfFile(PDDocument.load(file));
         } catch (RuntimeException e) {

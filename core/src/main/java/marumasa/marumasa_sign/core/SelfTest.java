@@ -39,6 +39,8 @@ final class SelfTest {
     // PDF のページ送りを確かめる手順の中の、各段階を始める tick
     private static final int PDF_CLICK = 30;
     private static final int PDF_TURN_TIMEOUT = 200;
+    // 外部のスクリプトが画面を記録し終えるのを待つ上限 (tick)。スクリプトなしで動かしたときは、これだけ待って進む
+    private static final int SHOT_WAIT = 200;
 
     // 看板アイテムを受け取ってから、描かれるのを待つ時間の上限 (tick)
     private static final int ITEM_TIMEOUT = 20 * 15;
@@ -361,11 +363,12 @@ final class SelfTest {
                     return;
                 }
                 if (elapsed == 20) writeFile("pdf-ui-" + index + ".txt", "ready\n");
-                if (elapsed >= PDF_CLICK) {
+                // 外部のスクリプトが帯の出た画面を記録し終えてから押す (記録が遅れて 2 ページ目が写らないように)
+                if (elapsed >= PDF_CLICK && (shotTaken("pdf-ui") || elapsed >= PDF_CLICK + SHOT_WAIT)) {
                     final int[] page = controls.hoveredPage();
                     if (controls.hoverPart() != PdfControls.NEXT || page == null) {
                         finish(false, summary + ": " + name + " page controls not shown on the next button (part "
-                                + controls.hoverPart() + ")");
+                                + controls.hoverPart() + "; " + controls.missDetail() + ")");
                         return;
                     }
                     if (page[0] != 0 || page[1] < 2) {
@@ -391,7 +394,7 @@ final class SelfTest {
                 // ページの中央を見て、2 ページ目を画面に記録してもらう
                 aimAt(PdfControls.PAGE);
                 if (elapsed == 20) writeFile("pdf-page-" + index + ".txt", "ready\n");
-                if (elapsed >= 40) pdfPhase(3);
+                if (elapsed >= 40 && (shotTaken("pdf-page") || elapsed >= 40 + SHOT_WAIT)) pdfPhase(3);
                 break;
             case 3:
                 // 真上を見て照準を外すと、帯が消える
@@ -412,6 +415,11 @@ final class SelfTest {
             default:
                 break;
         }
+    }
+
+    // 外部のスクリプトが、その画面を記録し終えたか
+    private boolean shotTaken(String key) {
+        return new File(directory, key + "-" + index + "-done.txt").isFile();
     }
 
     // 外部のスクリプトが書いたファイルを読む。まだなければ null

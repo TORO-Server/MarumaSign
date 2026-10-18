@@ -107,8 +107,9 @@ public final class PdfControls {
         final double p0x = mesh[0] + blockX, p0y = mesh[1] + blockY, p0z = mesh[2] + blockZ;
         final double ux = mesh[3 * s] + blockX - p0x, uy = mesh[3 * s + 1] + blockY - p0y, uz = mesh[3 * s + 2] + blockZ - p0z;
         final double vx = mesh[s] + blockX - p0x, vy = mesh[s + 1] + blockY - p0y, vz = mesh[s + 2] + blockZ - p0z;
-        // 表の向き: 表の頂点から、同じ位置の裏の頂点 (最後の頂点) を引いたもの
-        double nx = mesh[0] - mesh[7 * s], ny = mesh[1] - mesh[7 * s + 1], nz = mesh[2] - mesh[7 * s + 2];
+        // 表の向き (絵が正しい向きに見える側): v × u。表から見ると u は左向き、v は上向きなので、これが見ている人の方を向く。
+        // 表と裏の頂点の位置の差は使えない (表の面は、見る人から少し奥にずらして置かれている)
+        double nx = vy * uz - vz * uy, ny = vz * ux - vx * uz, nz = vx * uy - vy * ux;
         final double nLength = Math.sqrt(nx * nx + ny * ny + nz * nz);
         final double uu = ux * ux + uy * uy + uz * uz, vv = vx * vx + vy * vy + vz * vz;
         if (nLength <= 0 || uu <= 0 || vv <= 0) return null;
@@ -155,24 +156,38 @@ public final class PdfControls {
 
     // 最後の hitTest で求めた、照準から絵までの距離
     private double hitDistance;
+    // 最後の hitTest の計算の値。動作確認で、照準が合わなかった理由を調べるのに使う
+    private final double[] lastHit = {Double.NaN, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0};
+
+    public String missDetail() {
+        final double[] v = lastHit.clone();
+        if (Double.isNaN(v[0])) return "no crosshair";
+        return String.format(java.util.Locale.ROOT,
+                "eye %.2f %.2f %.2f, look %.3f %.3f %.3f, block hit %.2f, corner %.2f %.2f %.2f, facing %.3f, t %.2f, s %.3f, r %.3f",
+                v[0], v[1], v[2], v[3], v[4], v[5], v[6], v[7], v[8], v[9], v[10], v[11], v[12], v[13]);
+    }
 
     // 照準が絵のどこに合っているか。合っていなければ NONE
     private int hitTest(double p0x, double p0y, double p0z, double ux, double uy, double uz, double vx, double vy, double vz,
                         double nx, double ny, double nz, double uu, double vv, double barFraction, int barUnits) {
         final double[] ray = platform.crosshair();
-        if (ray == null) return NONE;
+        if (ray == null) {
+            lastHit[0] = Double.NaN;
+            return NONE;
+        }
         final double ox = ray[0], oy = ray[1], oz = ray[2], dx = ray[3], dy = ray[4], dz = ray[5];
         // 裏から見ているとき (と、面に沿って見ているとき) は操作できない
         final double facing = dx * nx + dy * ny + dz * nz;
-        if (facing >= -1e-6) return NONE;
-        final double t = ((p0x - ox) * nx + (p0y - oy) * ny + (p0z - oz) * nz) / facing;
-        if (t < 0) return NONE;
+        final double t = facing >= -1e-6 ? 0 : ((p0x - ox) * nx + (p0y - oy) * ny + (p0z - oz) * nz) / facing;
         // 壁越しに操作できないよう、照準が合っているブロックより奥は除く
         final double limit = ray[6] >= 0 ? ray[6] + BEHIND_HIT : REACH;
-        if (t > Math.min(limit, REACH)) return NONE;
         final double hx = ox + dx * t - p0x, hy = oy + dy * t - p0y, hz = oz + dz * t - p0z;
         final double s = (hx * ux + hy * uy + hz * uz) / uu;
         final double r = (hx * vx + hy * vy + hz * vz) / vv;
+        final double[] last = lastHit;
+        last[0] = ox; last[1] = oy; last[2] = oz; last[3] = dx; last[4] = dy; last[5] = dz; last[6] = ray[6];
+        last[7] = p0x; last[8] = p0y; last[9] = p0z; last[10] = facing; last[11] = t; last[12] = s; last[13] = r;
+        if (facing >= -1e-6 || t < 0 || t > Math.min(limit, REACH)) return NONE;
         if (s < 0 || s > 1 || r < 0 || r > 1) return NONE;
         hitDistance = t;
         if (r > barFraction) return PAGE;

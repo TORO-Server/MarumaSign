@@ -28,6 +28,8 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parents[2]
 DEFAULT_ROOT = Path(os.environ.get("MARUMASIGN_VERIFY_ROOT", Path.home() / ".marumasign-verify"))
 PLAYER = "Tester"
+# 次のファイルを確かめる前にプレイヤーを動かす量 (x, z)。(0, 0) からたどる場所が重ならず、どこも最初の場所から 160 ブロック以内
+MOVES = [(112, 0), (0, 112), (-112, 0), (-112, 0), (0, -112), (0, -112)]
 MANIFEST_URL = "https://piston-meta.mojang.com/mc/game/version_manifest_v2.json"
 
 
@@ -1151,6 +1153,8 @@ def run(args):
                         entry[key] = grab_screen(shot)
                         if key == "pdf-page" and entry[key]:
                             entry["pdf_page_two"], entry["pdf_detail"] = analyze_page_two(shot)
+                        # 記録し終えたことを Mod に知らせる。Mod はそれを待ってから次の操作に進む
+                        (result_dir / f"{key}-{current}-done.txt").write_text("done\n")
                 if stage == "view" and (result_dir / f"view-{current}.txt").is_file():
                     # 画像の全体が写っている状態
                     shot = work_dir / f"screenshot-{current}.png"
@@ -1169,9 +1173,10 @@ def run(args):
                     # 次のファイルは、前の看板が見えない場所で確認する
                     # 前の看板が読み込まれている範囲 (描画距離 4 チャンク) の外まで離れる。
                     # 遠くへ飛ばしすぎると、古いバージョンでは移動先の地形がなかなか届かない
-                    # (1.8 では、一方向に 3 回 (336 ブロック) 進むと届かなかった) ので、四角形を描くように向きを変えて、
-                    # 最初の場所の近くにとどまる
-                    server.move_player(*[(112, 0), (0, 112), (-112, 0), (0, -112)][current % 4])
+                    # (1.8 では、一方向に 3 回 (336 ブロック) 進むと届かなかった) ので、向きを変えながら
+                    # 最初の場所の近くにとどまる。ただし前に看板を置いた場所には戻らない (4 回で四角形を一周すると、
+                    # 5 つ目の看板を置く場所に最初の看板が残っていて、置けなかった)
+                    server.move_player(*MOVES[current % len(MOVES)])
                     time.sleep(1.0)
                     (result_dir / f"moved-{current}.txt").write_text("done\n")
                     current += 1

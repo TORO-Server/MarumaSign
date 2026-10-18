@@ -61,21 +61,17 @@ public final class SignPdfCheck {
         check(image != null && image.isLoaded(), "PDF loaded");
         save(output, "page1.png");
 
-        // 絵の正面の、3 ブロック離れた位置から、進めるボタンを見る
+        // 絵の正面の、3 ブロック離れた位置から、進めるボタンを見る。
+        // 向き 0 の立て看板は南 (+z) を向いていて、文字や絵はその側から読める
         final double[] center = controls.lastTarget(PdfControls.PAGE);
         final double[] next = controls.lastTarget(PdfControls.NEXT);
         check(center != null && next != null, "page controls placed");
-        double[] eye = null;
-        for (double side : new double[]{3, -3}) {
-            final double[] candidate = {center[0], center[1], center[2] + side};
-            aim(candidate, next);
-            final SignImage.Batch[] batches = image.batches(0f, false, 3.0, 0.5f, 0.5f, 4.5f, BX, BY, BZ);
-            if (batches.length == 2) {
-                eye = candidate;
-                break;
-            }
-        }
-        check(eye != null, "page controls shown when aiming at the sign from the front");
+        final double[] eye = {center[0], center[1], center[2] + 3};
+        aim(eye, next);
+        check(image.batches(0f, false, 3.0, 0.5f, 0.5f, 4.5f, BX, BY, BZ).length == 2,
+                "page controls shown when aiming at the sign from the front (" + controls.missDetail() + ")");
+        // 進めるボタンは、正面から見て右下にある (北 (-z) を向いて見ると、右は東 (+x))
+        check(next[0] > center[0] && next[1] < center[1], "next button at the lower right seen from the front");
         check(controls.hoverPart() == PdfControls.NEXT, "aiming at the next button (part " + controls.hoverPart() + ")");
         saveBar(output, image, "bar-page1.png");
 
