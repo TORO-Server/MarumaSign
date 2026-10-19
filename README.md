@@ -229,6 +229,8 @@ python tools/verify/matrix.py
 `tools/verify/verify.py --image` には、ファイルのほかにライブ配信などの URL も `|` で区切って指定できます。
 
 ```bash
+# 3 つのクライアントを同時に動かす (1 つあたりメモリを 4 GB ほど使う)。前回合格したものは飛ばす
+python tools/verify/matrix.py --jobs 3 --skip-passed
 # 影 Mod とシェーダーパックを入れた状態で確認する
 python tools/verify/matrix.py --shaders
 # シェーダーパックを変える (Modrinth での名前)。Forge 1.16.5 以降で OptiFine を使うときは --shader-mod optifine
