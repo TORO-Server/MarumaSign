@@ -31,9 +31,27 @@ final class UseKey extends KeyBinding {
         if (original instanceof UseKey) return;
         final UseKey replacement = new UseKey(original);
         Reflect.set(Reflect.fieldHolding(mc.gameSettings, original), mc.gameSettings, replacement);
+        removeFromAllBindings(original);
         final KeyBinding[] bindings = mc.gameSettings.keyBindings;
         for (int i = 0; i < bindings.length; i++) {
             if (bindings[i] == original) bindings[i] = replacement;
+        }
+    }
+
+    /**
+     * すべてのキーの割り当ての一覧から、元の使用キーを除く。
+     * 1.11.2 までの一覧はリストで、置き換えたあとも元のものが残る。Forge 1.9 - 1.11 は同じキーの割り当てのうち
+     * 先に見つかったものにだけ押されたことを伝えるので、残っていると置き換えたものが押されず、看板を置けなかった。
+     * 1.12 からの一覧は名前で引く表で、同じ名前で作ったときに置き換わっている。
+     */
+    private static void removeFromAllBindings(KeyBinding original) {
+        for (java.lang.reflect.Field field : KeyBinding.class.getDeclaredFields()) {
+            if (!java.lang.reflect.Modifier.isStatic(field.getModifiers()) || !java.util.List.class.isAssignableFrom(field.getType())) {
+                continue;
+            }
+            field.setAccessible(true);
+            final java.util.List<?> list = Reflect.get(field, null);
+            if (list != null) list.remove(original);
         }
     }
 }

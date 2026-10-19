@@ -39,3 +39,6 @@ at \S*com\.mojang\.authlib\.minecraft\.client\.MinecraftClient\.
 Failed to resolve uniform
 The following uniforms won't work
 Error while parsing the block ID map entry
+
+# バニラが、アイテムの内容がまだ届いていない落ちたアイテムを描こうとしたときに出す (サーバーとの通信のタイミングによる)
+Item entity \d+ has no item\?!
