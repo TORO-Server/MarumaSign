@@ -12,6 +12,7 @@ import marumasa.marumasa_sign.core.image.ImageLoader;
 import marumasa.marumasa_sign.core.media.MediaTools;
 import marumasa.marumasa_sign.core.net.Http;
 import marumasa.marumasa_sign.core.pdf.PdfFile;
+import marumasa.marumasa_sign.core.structure.StructureLoader;
 import marumasa.marumasa_sign.core.sign.SignSpec;
 import marumasa.marumasa_sign.core.splat.SplatLoader;
 import marumasa.marumasa_sign.core.splat.SplatScene;
@@ -226,6 +227,12 @@ public final class MainPage extends Page {
     private static boolean isModelFile(File file) throws IOException {
         final byte[] head = readHead(file);
         return ImageLoader.isModel(head, head.length);
+    }
+
+    // 構造物のファイルかどうか
+    private static boolean isStructureFile(File file) throws IOException {
+        final byte[] head = readHead(file);
+        return ImageLoader.isStructure(head, head.length);
     }
 
     // Gaussian Splatting のファイルかどうか
@@ -458,6 +465,15 @@ public final class MainPage extends Page {
                 PdfFile.open(file).close();
             } catch (IOException e) {
                 MarumaSign.LOGGER.info("Could not load the PDF: " + e.getMessage());
+                throw new IOException(Lang.get("ui.status.not_image"));
+            }
+        } else if (isStructureFile(file)) {
+            if (file.length() > StructureLoader.MAX_SIZE) throw new IOException(Lang.get("ui.status.file_too_large", 64));
+            try {
+                // 表示できる構造物かどうかを確かめる
+                ImageLoader.model(file);
+            } catch (IOException e) {
+                MarumaSign.LOGGER.info("Could not load the structure: " + e.getMessage());
                 throw new IOException(Lang.get("ui.status.not_image"));
             }
         } else if (isModelFile(file)) {

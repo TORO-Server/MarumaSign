@@ -71,8 +71,9 @@ public final class GltfModel {
         int influences;
         int[] joints;
         float[] weights;
-        // 三角形の頂点番号 (3 つで 1 枚)
+        // 三角形の頂点番号 (3 つで 1 枚)。quads が true なら四角形の頂点番号 (4 つで 1 枚、反時計回り)
         int[] indices;
+        boolean quads;
         // 三角形の角ごとのテクスチャ座標。indices と同じ並びで、1 つにつき u, v
         float[] cornerUv;
         // 変換前の元のテクスチャ座標。動的テクスチャトランスフォームで使用
@@ -169,6 +170,12 @@ public final class GltfModel {
     int triangleCount;
     // 陰影をテクスチャに焼き込んだ材質の数
     int bakedCount;
+    // 時間で絵が変わるテクスチャ
+    TextureAnimation[] textureAnimations = new TextureAnimation[0];
+
+    public TextureAnimation[] textureAnimations() {
+        return textureAnimations;
+    }
 
     GltfModel() {
     }

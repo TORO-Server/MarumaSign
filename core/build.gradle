@@ -117,6 +117,18 @@ tasks.register('loadBenchmark', JavaExec) {
     args = providers.gradleProperty('loadBenchArgs').getOrElse('').tokenize(' ')
 }
 
+// 構造物のファイルを読み込んで PNG に描く。引数は -PstructureArgs="出力先 ファイルまたはフォルダ..." で渡す。
+// ブロックのテクスチャに使う Minecraft の jar は -PassetJar=jar の場所 で指定できる (指定しなければダウンロードする)
+tasks.register('structureCheck', JavaExec) {
+    classpath = sourceSets.test.runtimeClasspath
+    mainClass = 'marumasa.marumasa_sign.core.structure.StructureCheck'
+    javaLauncher = javaToolchains.launcherFor(java.toolchain)
+    maxHeapSize = '4g'
+    args = providers.gradleProperty('structureArgs').getOrElse('').tokenize(' ')
+    if (providers.gradleProperty('assetJar').isPresent()) systemProperty 'marumasign.assetJar', providers.gradleProperty('assetJar').get()
+    systemProperty 'marumasign.gameDir', layout.buildDirectory.dir('structure-game').get().asFile.path
+}
+
 // ガウシアンスプラッティングのデコーダの動作と安全性を確認する。
 // -PsplatArgs="テスト用データのフォルダ" を渡すと、実データでの検査と、ほかの実装との数値の比較も行う
 tasks.register('splatCheck', JavaExec) {

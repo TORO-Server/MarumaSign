@@ -4,6 +4,7 @@ import marumasa.marumasa_sign.core.MarumaSign;
 import marumasa.marumasa_sign.core.Platform;
 import marumasa.marumasa_sign.core.gltf.GltfModel;
 import marumasa.marumasa_sign.core.gltf.GltfScene;
+import marumasa.marumasa_sign.core.gltf.TextureAnimation;
 import marumasa.marumasa_sign.core.image.DecodedImage;
 import marumasa.marumasa_sign.core.image.ImageLoader;
 import marumasa.marumasa_sign.core.media.Ffmpeg;
@@ -37,6 +38,23 @@ public final class SignManager {
     // 表示中の PDF と、そのページ送りの操作
     private final List<PdfSession> pdfs = new ArrayList<PdfSession>();
     private final PdfControls controls;
+    // 時間で絵が変わるテクスチャを持つ 3D モデル (構造物の水など)
+    private final List<AnimatedModel> animated = new ArrayList<AnimatedModel>();
+
+    private static final class AnimatedModel {
+        final String url;
+        final TextureEntry entry;
+        final GltfModel model;
+        final Object[] textures;
+        final long start = System.currentTimeMillis();
+
+        AnimatedModel(String url, TextureEntry entry, GltfModel model, Object[] textures) {
+            this.url = url;
+            this.entry = entry;
+            this.model = model;
+            this.textures = textures;
+        }
+    }
     private boolean ffmpegNoticeShown;
 
     // 読み込み中・読み込み失敗のときに表示するテクスチャ
@@ -185,6 +203,7 @@ public final class SignManager {
                 created[i] = platform.createTexture(texture.width, texture.height, texture.pixels);
             }
             entry.setModel(scene, created);
+            if (model.textureAnimations().length > 0) animated.add(new AnimatedModel(url, entry, model, created));
             MarumaSign.LOGGER.info("Load: " + url + " (" + model.triangleCount() + " triangles, " + entry.loadMillis() + " ms)");
         } catch (RuntimeException | Error e) {
             MarumaSign.LOGGER.error("Failed to register model: " + url, e);
@@ -308,6 +327,20 @@ public final class SignManager {
         for (int i = 0; i < sessions.size(); i++) {
             sessions.get(i).tick();
         }
+        for (int i = animated.size() - 1; i >= 0; i--) {
+            final AnimatedModel item = animated.get(i);
+            if (textures.get(item.url) != item.entry) {
+                animated.remove(i);
+                continue;
+            }
+            final long tick = (System.currentTimeMillis() - item.start) / 50;
+            for (TextureAnimation animation : item.model.textureAnimations()) {
+                final int[] pixels = animation.update(tick);
+                if (pixels == null) continue;
+                final GltfModel.Texture texture = item.model.texture(animation.textureIndex());
+                platform.updateTexture(item.textures[animation.textureIndex()], texture.width, texture.height, pixels);
+            }
+        }
     }
 
     // 読み込み待ち・読み込み中の画像があるかどうか
@@ -325,6 +358,7 @@ public final class SignManager {
             pdf.close();
         }
         pdfs.clear();
+        animated.clear();
         controls.close();
         for (TextureEntry entry : textures.values()) {
             for (Object frame : entry.ownedTextures()) {

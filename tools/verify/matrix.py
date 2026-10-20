@@ -135,6 +135,8 @@ MEDIA = {
     "video": "test-video.mp4",
     # 2 ページの PDF。ページ送りの操作も確かめる
     "pdf": "test-pdf.pdf",
+    # 4 色のブロックの壁 (ストラクチャーブロックの形式)。ブロックのテクスチャと形の読み込みを確かめる
+    "structure": "test-structure.nbt",
 }
 
 
