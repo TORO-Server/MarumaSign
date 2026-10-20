@@ -7,7 +7,7 @@ import java.util.Arrays;
  * Zstandard (RFC 8878) の展開。KTX2 の超圧縮 (supercompressionScheme 2) に使う。
  * 辞書は使わない (KTX2 では使われない)。
  */
-final class ZstdDecoder {
+public final class ZstdDecoder {
 
     private static final int MAGIC = 0xFD2FB528;
 
@@ -38,7 +38,7 @@ final class ZstdDecoder {
     /**
      * 展開する。maxSize を超えるときは失敗にする。
      */
-    static byte[] decompress(byte[] src, int offset, int length, int maxSize) throws IOException {
+    public static byte[] decompress(byte[] src, int offset, int length, int maxSize) throws IOException {
         try {
             return new Frame(src, offset, offset + length, maxSize).run();
         } catch (RuntimeException e) {

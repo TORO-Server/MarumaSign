@@ -7,13 +7,19 @@
     python tools/verify/matrix.py                     # すべて
     python tools/verify/matrix.py --only forge:1.12.2 liteloader:1.7.10
     python tools/verify/matrix.py --skip-passed       # 前回合格したものは飛ばす
+    python tools/verify/matrix.py --skip-passed --jobs 3   # 3 つのクライアントを同時に動かす
 """
 
 import argparse
 import hashlib
 import io
 import json
+import queue
+import shutil
+import subprocess
 import sys
+import threading
+import time
 import zipfile
 from pathlib import Path
 from types import SimpleNamespace
@@ -125,23 +131,110 @@ def combinations(libs):
 MEDIA = {
     "image": "test-image.png",
     "model": "test-model.glb",
+    "splat": "test-splat.splat",
     "video": "test-video.mp4",
+    # 2 ページの PDF。ページ送りの操作も確かめる
+    "pdf": "test-pdf.pdf",
 }
 
 
+def keep_failed_attempt(work_dir):
+    """やり直す前に、失敗した回の画面とログを「作業フォルダ名-failed」に写しておく (やり直すと作業フォルダは消える)。"""
+    if not work_dir or not Path(work_dir).is_dir():
+        return
+    target = Path(work_dir + "-failed")
+    shutil.rmtree(target, ignore_errors=True)
+    target.mkdir(parents=True)
+    source = Path(work_dir)
+    for pattern in ("*.png", "*.log", "logs/*.log", "selftest/*"):
+        for path in source.glob(pattern):
+            if path.is_file():
+                destination = target / path.relative_to(source)
+                destination.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(path, destination)
+
+
 def run_one(root, loader, minecraft, loader_version, mod, baseline, timeout, media=("image",), shaders=False,
-            shader_pack=None, shader_mod=None):
+            shader_pack=None, shader_mod=None, port=25570):
     args = SimpleNamespace(
         minecraft=minecraft, loader=loader, loader_version=loader_version, spec="",
         mod=None if baseline else str(mod), baseline=baseline, shaders=shaders, shader_pack=shader_pack,
         shader_mod=shader_mod,
         image="|".join(str(REPO / "tools" / "verify" / MEDIA[kind]) for kind in media), lang="en_us",
-        port=25570, timeout=timeout, root=str(root),
+        port=port, timeout=timeout, root=str(root),
     )
     try:
         return verify.run(args)
     except Exception as error:  # 1 つの失敗で全体を止めない
         return {"ok": False, "clean": False, "detail": f"{type(error).__name__}: {error}"}
+
+
+def save_summary(summary_file, summary, key, entry):
+    """1 つの組み合わせの結果を保存する (entry が None なら消す)。
+
+    同時に動いている確認 (--jobs) も同じファイルに書くので、書く直前に読み直し、その組み合わせだけを変える。
+    """
+    with verify.system_lock("Summary"):
+        current = json.loads(summary_file.read_text(encoding="utf-8")) if summary_file.is_file() else {}
+        if entry is None:
+            current.pop(key, None)
+        else:
+            current[key] = entry
+        summary_file.parent.mkdir(parents=True, exist_ok=True)
+        temporary = summary_file.with_name(summary_file.name + ".tmp")
+        temporary.write_text(json.dumps(current, indent=2, ensure_ascii=False), encoding="utf-8")
+        temporary.replace(summary_file)
+    summary.clear()
+    summary.update(current)
+
+
+def run_parallel(args, pending, suffix, jobs):
+    """組み合わせを、別々のプロセスで jobs 個ずつ同時に確認する。
+
+    プロセスごとにサーバーのポートを変え (25571 から)、画面はウィンドウごとに撮る (verify.grab_screen) ので、
+    クライアントのウィンドウが重なっても互いに影響しない。出力は runs/matrix-<組み合わせ>.log に書く。
+    """
+    work = queue.Queue()
+    for key in pending:
+        work.put(key)
+    root = Path(args.root)
+    (root / "runs").mkdir(parents=True, exist_ok=True)
+    printing = threading.Lock()
+
+    def worker(number):
+        port = 25571 + number
+        while True:
+            try:
+                key = work.get_nowait()
+            except queue.Empty:
+                return
+            command = [sys.executable, str(Path(__file__).resolve()), "--only", key, "--port", str(port),
+                       "--timeout", str(args.timeout), "--root", args.root, "--libs", args.libs, "--media", *args.media]
+            if args.rebaseline:
+                command.append("--rebaseline")
+            if args.shaders:
+                command += ["--shaders", "--shader-pack", args.shader_pack]
+                if args.shader_mod:
+                    command += ["--shader-mod", args.shader_mod]
+            name = (key + suffix).replace(":", "-").replace("+", "-")
+            started = time.time()
+            with printing:
+                verify.log(f"[{number}] start {key + suffix}")
+            with open(root / "runs" / f"matrix-{name}.log", "w", encoding="utf-8", errors="replace") as output:
+                subprocess.run(command, stdout=output, stderr=subprocess.STDOUT, cwd=str(REPO))
+            with printing:
+                verify.log(f"[{number}] done {key + suffix} in {int(time.time() - started)} s")
+            # 同時に起動すると、起動の重い部分が重なるので、少しずらす
+            time.sleep(5)
+
+    threads = []
+    for number in range(jobs):
+        thread = threading.Thread(target=worker, args=(number,))
+        thread.start()
+        threads.append(thread)
+        time.sleep(20)
+    for thread in threads:
+        thread.join()
 
 
 def main():
@@ -159,6 +252,9 @@ def main():
     parser.add_argument("--shader-mod", choices=["optifine"], default=None,
                         help="--shaders で使う影 Mod を、ローダーごとの既定のものから変える (Forge 1.16.5 以降で OptiFine を使う)")
     parser.add_argument("--timeout", type=int, default=660)
+    parser.add_argument("--jobs", type=int, default=1,
+                        help="同時に確認する組み合わせの数。2 以上では、組み合わせごとに別のプロセスで動かす")
+    parser.add_argument("--port", type=int, default=25570, help="確認に使うサーバーのポート")
     parser.add_argument("--root", default=str(verify.DEFAULT_ROOT))
     parser.add_argument("--libs", default=str(REPO / "dist" / "build" / "libs"),
                         help="確認する jar があるフォルダ。ビルドを続けながら確認するときは、コピーした先を指定する")
@@ -171,6 +267,8 @@ def main():
     summary = json.loads(summary_file.read_text(encoding="utf-8")) if summary_file.is_file() else {}
 
     selected = set()
+    # --jobs で、別のプロセスに任せる組み合わせ
+    pending = []
     for loader, minecraft, loader_version, mod in combinations(Path(args.libs)):
         key = f"{loader}:{minecraft}"
         if args.only and key not in args.only:
@@ -178,51 +276,74 @@ def main():
         key += suffix
         selected.add(key)
         if not mod.is_file():
-            summary[key] = {"ok": False, "clean": False, "detail": f"missing {mod.name}"}
+            save_summary(summary_file, summary, key, {"ok": False, "clean": False, "detail": f"missing {mod.name}"})
             continue
         # 確認済みかどうかは、ファイルの内容で判断する (ビルドし直すと名前は同じでも中身が変わる)
         digest = combination_digest(mod, loader, minecraft)
         previous = summary.get(key, {})
         if (args.skip_passed and previous.get("clean") and previous.get("mod_sha256") == digest
-                and set(args.media) <= set(previous.get("media", []))):
+                and set(args.media) <= set(previous.get("media", []))
+                and {MEDIA[kind] for kind in args.media} <= set(previous.get("item_media", []))):
+            continue
+        if args.jobs > 1:
+            # 別のプロセスでまとめて確認する
+            pending.append(f"{loader}:{minecraft}")
             continue
 
         baseline_file = root / "baselines" / (f"{loader}-{minecraft}" + suffix.replace("+", "-").replace(":", "-") + ".json")
         if args.rebaseline or not baseline_file.is_file():
             verify.log(f"=== baseline {key}")
             baseline = run_one(root, loader, minecraft, loader_version, mod, True, args.timeout, shaders=args.shaders,
-                               shader_pack=args.shader_pack, shader_mod=args.shader_mod)
+                               shader_pack=args.shader_pack, shader_mod=args.shader_mod, port=args.port)
             if "No shader mod is available" in str(baseline.get("detail")):
                 # この組み合わせで使える影 Mod がない。確認の対象から外す
                 verify.log(f"=== skip {key}: no shader mod")
-                summary.pop(key, None)
+                save_summary(summary_file, summary, key, None)
                 selected.discard(key)
                 continue
             if not baseline.get("ok"):
                 # 初回の起動では、ローダーの準備などでクライアントがそのまま終了することがあるので、1 回だけやり直す
                 verify.log(f"=== baseline again {key} ({str(baseline.get('detail'))[:120]})")
                 baseline = run_one(root, loader, minecraft, loader_version, mod, True, args.timeout, shaders=args.shaders,
-                                   shader_pack=args.shader_pack, shader_mod=args.shader_mod)
+                                   shader_pack=args.shader_pack, shader_mod=args.shader_mod, port=args.port)
             if not baseline.get("ok"):
                 # Mod を入れなくても起動しない組み合わせ。Mod の結果ではないので、報告書では対象外として扱う
-                summary[key] = {"ok": False, "clean": False, "baseline_failed": True,
-                                "detail": "baseline failed: " + str(baseline.get("detail"))[:300],
-                                "mod": mod.name, "mod_sha256": digest,
-                                "shader_mod": baseline.get("shader_mod"), "shader_pack": baseline.get("shader_pack")}
-                summary_file.write_text(json.dumps(summary, indent=2, ensure_ascii=False), encoding="utf-8")
+                save_summary(summary_file, summary, key, {
+                    "ok": False, "clean": False, "baseline_failed": True,
+                    "detail": "baseline failed: " + str(baseline.get("detail"))[:300],
+                    "mod": mod.name, "mod_sha256": digest,
+                    "shader_mod": baseline.get("shader_mod"), "shader_pack": baseline.get("shader_pack")})
+                # 失敗した基準は使えないので消しておく。次の確認でも基準から取り直し、対象外として記録し直せるように
+                baseline_file.unlink(missing_ok=True)
                 continue
 
         verify.log(f"=== verify {key}")
         result = run_one(root, loader, minecraft, loader_version, mod, False, args.timeout, args.media, args.shaders,
-                             args.shader_pack, args.shader_mod)
+                             args.shader_pack, args.shader_mod, port=args.port)
+        if "No shader mod is available" in str(result.get("detail")):
+            # 基準を取った後で、使える影 Mod がないと分かった組み合わせ。確認の対象から外す
+            verify.log(f"=== skip {key}: no shader mod")
+            save_summary(summary_file, summary, key, None)
+            selected.discard(key)
+            continue
         if not result.get("clean"):
             # 他の処理と重なって時間切れになることがあるので、1 回だけやり直す
             verify.log(f"=== retry {key} ({str(result.get('detail'))[:200]} / {result.get('image_detail')}"
                        f" / {result.get('sign_detail')} / {result.get('item_detail')}"
                        f" / {(result.get('new_client_findings', []) + result.get('new_server_findings', []))[:3]})")
+            keep_failed_attempt(result.get("work_dir"))
             result = run_one(root, loader, minecraft, loader_version, mod, False, args.timeout, args.media, args.shaders,
-                             args.shader_pack, args.shader_mod)
-        summary[key] = {
+                             args.shader_pack, args.shader_mod, port=args.port)
+        if args.shaders and result.get("shaders_fell_back"):
+            # 影 Mod がシェーダーパックを読み込めず、通常の描画に戻した。この Mod の結果ではないので、対象外として扱う
+            verify.log(f"=== {key}: the shader mod could not load the shader pack")
+            save_summary(summary_file, summary, key, {
+                "ok": False, "clean": False, "baseline_failed": True,
+                "detail": "shader pack could not be loaded by the shader mod (it fell back to vanilla shaders)",
+                "mod": mod.name, "mod_sha256": digest,
+                "shader_mod": result.get("shader_mod"), "shader_pack": result.get("shader_pack")})
+            continue
+        save_summary(summary_file, summary, key, {
             "ok": bool(result.get("ok")),
             "clean": bool(result.get("clean")),
             "detail": " / ".join([str(result.get("detail"))[:300], str(result.get("image_detail", "no screenshot")),
@@ -233,13 +354,17 @@ def main():
             "mod": mod.name,
             "mod_sha256": digest,
             "media": list(args.media),
+            # 看板アイテムとして確かめたファイル
+            "item_media": result.get("item_media", []) if result.get("item_visible") else [],
             "shader_mod": result.get("shader_mod"),
             "shader_pack": result.get("shader_pack"),
             "new_client_findings": result.get("new_client_findings", [])[:8],
             "new_server_findings": result.get("new_server_findings", [])[:8],
-        }
-        summary_file.parent.mkdir(parents=True, exist_ok=True)
-        summary_file.write_text(json.dumps(summary, indent=2, ensure_ascii=False), encoding="utf-8")
+        })
+
+    if pending:
+        run_parallel(args, pending, suffix, args.jobs)
+        summary = json.loads(summary_file.read_text(encoding="utf-8")) if summary_file.is_file() else {}
 
     print()
     print(f"{'combination':<24} {'works':<6} {'clean':<6} detail")

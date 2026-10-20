@@ -10,6 +10,7 @@ Mod 内蔵のセルフテスト (画面を開く -> 画像を選ぶ -> 看板を
 """
 
 import argparse
+import contextlib
 import http.server
 import json
 import os
@@ -28,6 +29,8 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parents[2]
 DEFAULT_ROOT = Path(os.environ.get("MARUMASIGN_VERIFY_ROOT", Path.home() / ".marumasign-verify"))
 PLAYER = "Tester"
+# 次のファイルを確かめる前にプレイヤーを動かす量 (x, z)。(0, 0) からたどる場所が重ならず、どこも最初の場所から 160 ブロック以内
+MOVES = [(112, 0), (0, 112), (-112, 0), (-112, 0), (0, -112), (0, -112)]
 MANIFEST_URL = "https://piston-meta.mojang.com/mc/game/version_manifest_v2.json"
 
 
@@ -209,7 +212,9 @@ FORGE_INSTALL_FIX = {"1.14.2", "1.14.3"}
 class Server:
     def __init__(self, minecraft, root, main_dir, port):
         self.minecraft = minecraft
-        self.directory = root / "servers" / minecraft
+        # 同時に動く確認 (matrix.py --jobs) が同じバージョンのサーバーを使うことがあるので、ポートごとに分ける
+        self.default_directory = root / "servers" / minecraft
+        self.directory = self.default_directory if port == 25570 else root / "servers" / f"{minecraft}-{port}"
         self.main_dir = main_dir
         self.port = port
         self.process = None
@@ -220,6 +225,8 @@ class Server:
     def prepare(self):
         self.directory.mkdir(parents=True, exist_ok=True)
         jar = self.directory / "server.jar"
+        if not jar.exists() and (self.default_directory / "server.jar").is_file():
+            shutil.copy2(self.default_directory / "server.jar", jar)
         if not jar.exists():
             manifest = fetch_json(MANIFEST_URL)
             entry = next((v for v in manifest["versions"] if v["id"] == self.minecraft), None)
@@ -288,12 +295,12 @@ class Server:
             self.process.stdin.write(text + "\n")
             self.process.stdin.flush()
 
-    def move_player(self, distance):
+    def move_player(self, dx, dz):
         """プレイヤーを、いまの場所から離れた場所へ移動させる。"""
         if version_key(self.minecraft) >= (1, 13, 0):
-            self.command(f"execute as {PLAYER} at @s run tp @s ~{distance} ~ ~")
+            self.command(f"execute as {PLAYER} at @s run tp @s ~{dx} ~ ~{dz}")
         else:
-            self.command(f"tp {PLAYER} ~{distance} ~ ~")
+            self.command(f"tp {PLAYER} ~{dx} ~ ~{dz}")
 
     def give_sign_item(self, lines):
         """看板の文字をデータとして持つ看板アイテムを、プレイヤーに渡す。データの書き方はバージョンによって違う。"""
@@ -556,6 +563,7 @@ narrator:0
 fullscreen:false
 renderDistance:4
 maxFps:60
+inactivityFpsLimit:minimized
 fov:0.0
 soundCategory_master:0.0
 lang:{lang}
@@ -573,8 +581,42 @@ def prepare_work_dir(work_dir, mod, lang):
     (work_dir / "config" / "marumasa_sign.json").write_text('{\n  "MaxThreads": 5,\n  "Volume": 0\n}\n')
 
 
-def minecraft_windows():
-    """Minecraft のウィンドウを (ハンドル, 位置) の一覧で返す。"""
+@contextlib.contextmanager
+def system_lock(name):
+    """同じ PC で同時に動く確認 (matrix.py --jobs) の間で、1 つずつしか行えない処理を囲む。Windows 以外では何もしない。"""
+    if sys.platform != "win32":
+        yield
+        return
+    import ctypes
+    from ctypes import wintypes
+
+    kernel32 = ctypes.windll.kernel32
+    kernel32.CreateMutexW.restype = wintypes.HANDLE
+    kernel32.CreateMutexW.argtypes = [ctypes.c_void_p, wintypes.BOOL, wintypes.LPCWSTR]
+    kernel32.WaitForSingleObject.argtypes = [wintypes.HANDLE, wintypes.DWORD]
+    kernel32.ReleaseMutex.argtypes = [wintypes.HANDLE]
+    kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
+    handle = kernel32.CreateMutexW(None, False, "Local\\MarumaSignVerify" + name)
+    kernel32.WaitForSingleObject(handle, 0xFFFFFFFF)
+    try:
+        yield
+    finally:
+        kernel32.ReleaseMutex(handle)
+        kernel32.CloseHandle(handle)
+
+
+def process_tree(process):
+    """process (ランチャー) と、それが起動した子プロセス (ゲーム本体) のプロセス ID。"""
+    try:
+        import psutil
+        root = psutil.Process(process.pid)
+        return {root.pid} | {child.pid for child in root.children(recursive=True)}
+    except Exception:
+        return {process.pid}
+
+
+def minecraft_windows(pids=None):
+    """Minecraft のウィンドウを (ハンドル, 位置) の一覧で返す。pids があれば、そのプロセスのウィンドウだけ。"""
     import ctypes
     from ctypes import wintypes
 
@@ -583,6 +625,11 @@ def minecraft_windows():
 
     @ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
     def visit(window, _):
+        if pids is not None:
+            owner = wintypes.DWORD()
+            user32.GetWindowThreadProcessId(window, ctypes.byref(owner))
+            if owner.value not in pids:
+                return True
         if user32.IsWindowVisible(window):
             title = ctypes.create_unicode_buffer(256)
             user32.GetWindowTextW(window, title, 256)
@@ -603,31 +650,180 @@ def minecraft_window_box():
     return windows[0][1] if windows else None
 
 
-def close_minecraft_window():
-    """ウィンドウの閉じるボタンを押したのと同じ方法で、ゲームを通常どおり終了させる。"""
+def close_minecraft_window(owner=None):
+    """ウィンドウの閉じるボタンを押したのと同じ方法で、ゲームを通常どおり終了させる。owner があれば、そのクライアントだけ。"""
     import ctypes
 
-    for window, _ in minecraft_windows():
+    for window, _ in minecraft_windows(process_tree(owner) if owner is not None else None):
         ctypes.windll.user32.PostMessageW(window, 0x0010, 0, 0)  # WM_CLOSE
 
 
-def grab_screen(path):
-    """Minecraft のウィンドウだけを画像として保存する。"""
+def raise_priority(*processes):
+    """サーバーとクライアント (ランチャーが起動した子プロセスも含む) の優先度を上げる。
+
+    同じ PC でビルドなどの重い処理が動いていると、クライアントの起動が遅れて時間切れになる
+    (Forge の起動画面がタイムアウトする) ため。Windows では、通常より高い優先度は子プロセスに引き継がれないので、
+    起動後に子プロセスをたどって設定する。psutil がなければ何もしない。
+    """
+    try:
+        import psutil
+    except ImportError:
+        return
+    for process in processes:
+        if process is None or process.poll() is not None:
+            continue
+        try:
+            root = psutil.Process(process.pid)
+            for target in [root] + root.children(recursive=True):
+                if target.nice() != psutil.ABOVE_NORMAL_PRIORITY_CLASS:
+                    target.nice(psutil.ABOVE_NORMAL_PRIORITY_CLASS)
+        except (psutil.Error, OSError):
+            pass
+
+
+def covered(window, box):
+    """Minecraft のウィンドウの上に、他のウィンドウ (タスクバーの縮小表示や通知など、常に手前に出るもの) が重なっているか。
+
+    ウィンドウの中のいくつかの点 (中央と、ホットバーのある下の部分) で、そこに見えているウィンドウを調べる。
+    """
+    import ctypes
+    from ctypes import wintypes
+
+    user32 = ctypes.windll.user32
+    user32.WindowFromPoint.restype = wintypes.HWND
+    user32.WindowFromPoint.argtypes = [wintypes.POINT]
+    user32.GetAncestor.restype = wintypes.HWND
+    user32.GetAncestor.argtypes = [wintypes.HWND, ctypes.c_uint]
+    left, top, right, bottom = box
+    width, height = right - left, bottom - top
+    points = [(0.5, 0.5)] + [(fx, 0.95) for fx in (0.30, 0.40, 0.50, 0.60, 0.70)] + [(0.5, 0.1)]
+    for fx, fy in points:
+        found = user32.WindowFromPoint(wintypes.POINT(int(left + width * fx), int(top + height * fy)))
+        if found and user32.GetAncestor(found, 2) != window:  # GA_ROOT
+            return True
+    return False
+
+
+def save_client_area(window, box, path):
+    """枠を除いた描画領域の位置を、画像の横に記録しておく (ホットバーの枠の位置を求めるのに使う)。"""
+    import ctypes
+    from ctypes import wintypes
+
+    user32 = ctypes.windll.user32
+    client = wintypes.RECT()
+    origin = wintypes.POINT(0, 0)
+    if user32.GetClientRect(window, ctypes.byref(client)) and user32.ClientToScreen(window, ctypes.byref(origin)):
+        Path(str(path) + ".json").write_text(json.dumps({
+            "x": origin.x - box[0], "y": origin.y - box[1], "width": client.right, "height": client.bottom}))
+
+
+def print_window(window, box, path):
+    """ウィンドウの中身を、手前に出さずに撮る (PrintWindow の PW_RENDERFULLCONTENT)。
+
+    他のウィンドウ (同時に動かしている別のクライアントなど) が重なっていても、そのウィンドウの内容だけが写る。
+    撮れなかったとき (真っ黒など) は False を返す。
+    """
+    import ctypes
+    from ctypes import wintypes
+
+    from PIL import Image
+
+    user32 = ctypes.windll.user32
+    gdi32 = ctypes.windll.gdi32
+    user32.GetWindowDC.restype = wintypes.HDC
+    user32.GetWindowDC.argtypes = [wintypes.HWND]
+    user32.PrintWindow.argtypes = [wintypes.HWND, wintypes.HDC, wintypes.UINT]
+    user32.ReleaseDC.argtypes = [wintypes.HWND, wintypes.HDC]
+    gdi32.CreateCompatibleDC.restype = wintypes.HDC
+    gdi32.CreateCompatibleDC.argtypes = [wintypes.HDC]
+    gdi32.CreateCompatibleBitmap.restype = wintypes.HBITMAP
+    gdi32.CreateCompatibleBitmap.argtypes = [wintypes.HDC, ctypes.c_int, ctypes.c_int]
+    gdi32.SelectObject.restype = wintypes.HGDIOBJ
+    gdi32.SelectObject.argtypes = [wintypes.HDC, wintypes.HGDIOBJ]
+    gdi32.DeleteObject.argtypes = [wintypes.HGDIOBJ]
+    gdi32.DeleteDC.argtypes = [wintypes.HDC]
+    gdi32.GetDIBits.argtypes = [wintypes.HDC, wintypes.HBITMAP, wintypes.UINT, wintypes.UINT, ctypes.c_void_p,
+                                ctypes.c_void_p, wintypes.UINT]
+
+    class BitmapInfoHeader(ctypes.Structure):
+        _fields_ = [("biSize", wintypes.DWORD), ("biWidth", wintypes.LONG), ("biHeight", wintypes.LONG),
+                    ("biPlanes", wintypes.WORD), ("biBitCount", wintypes.WORD), ("biCompression", wintypes.DWORD),
+                    ("biSizeImage", wintypes.DWORD), ("biXPelsPerMeter", wintypes.LONG),
+                    ("biYPelsPerMeter", wintypes.LONG), ("biClrUsed", wintypes.DWORD), ("biClrImportant", wintypes.DWORD)]
+
+    width, height = box[2] - box[0], box[3] - box[1]
+    window_dc = user32.GetWindowDC(window)
+    memory_dc = gdi32.CreateCompatibleDC(window_dc)
+    bitmap = gdi32.CreateCompatibleBitmap(window_dc, width, height)
+    previous = gdi32.SelectObject(memory_dc, bitmap)
+    try:
+        if not user32.PrintWindow(window, memory_dc, 2):  # PW_RENDERFULLCONTENT
+            return False
+        header = BitmapInfoHeader(ctypes.sizeof(BitmapInfoHeader), width, -height, 1, 32, 0, 0, 0, 0, 0, 0)
+        buffer = ctypes.create_string_buffer(width * height * 4)
+        if not gdi32.GetDIBits(memory_dc, bitmap, 0, height, buffer, ctypes.byref(header), 0):
+            return False
+    finally:
+        gdi32.SelectObject(memory_dc, previous)
+        gdi32.DeleteObject(bitmap)
+        gdi32.DeleteDC(memory_dc)
+        user32.ReleaseDC(window, window_dc)
+    image = Image.frombuffer("RGB", (width, height), buffer, "raw", "BGRX", 0, 1)
+    low, high = image.convert("L").getextrema()
+    if high - low < 40:
+        # 描画の内容が取れず、一色になっている
+        return False
+    image.save(path)
+    return True
+
+
+def grab_screen(path, owner=None):
+    """Minecraft のウィンドウだけを画像として保存する。owner があれば、そのクライアントのウィンドウを撮る。"""
     try:
         from PIL import ImageGrab
     except ImportError:
         return False
     if sys.platform != "win32":
         return False
-    windows = minecraft_windows()
+    windows = minecraft_windows(process_tree(owner) if owner is not None else None)
     if not windows:
         return False
-    import ctypes
-    # 他のウィンドウに隠れていると写らないので、手前に出してから撮る
     window, box = windows[0]
-    ctypes.windll.user32.ShowWindow(window, 9)  # SW_RESTORE
-    ctypes.windll.user32.SetForegroundWindow(window)
-    time.sleep(0.7)
+    if owner is not None:
+        try:
+            if print_window(window, box, path):
+                save_client_area(window, box, path)
+                return True
+        except Exception as error:
+            log(f"PrintWindow failed ({error}); taking the screenshot from the screen")
+        log("PrintWindow did not capture the game; taking the screenshot from the screen")
+    # 画面から撮るときは、同時に動いている別の確認とウィンドウを取り合わないよう、1 つずつ撮る
+    with system_lock("Screen"):
+        return grab_from_screen(window, box, path)
+
+
+def grab_from_screen(window, box, path):
+    from PIL import ImageGrab
+    import ctypes
+    user32 = ctypes.windll.user32
+    # 他のウィンドウに隠れていると写らないので、手前に出してから撮る。
+    # スタートメニューなどが開いていると手前に出せないことがあるので、本当に一番手前になったかを確かめ、
+    # なっていなければ少し待ってやり直す (確認中に PC を操作すると、その画面が写り込んで失敗していた)
+    for attempt in range(15):
+        user32.ShowWindow(window, 9)  # SW_RESTORE
+        user32.SetForegroundWindow(window)
+        time.sleep(0.7)
+        if user32.GetForegroundWindow() == window and not covered(window, box):
+            break
+        log("another window is in front of Minecraft; waiting before taking the screenshot")
+        if attempt == 1:
+            # タスクバーの縮小表示などは画面の下の端に出て、開いたままになることがある。
+            # ウィンドウを画面の左上に動かして、重ならないようにする (大きさは変えないので、ゲームの画面は同じ)
+            user32.SetWindowPos(window, None, 0, 0, 0, 0, 0x0001 | 0x0004)  # SWP_NOSIZE | SWP_NOZORDER
+            time.sleep(0.5)
+            box = next((found for handle, found in minecraft_windows() if handle == window), box)
+        time.sleep(2.0)
+    save_client_area(window, box, path)
     try:
         ImageGrab.grab(bbox=box, all_screens=True).save(path)
         return True
@@ -643,8 +839,92 @@ def grab_screen(path):
 TEST_COLORS = {"red": (230, 60, 60), "green": (60, 180, 75), "blue": (60, 110, 230), "yellow": (250, 200, 40)}
 
 
-def analyze_screenshot(path):
-    """スクリーンショットにテスト画像が正しい向きで写っているかを調べる。"""
+def analyze_screenshot(path, bottom=True):
+    """スクリーンショットにテスト画像が正しい向きで写っているかを調べる。
+
+    bottom が False なら、すき間の判定に絵の下の帯を使わない (PDF では、照準が絵に合うとページ送りの帯が下に重なるため)。
+    """
+    from PIL import Image
+
+    image = Image.open(path).convert("RGB")
+    image.thumbnail((640, 640))
+    width, height = image.size
+    pixels = image.load()
+    sums = {name: [0, 0, 0] for name in TEST_COLORS}
+    hits = set()
+    for y in range(height):
+        for x in range(width):
+            name = classify(*pixels[x, y])
+            if name is not None:
+                entry = sums[name]
+                entry[0] += 1
+                entry[1] += x
+                entry[2] += y
+                hits.add((x, y))
+    visible, detail = judge_colours(sums, width, height)
+    if visible:
+        visible, detail = judge_coverage(hits, bottom)
+    return visible, detail
+
+
+def judge_coverage(hits, bottom=True):
+    """絵の範囲が、すき間なく塗られているかを調べる。
+
+    四角形の重なりや並び順がおかしいと、色の配置は正しくても、縞模様や網目のように背景が透けて見える。
+    中央の白い円にかからない、上と下の帯で、テスト画像の色のピクセルの割合を見る
+    (正しく描けていれば 0.45 以上、縞模様になると 0.35 以下だった)。
+    """
+    # 絵の範囲は、色のあるピクセルのうち一番大きなまとまりとする。
+    # 画面の下の体力の表示 (赤) などは絵から離れているので含めない。縞模様でも 1 つのまとまりになるよう、
+    # 少し離れた (4 ピクセル以内の) ピクセルどうしもつながっているとみなす
+    reach = 4
+    cells = {(x // reach, y // reach) for x, y in hits}
+    seen = set()
+    best = set()
+    for cell in cells:
+        if cell in seen:
+            continue
+        group = {cell}
+        stack = [cell]
+        seen.add(cell)
+        while stack:
+            cx, cy = stack.pop()
+            for nx in (cx - 1, cx, cx + 1):
+                for ny in (cy - 1, cy, cy + 1):
+                    if (nx, ny) in cells and (nx, ny) not in seen:
+                        seen.add((nx, ny))
+                        group.add((nx, ny))
+                        stack.append((nx, ny))
+        if len(group) > len(best):
+            best = group
+    picture = [(x, y) for x, y in hits if (x // reach, y // reach) in best]
+    xs = sorted(x for x, _ in picture)
+    ys = sorted(y for _, y in picture)
+    # 外れ値に左右されないよう、2 - 98 パーセンタイルを絵の範囲とする
+    x0, x1 = xs[len(xs) * 2 // 100], xs[len(xs) * 98 // 100]
+    y0, y1 = ys[len(ys) * 2 // 100], ys[len(ys) * 98 // 100]
+    band = (y1 - y0) * 2 // 5
+    coverage = []
+    for top in (y0, y1 - band) if bottom else (y0, y0):
+        area = [(x, y) for x in range(x0, x1 + 1) for y in range(top, top + band + 1)]
+        coverage.append(sum((point in hits) for point in area) / max(1, len(area)))
+    if min(coverage) < 0.40:
+        return False, f"test image has gaps (coverage of the top and bottom bands: {coverage[0]:.2f}, {coverage[1]:.2f})"
+    return True, "test image visible"
+
+
+# シェーダーを使っているときの判定で見る位置 (画面の幅と高さに対する割合) と、そこにあるはずの色合い (色相の範囲、度)。
+# テスト画像は、どのバージョンでも画面のほぼ同じ場所に写る
+SHADED_POINTS = [
+    ("red", 0.37, 0.46, [(320, 360), (0, 25)]),
+    ("green", 0.63, 0.46, [(90, 175)]),
+    ("blue", 0.37, 0.66, [(195, 265)]),
+    ("yellow", 0.63, 0.66, [(35, 85)]),
+]
+
+
+def analyze_page_two(path):
+    """PDF の 2 ページ目 (テスト画像を 180 度回したもの) が写っているかを調べる。"""
     from PIL import Image
 
     image = Image.open(path).convert("RGB")
@@ -660,17 +940,17 @@ def analyze_screenshot(path):
                 entry[0] += 1
                 entry[1] += x
                 entry[2] += y
-    return judge_colours(sums, width, height)
-
-
-# シェーダーを使っているときの判定で見る位置 (画面の幅と高さに対する割合) と、そこにあるはずの色合い (色相の範囲、度)。
-# テスト画像は、どのバージョンでも画面のほぼ同じ場所に写る
-SHADED_POINTS = [
-    ("red", 0.37, 0.46, [(320, 360), (0, 25)]),
-    ("green", 0.63, 0.46, [(90, 175)]),
-    ("blue", 0.37, 0.66, [(195, 265)]),
-    ("yellow", 0.63, 0.66, [(35, 85)]),
-]
+    counts = {name: entry[0] for name, entry in sums.items()}
+    minimum = width * height // 400
+    if any(count < minimum for count in counts.values()):
+        return False, f"page 2 colours not found (pixels: {counts})"
+    centre = {name: (entry[1] / entry[0], entry[2] / entry[0]) for name, entry in sums.items()}
+    # 180 度回っているので、赤と緑、青と黄の左右と、上下が入れ替わる
+    turned = (centre["red"][0] > centre["green"][0] and centre["blue"][0] > centre["yellow"][0]
+              and centre["red"][1] > centre["blue"][1] and centre["green"][1] > centre["yellow"][1])
+    if not turned:
+        return False, f"page 2 not shown (centres: {centre})"
+    return True, "page 2 visible"
 
 
 def analyze_screenshot_shaded(path):
@@ -699,34 +979,57 @@ def analyze_screenshot_shaded(path):
     return True, "test image visible (shaded)"
 
 
-def analyze_item_view(path):
-    """画面の下にあるホットバーに、テスト画像の見た目になった看板アイテムが写っているかを調べる。"""
+def analyze_item_view(path, names=("item",)):
+    """画面の下にあるホットバーに、テスト画像の見た目になった看板アイテムが、渡した数だけ写っているかを調べる。
+
+    1 つ目の枠には置く用の看板があり、渡したアイテムは 2 つ目以降の空いた枠に、渡した順に入る。
+    枠の位置は、ウィンドウの描画領域の大きさと GUI の倍率 (自動) から求める。
+    """
     from PIL import Image
 
     image = Image.open(path).convert("RGB")
     width, height = image.size
-    # ホットバーは画面の下の中央にある。手に持ったアイテム (右下) と、すぐ上にある体力の表示 (赤) は範囲に入れない
-    region = image.crop((int(width * 0.28), int(height * 0.905), int(width * 0.72), height))
-    pixels = region.load()
-    sums = {name: [0, 0, 0] for name in TEST_COLORS}
-    for y in range(region.height):
-        for x in range(region.width):
-            name = classify(*pixels[x, y])
-            if name is not None:
-                entry = sums[name]
-                entry[0] += 1
-                entry[1] += x
-                entry[2] += y
-    counts = {name: entry[0] for name, entry in sums.items()}
-    # 枠 1 つ分の小さな絵なので、色ごとに少しでも写っていればよい
-    if any(count < 12 for count in counts.values()):
-        return False, f"item picture not found in the hotbar (pixels: {counts})"
-    centre = {name: (entry[1] / entry[0], entry[2] / entry[0]) for name, entry in sums.items()}
-    ordered = (centre["red"][0] < centre["green"][0] and centre["blue"][0] < centre["yellow"][0]
-               and centre["red"][1] < centre["blue"][1] and centre["green"][1] < centre["yellow"][1])
-    if not ordered:
-        return False, f"item picture is mirrored or rotated (centres: {centre})"
-    return True, "item picture visible"
+    pixels = image.load()
+    # 描画領域の位置。撮影時の記録がなければ、Windows のウィンドウの枠の標準的な太さとみなす
+    meta = Path(str(path) + ".json")
+    if meta.is_file():
+        area = json.loads(meta.read_text())
+    else:
+        area = {"x": 8, "y": 31, "width": width - 16, "height": height - 39}
+    # GUI の倍率 (自動): 320x240 の画面が収まる最大の整数倍
+    scale = 1
+    while area["width"] // (scale + 1) >= 320 and area["height"] // (scale + 1) >= 240:
+        scale += 1
+    # ホットバーは幅 182、高さ 22 で画面の下の中央にあり、枠は 20 ごと、アイテムの絵は枠の内側 16 x 16
+    left = area["x"] + (area["width"] - 182 * scale) // 2
+    top = area["y"] + area["height"] - 22 * scale
+
+    results = []
+    for index, name in enumerate(names):
+        slot = index + 1
+        x0, y0 = left + (3 + 20 * slot) * scale, top + 3 * scale
+        sums = {colour: [0, 0, 0] for colour in TEST_COLORS}
+        for y in range(y0, min(height, y0 + 16 * scale)):
+            for x in range(x0, min(width, x0 + 16 * scale)):
+                colour = classify(*pixels[x, y])
+                if colour is not None:
+                    entry = sums[colour]
+                    entry[0] += 1
+                    entry[1] += x
+                    entry[2] += y
+        counts = {colour: entry[0] for colour, entry in sums.items()}
+        # 枠 1 つ分の小さな絵なので、色ごとに少しでも写っていればよい
+        if any(count < 12 for count in counts.values()):
+            results.append((False, f"{name}: item picture not found (pixels: {counts})"))
+            continue
+        centre = {colour: (entry[1] / entry[0], entry[2] / entry[0]) for colour, entry in sums.items()}
+        ordered = (centre["red"][0] < centre["green"][0] and centre["blue"][0] < centre["yellow"][0]
+                   and centre["red"][1] < centre["blue"][1] and centre["green"][1] < centre["yellow"][1])
+        if not ordered:
+            results.append((False, f"{name}: item picture is mirrored or rotated (centres: {centre})"))
+            continue
+        results.append((True, f"{name}: item picture visible"))
+    return all(ok for ok, _ in results), ", ".join(detail for _, detail in results)
 
 
 def analyze_sign_view(path):
@@ -866,62 +1169,64 @@ def run(args):
     prepare_work_dir(work_dir, mod, args.lang)
     result = {
         "minecraft": args.minecraft, "loader": args.loader, "loader_version": args.loader_version,
-        "mod": mod.name if mod else None, "ok": False, "detail": "",
+        "mod": mod.name if mod else None, "ok": False, "detail": "", "work_dir": str(work_dir),
     }
-    shader_setup = None
-    if shaders:
-        shader_setup = shadermods.resolve(args.loader, args.minecraft, root / "shadermods", shader_pack,
-                                         shader_mod)
-        if shader_setup is None:
-            result["detail"] = "No shader mod is available for this combination"
+    # ファイルを揃える処理は、同時に動く確認 (matrix.py --jobs) の間で 1 つずつ行う (同じファイルを同時に取りに行かないように)
+    with system_lock("Install"):
+        shader_setup = None
+        if shaders:
+            shader_setup = shadermods.resolve(args.loader, args.minecraft, root / "shadermods", shader_pack,
+                                             shader_mod)
+            if shader_setup is None:
+                result["detail"] = "No shader mod is available for this combination"
+                return result
+            shadermods.install(shader_setup, root / "shadermods", work_dir)
+            result["shader_mod"] = shader_setup["name"]
+            result["shader_pack"] = shader_pack
+            log(f"shader mod: {shader_setup['name']} "
+                f"{[item for item, _ in shader_setup['mods']] or shader_setup['library'].name} + {shader_setup['pack'][0]}")
+
+        host = MockHost()
+        # 通信が途中で止まっても待ち続けないように、ランチャーの通信にタイムアウトを付ける
+        base = ["portablemc", "--timeout", "60", "--main-dir", str(main_dir), "--work-dir", str(work_dir), "--output", "human"]
+        if args.spec:
+            spec = args.spec
+        elif args.loader == "liteloader":
+            spec = install_liteloader(main_dir, args.minecraft, base,
+                                      shader_setup.get("library") if shader_setup else None)
+        elif args.loader == "neoforge" and not args.loader_version.startswith("1.20.1-"):
+            spec = install_neoforge(main_dir, args.minecraft, args.loader_version, base)
+        else:
+            spec = launcher_spec(args.minecraft, args.loader, args.loader_version)
+
+        # 先にクライアントのファイルを揃える (サーバー用の Java もここで手に入る)
+        log(f"installing {spec}")
+        install_command = base
+        if args.loader == "forge" and args.minecraft in FORGE_INSTALL_FIX:
+            # このバージョンの Forge は、ランチャーだけではインストールの後処理が通らない
+            install_command = [sys.executable, str(Path(__file__).with_name("forge_install_fix.py")),
+                               str(find_java(8, main_dir, bundled=False))] + base[1:]
+            if not (main_dir / "versions" / spec.replace(":", "-") / (spec.replace(":", "-") + ".json")).is_file():
+                # 途中で失敗したときの出力が残っていると、やり直しても同じ失敗になる
+                for leftover in (main_dir / "libraries" / "net" / "minecraft" / "client").glob(args.minecraft + "*"):
+                    shutil.rmtree(leftover, ignore_errors=True)
+        failure = ""
+        for attempt in range(3):
+            # ダウンロードの失敗は一時的なことが多いので、何度か試す
+            try:
+                install = subprocess.run(install_command + ["start", "--dry", spec, "-u", PLAYER], capture_output=True, text=True,
+                                         encoding="utf-8", errors="replace", timeout=1500)
+            except subprocess.TimeoutExpired:
+                failure = "timed out"
+                continue
+            if install.returncode == 0:
+                failure = ""
+                break
+            failure = (install.stdout + install.stderr)[-1500:]
+        if failure:
+            result["detail"] = "Launcher install failed: " + failure
+            host.close()
             return result
-        shadermods.install(shader_setup, root / "shadermods", work_dir)
-        result["shader_mod"] = shader_setup["name"]
-        result["shader_pack"] = shader_pack
-        log(f"shader mod: {shader_setup['name']} "
-            f"{[item for item, _ in shader_setup['mods']] or shader_setup['library'].name} + {shader_setup['pack'][0]}")
-
-    host = MockHost()
-    # 通信が途中で止まっても待ち続けないように、ランチャーの通信にタイムアウトを付ける
-    base = ["portablemc", "--timeout", "60", "--main-dir", str(main_dir), "--work-dir", str(work_dir), "--output", "human"]
-    if args.spec:
-        spec = args.spec
-    elif args.loader == "liteloader":
-        spec = install_liteloader(main_dir, args.minecraft, base,
-                                  shader_setup.get("library") if shader_setup else None)
-    elif args.loader == "neoforge" and not args.loader_version.startswith("1.20.1-"):
-        spec = install_neoforge(main_dir, args.minecraft, args.loader_version, base)
-    else:
-        spec = launcher_spec(args.minecraft, args.loader, args.loader_version)
-
-    # 先にクライアントのファイルを揃える (サーバー用の Java もここで手に入る)
-    log(f"installing {spec}")
-    install_command = base
-    if args.loader == "forge" and args.minecraft in FORGE_INSTALL_FIX:
-        # このバージョンの Forge は、ランチャーだけではインストールの後処理が通らない
-        install_command = [sys.executable, str(Path(__file__).with_name("forge_install_fix.py")),
-                           str(find_java(8, main_dir, bundled=False))] + base[1:]
-        if not (main_dir / "versions" / spec.replace(":", "-") / (spec.replace(":", "-") + ".json")).is_file():
-            # 途中で失敗したときの出力が残っていると、やり直しても同じ失敗になる
-            for leftover in (main_dir / "libraries" / "net" / "minecraft" / "client").glob(args.minecraft + "*"):
-                shutil.rmtree(leftover, ignore_errors=True)
-    failure = ""
-    for attempt in range(3):
-        # ダウンロードの失敗は一時的なことが多いので、何度か試す
-        try:
-            install = subprocess.run(install_command + ["start", "--dry", spec, "-u", PLAYER], capture_output=True, text=True,
-                                     encoding="utf-8", errors="replace", timeout=1500)
-        except subprocess.TimeoutExpired:
-            failure = "timed out"
-            continue
-        if install.returncode == 0:
-            failure = ""
-            break
-        failure = (install.stdout + install.stderr)[-1500:]
-    if failure:
-        result["detail"] = "Launcher install failed: " + failure
-        host.close()
-        return result
 
     server = Server(args.minecraft, root, main_dir, args.port)
     client = None
@@ -959,6 +1264,8 @@ def run(args):
         while time.time() < deadline:
             if client.poll() is not None:
                 break
+            if sys.platform == "win32" and int(time.time() - started_at) % 5 == 0:
+                raise_priority(client, server.process)
             if server.joined.is_set() and not joined_handled:
                 joined_handled = True
                 joined_at = time.time()
@@ -967,47 +1274,68 @@ def run(args):
             if (result_dir / "result.txt").is_file() and not captured:
                 captured = True
                 time.sleep(0.5)
-                if not args.baseline and grab_screen(work_dir / "screenshot.png"):
+                if not args.baseline and grab_screen(work_dir / "screenshot.png", client):
                     result["screenshot"] = str(work_dir / "screenshot.png")
             if not args.baseline and current < len(media):
                 entry = media[current]
+                # PDF では、ページ送りの帯が出た状態、2 ページ目に進んだ状態、帯が消えた状態を記録する
+                for key in ("pdf-ui", "pdf-page", "pdf-hidden"):
+                    if key not in entry and (result_dir / f"{key}-{current}.txt").is_file():
+                        shot = work_dir / f"screenshot-{key}-{current}.png"
+                        entry[key] = grab_screen(shot, client)
+                        if key == "pdf-page" and entry[key]:
+                            entry["pdf_page_two"], entry["pdf_detail"] = analyze_page_two(shot)
+                        # 記録し終えたことを Mod に知らせる。Mod はそれを待ってから次の操作に進む
+                        (result_dir / f"{key}-{current}-done.txt").write_text("done\n")
                 if stage == "view" and (result_dir / f"view-{current}.txt").is_file():
                     # 画像の全体が写っている状態
                     shot = work_dir / f"screenshot-{current}.png"
-                    if grab_screen(shot):
-                        entry["visible"], entry["detail"] = analyze_screenshot(shot)
+                    if grab_screen(shot, client):
+                        entry["visible"], entry["detail"] = analyze_screenshot(
+                            shot, bottom=not str(entry["name"]).lower().endswith(".pdf"))
                         if shaders and not entry["visible"]:
                             entry["visible"], entry["detail"] = analyze_screenshot_shaded(shot)
                     stage = "sign"
                 elif stage == "sign" and (result_dir / f"sign-view-{current}.txt").is_file():
                     # 看板の位置を見下ろしている状態
                     shot = work_dir / f"screenshot-sign-{current}.png"
-                    if grab_screen(shot):
+                    if grab_screen(shot, client):
                         entry["sign_hidden"], entry["sign_detail"] = analyze_sign_view(shot)
                     stage = "move"
                 elif stage == "move" and (result_dir / f"move-{current}.txt").is_file():
                     # 次のファイルは、前の看板が見えない場所で確認する
                     # 前の看板が読み込まれている範囲 (描画距離 4 チャンク) の外まで離れる。
                     # 遠くへ飛ばしすぎると、古いバージョンでは移動先の地形がなかなか届かない
-                    server.move_player(112)
+                    # (1.8 では、一方向に 3 回 (336 ブロック) 進むと届かなかった) ので、向きを変えながら
+                    # 最初の場所の近くにとどまる。ただし前に看板を置いた場所には戻らない (4 回で四角形を一周すると、
+                    # 5 つ目の看板を置く場所に最初の看板が残っていて、置けなかった)
+                    server.move_player(*MOVES[current % len(MOVES)])
                     time.sleep(1.0)
                     (result_dir / f"moved-{current}.txt").write_text("done\n")
                     current += 1
                     stage = "view"
             if not args.baseline and item_stage == "request" and (result_dir / "item-request.txt").is_file():
-                # 看板の文字を持たせた看板アイテムを渡す。置いた看板と区別できるように、別の URL にする
-                item_image = next((image for image in images if not is_url(image)), REPO / "tools" / "verify" / "test-image.png")
-                host.files["item.png"] = item_image.read_bytes()
-                url = f"http://127.0.0.1:{host.port}/i/item.png"
-                text = url + "|0|0|0|1|1|0|0|0"
-                server.give_sign_item([text[i:i + 15] for i in range(0, 60, 15)])
+                # 看板の文字を持たせた看板アイテムを、確かめるファイルの種類ごとに 1 つずつ渡す。
+                # 画像・3D モデル・ガウシアンスプラッティング・動画で、アイテムとしての描き方がそれぞれ違うため。
+                # 置いた看板と区別できるように、別の URL にする。アイテムはホットバーの空いた枠に順に入る
+                item_files = [image for image in images if not is_url(image)] or [REPO / "tools" / "verify" / "test-image.png"]
+                url = None
+                for number, item_image in enumerate(item_files):
+                    item_name = f"item{number}{item_image.suffix or '.png'}"
+                    host.files[item_name] = item_image.read_bytes()
+                    url = f"http://127.0.0.1:{host.port}/i/{item_name}"
+                    text = url + "|0|0|0|1|1|0|0|0"
+                    server.give_sign_item([text[i:i + 15] for i in range(0, 60, 15)])
+                    time.sleep(0.5)
+                result["item_media"] = [item_image.name for item_image in item_files]
                 time.sleep(1.0)
+                # Mod には最後に渡したものを知らせる。それが描かれるまで待ってから画面を記録してもらう
                 (result_dir / "item-given.txt").write_text(url)
                 item_stage = "view"
             elif not args.baseline and item_stage == "view" and (result_dir / "item-view.txt").is_file():
                 shot = work_dir / "screenshot-item.png"
-                if grab_screen(shot):
-                    result["item_visible"], result["item_detail"] = analyze_item_view(shot)
+                if grab_screen(shot, client):
+                    result["item_visible"], result["item_detail"] = analyze_item_view(shot, result.get("item_media", ["item"]))
                 item_stage = "done"
             if args.baseline and joined_handled and time.time() - joined_at > (75 if shaders else 25):
                 # 基準の取得では、ワールドに入ってしばらくしたら終了する
@@ -1027,7 +1355,7 @@ def run(args):
 
         if client.poll() is None and sys.platform == "win32":
             # 終了時に出る警告も記録できるよう、まず通常の方法で閉じる
-            close_minecraft_window()
+            close_minecraft_window(client)
             try:
                 client.wait(45)
             except subprocess.TimeoutExpired:
@@ -1046,6 +1374,10 @@ def run(args):
         result["sign_hidden"] = all(entry.get("sign_hidden") for entry in media)
         result["image_detail"] = ", ".join(f"{entry['name']}: {entry.get('detail', 'not captured')}" for entry in media)
         result["sign_detail"] = ", ".join(f"{entry['name']}: {entry.get('sign_detail', 'not captured')}" for entry in media)
+        pdfs = [entry for entry in media if str(entry["name"]).lower().endswith(".pdf")]
+        result["pdf_ok"] = all(entry.get("pdf_page_two") for entry in pdfs)
+        if pdfs:
+            result["pdf_detail"] = ", ".join(f"{entry['name']}: {entry.get('pdf_detail', 'not captured')}" for entry in pdfs)
 
     result_file = result_dir / "result.txt"
     if result_file.is_file():
@@ -1063,6 +1395,7 @@ def run(args):
         client_log_file = find_client_log(work_dir)
         log_text = client_log_file.read_text(encoding="utf-8", errors="replace") if client_log_file.is_file() else ""
         result["shaders_active"] = shadermods.is_active(log_text)
+        result["shaders_fell_back"] = shadermods.fell_back(log_text)
     client_findings = scan_log(find_client_log(work_dir))
     result["client_log"] = str(find_client_log(work_dir))
     client_findings = unique(client_findings) if client_findings is not None else ["(no client log)"]
@@ -1095,6 +1428,7 @@ def run(args):
         result["new_client_findings"] = [line for line in client_findings if is_new(line, baseline["client"])]
         result["new_server_findings"] = [line for line in server_findings if is_new(line, baseline["server"])]
         result["clean"] = (result["ok"] and bool(result.get("image_visible")) and bool(result.get("sign_hidden"))
+                           and bool(result.get("pdf_ok", True))
                            and bool(result.get("item_visible"))
                            and (not shaders or bool(result.get("shaders_active")))
                            and not result["new_client_findings"] and not result["new_server_findings"])

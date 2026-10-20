@@ -73,7 +73,10 @@ def numbers(text):
 
 
 def satisfies(version, spec):
-    """Fabric の書き方 (">=0.6.9" や "0.5.x" など) で指定された条件に合うかどうか。"""
+    """Fabric の書き方 (">=0.6.9" や "0.5.x"、"0.5.9 || 0.5.11" など) で指定された条件に合うかどうか。"""
+    if "||" in spec:
+        # どれか 1 つに合えばよい
+        return any(satisfies(version, alternative) for alternative in spec.split("||"))
     for part in spec.split():
         operator = re.match(r"[<>=~^]*", part).group(0)
         wanted = part[len(operator):]
@@ -140,6 +143,21 @@ def matching_version(project, loader, minecraft, requirements):
     query = urllib.parse.urlencode({"loaders": json.dumps([loader]), "game_versions": json.dumps([minecraft])})
     versions = fetch_json(f"{MODRINTH}/project/{project}/version?{query}")
     matching = [version for version in versions if accepts(numbers(version.get("version_number", "")))]
+    if not matching:
+        # 指定された版が、このバージョンの Minecraft 向けとしては登録されていないことがある
+        # (Sodium 0.5.3 は 1.20.1 向けとしてだけ登録されているが、1.20 用の Iris 1.6.11 はこれを必要とする)。
+        # 同じ大きなバージョン (1.20 なら 1.20.x) 向けの版から探す
+        family = ".".join(minecraft.split(".")[:2])
+        query = urllib.parse.urlencode({"loaders": json.dumps([loader])})
+        everything = fetch_json(f"{MODRINTH}/project/{project}/version?{query}")
+        matching = [version for version in everything if accepts(numbers(version.get("version_number", "")))
+                    and any(game == family or game.startswith(family + ".") for game in version.get("game_versions", []))]
+        # 対象のバージョンに最も近い Minecraft 向けのものを先にする (1.20 なら 1.20.1 向けを 1.20.2 向けより先に)
+        target = numbers(minecraft)
+        matching.sort(key=lambda version: min(
+            (abs((numbers(game) + (0, 0, 0))[2] - (target + (0, 0, 0))[2])
+             for game in version.get("game_versions", []) if game == family or game.startswith(family + ".")),
+            default=99))
     releases = [version for version in matching if version.get("version_type") == "release"]
     return (releases or matching or [None])[0]
 
@@ -155,6 +173,12 @@ def modrinth_files(project, loader, minecraft, seen, cache_dir, version=None):
     # 必要とする Mod の版は、jar の中の指定に合わせる (最新版同士だと合わないことがある)
     download(primary["url"], cache_dir / primary["filename"])
     requirements = declared_requirements(cache_dir / primary["filename"])
+    # fabric.mod.json の depends だけを見る (mods.toml には、必須でない指定や、相性の悪い版の指定も同じ形で並ぶため)
+    game = fabric_requirement(cache_dir / primary["filename"], "minecraft")
+    if game is not None and not game(numbers(minecraft)):
+        # Modrinth ではこのバージョン向けとされていても、jar の中の条件では動かない
+        # (Sodium 0.9.2 は 26.1 向けとしても登録されているが、jar では 26.1.2 だけを指定している)
+        return None
     for dependency in version.get("dependencies", []):
         target = dependency.get("project_id")
         if dependency.get("dependency_type") != "required" or not target or target in seen:
@@ -168,13 +192,83 @@ def modrinth_files(project, loader, minecraft, seen, cache_dir, version=None):
                 # (Oculus 1.19-1.2.5a は 1.19.2 向けの Rubidium 0.6.2b を指定していて、1.19 / 1.19.1 では Mod なしでも落ちる)。
                 # jar の中に版の条件も書かれていなければ、このバージョン向けの最新版を使う
                 chosen = modrinth_version(target, loader, minecraft) or chosen
+            slug = fetch_json(f"{MODRINTH}/project/{target}").get("slug", "")
+            if slug in requirements and not requirements[slug](numbers(chosen.get("version_number", ""))):
+                # Modrinth で指定された版が、jar の中の条件に合わない
+                # (Iris 1.6.11 は Modrinth では Sodium 0.5.7 を指定しているが、jar では 0.5.3 を必要とする)
+                chosen = matching_version(target, loader, minecraft, requirements) or chosen
         else:
             chosen = matching_version(target, loader, minecraft, requirements)
         required = modrinth_files(target, loader, minecraft, seen, cache_dir, chosen)
         if required is None:
             return None
         files += required
+    # Modrinth の情報には書かれていないが、jar (fabric.mod.json) では必須になっている Mod も入れる
+    # (Iris 1.6.14 for 1.20.2 は Modrinth では依存なしだが、Sodium 0.5.5 がないと起動しない)
+    for mod_id in fabric_hard_dependencies(cache_dir / primary["filename"]):
+        if mod_id in seen or mod_id in SYSTEM_MODS:
+            continue
+        try:
+            project = fetch_json(f"{MODRINTH}/project/{mod_id}")
+        except OSError:
+            continue
+        if project.get("id") in seen:
+            continue
+        seen.update({mod_id, project.get("id")})
+        chosen = matching_version(mod_id, loader, minecraft, requirements)
+        if chosen is None:
+            continue
+        required = modrinth_files(mod_id, loader, minecraft, seen, cache_dir, chosen)
+        if required:
+            files += required
     return files
+
+
+def newest_working(project, loader, minecraft, cache_dir, tries=8):
+    """必要な Mod も含めてこのバージョンで動く組み合わせが揃う、最も新しい版のファイル。なければ None。
+
+    最新版が必要とする Mod が、このバージョン向けにはまだないことがある
+    (Iris 1.11.4 は Sodium 0.9 を必要とするが、26.1 / 26.1.1 で動く Sodium は 0.8 まで)。そのときは古い版を試す。
+    """
+    query = urllib.parse.urlencode({"loaders": json.dumps([loader]), "game_versions": json.dumps([minecraft])})
+    versions = fetch_json(f"{MODRINTH}/project/{project}/version?{query}")
+    releases = [version for version in versions if version.get("version_type") == "release"]
+    others = [version for version in versions if version.get("version_type") != "release"]
+    for version in (releases + others)[:tries]:
+        files = modrinth_files(project, loader, minecraft, {project}, cache_dir, version)
+        if files:
+            return files
+    return None
+
+
+# ローダーやゲーム本体など、Mod として入れるものではない ID
+SYSTEM_MODS = {"minecraft", "java", "fabricloader", "fabric", "fabric-api", "fabric-api-base", "quilt_loader"}
+
+
+def fabric_requirement(jar, mod_id):
+    """fabric.mod.json の depends にある、指定した Mod の版の条件を判定する関数。書かれていなければ None。"""
+    try:
+        with zipfile.ZipFile(jar) as archive:
+            if "fabric.mod.json" not in archive.namelist():
+                return None
+            value = json.loads(archive.read("fabric.mod.json").decode("utf-8")).get("depends", {}).get(mod_id)
+    except (OSError, ValueError, zipfile.BadZipFile):
+        return None
+    if value is None:
+        return None
+    specs = [str(item) for item in (value if isinstance(value, list) else [value])]
+    return lambda version: any(satisfies(version, spec) for spec in specs)
+
+
+def fabric_hard_dependencies(jar):
+    """fabric.mod.json の depends に書かれている Mod の ID。"""
+    try:
+        with zipfile.ZipFile(jar) as archive:
+            if "fabric.mod.json" not in archive.namelist():
+                return []
+            return list(json.loads(archive.read("fabric.mod.json").decode("utf-8")).get("depends", {}))
+    except (OSError, ValueError, zipfile.BadZipFile):
+        return []
 
 
 def optifine_file(minecraft):
@@ -209,6 +303,11 @@ def variant(pack_slug=None, shader_mod=None):
     return "-".join(part for part in parts if part)
 
 
+# OptiFine を Mod として読み込まない Forge のバージョン。
+# Forge 1.14.3 (27.0.60) は OptiFine 1.14.3 HD U F2 を「unsupported」として無視し、起動時に警告の画面で止まる
+FORGE_REJECTS_OPTIFINE = {"1.14.3"}
+
+
 def resolve(loader, minecraft, cache_dir, pack_slug=SHADER_PACK, shader_mod=None):
     """影 Mod の構成を返す。この組み合わせで使える影 Mod がなければ None。
 
@@ -221,11 +320,13 @@ def resolve(loader, minecraft, cache_dir, pack_slug=SHADER_PACK, shader_mod=None
         if shader_mod == "optifine" and loader not in ("forge", "liteloader"):
             return None
         if loader in ("fabric", "neoforge"):
-            mods = modrinth_files("iris", loader, minecraft, {"iris"}, cache_dir)
+            mods = newest_working("iris", loader, minecraft, cache_dir)
             name, config = "Iris", "config/iris.properties"
         elif loader == "forge" and version_key(minecraft) >= (1, 16, 5) and shader_mod != "optifine":
             mods = modrinth_files("oculus", loader, minecraft, {"oculus"}, cache_dir)
             name, config = "Oculus", "config/oculus.properties"
+        elif loader == "forge" and minecraft in FORGE_REJECTS_OPTIFINE:
+            return None
         elif loader == "forge":
             optifine = optifine_file(minecraft)
             mods = [optifine] if optifine else None
@@ -273,9 +374,19 @@ def install(setup, cache_dir, work_dir):
         config.write_text(f"enableShaders=true\nshaderPack={pack_name}\n")
 
 
+# 影 Mod がシェーダーパックを読み込めず、通常の描画に戻したことを示すログ。
+# 古い Iris (1.17 / 1.18 向けの 1.1.x) は、新しい BSL を組み立てられずにこうなる
+FALLBACK_PATTERNS = [re.compile(r"falling back to vanilla shaders")]
+
+
+def fell_back(log_text):
+    """影 Mod がシェーダーパックを読み込めずに、通常の描画に戻したかどうか。"""
+    return any(pattern.search(log_text) for pattern in FALLBACK_PATTERNS)
+
+
 def is_active(log_text):
     """ログから、シェーダーが実際に有効になったかどうかを判定する。"""
-    return any(pattern.search(log_text) for pattern in ACTIVE_PATTERNS)
+    return any(pattern.search(log_text) for pattern in ACTIVE_PATTERNS) and not fell_back(log_text)
 
 
 if __name__ == "__main__":
