@@ -1,12 +1,15 @@
 package marumasa.marumasa_sign.core.media;
 
 import marumasa.marumasa_sign.core.image.ImageBytes;
+import marumasa.marumasa_sign.core.net.FilteringProxy;
+import marumasa.marumasa_sign.core.net.UrlPolicy;
 
 import java.awt.image.BufferedImage;
 import java.io.ByteArrayOutputStream;
 import java.io.File;
 import java.io.IOException;
 import java.io.InputStream;
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Locale;
 import java.util.concurrent.TimeUnit;
@@ -44,7 +47,7 @@ public final class MediaTools {
      */
     public static BufferedImage thumbnail(String source) throws IOException {
         if (!Ffmpeg.isAvailable()) return null;
-        final Process process = new ProcessBuilder(Arrays.asList(
+        final ProcessBuilder builder = new ProcessBuilder(new ArrayList<String>(Arrays.asList(
                 Ffmpeg.requireFfmpeg().getPath(),
                 "-hide_banner", "-loglevel", "error", "-nostdin",
                 "-protocol_whitelist", "file," + MediaPlayer.PROTOCOLS,
@@ -55,7 +58,13 @@ public final class MediaTools {
                 // 大きすぎる映像は縮小する
                 "-vf", "scale='min(640,iw)':-2",
                 "-f", "image2pipe", "-c:v", "png", "pipe:1"
-        )).redirectErrorStream(false).start();
+        )));
+        // ほかの再生と同じく通信の行き先を確かめる (ファイルの中から URL を読むこともある)
+        if ((source.startsWith("http://") || source.startsWith("https://")) && !UrlPolicy.isAllowed(source)) {
+            throw new IOException("Blocked URL: " + source);
+        }
+        FilteringProxy.apply(builder, source);
+        final Process process = builder.redirectErrorStream(false).start();
         process.getOutputStream().close();
         MediaPlayer.drain(process.getErrorStream(), null);
 

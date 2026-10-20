@@ -26,6 +26,8 @@ public final class SignPdfCheck {
     private static String text;
 
     public static void main(String[] args) throws Exception {
+        // 手元に立てたサーバーから読む
+        System.setProperty("marumasign.allowLocalUrls", "true");
         final byte[] pdf = Files.readAllBytes(new File(args[0]).toPath());
         final File output = new File(args[1]);
         if (!output.isDirectory() && !output.mkdirs()) throw new IllegalStateException("Cannot create " + output);

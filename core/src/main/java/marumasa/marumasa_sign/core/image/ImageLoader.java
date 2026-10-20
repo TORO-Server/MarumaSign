@@ -243,8 +243,13 @@ public final class ImageLoader {
 
     // URL からダウンロードした内容を 3D モデルとして読み込む
     public static GltfScene model(String url, byte[] content) throws IOException {
+        return model(url, content, 0L);
+    }
+
+    // deadline (System.nanoTime の値。0 なら期限なし) までに、外部ファイルも読み終える
+    public static GltfScene model(String url, byte[] content, long deadline) throws IOException {
         if (StructureLoader.isStructure(content, Math.min(content.length, 512))) return StructureLoader.load(content);
-        return scene(content, new ModelResources(url, content.length));
+        return scene(content, new ModelResources(url, content.length, deadline));
     }
 
     // ファイルを 3D モデルとして読み込む
@@ -281,11 +286,13 @@ public final class ImageLoader {
     // 3D モデルが参照している外部ファイル (バッファや画像) を、モデルの URL からの相対位置で読み込む
     private static final class ModelResources implements GltfLoader.Resources {
         private final URL base;
+        private final long deadline;
         private long total;
 
-        ModelResources(String url, long loaded) throws IOException {
+        ModelResources(String url, long loaded, long deadline) throws IOException {
             this.base = new URL(url);
             this.total = loaded;
+            this.deadline = deadline;
         }
 
         @Override
@@ -298,7 +305,14 @@ public final class ImageLoader {
             // 全体の大きさを、モデル 1 つ分の上限に収める
             final long remaining = MAX_MODEL_SIZE - total;
             if (remaining <= 0) throw new IOException("Content size exceeds the limit of " + MAX_MODEL_SIZE + " bytes.");
-            final byte[] content = Http.download(resolved.toString(), null, (int) remaining);
+            final byte[] content = Http.downloadBefore(resolved.toString(), new Http.ContentCheck() {
+                @Override
+                public int maxBytes(byte[] head, int length, String name) {
+                    return (int) remaining;
+                }
+            }, deadline);
+            // 画像を送り続ける配信などは、ファイルとして読めない
+            if (content == null) throw new IOException("Not a file: " + uri);
             total += content.length;
             return content;
         }

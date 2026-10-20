@@ -130,7 +130,28 @@ final class BlockModels {
         return assets;
     }
 
-    StateModel model(BlockState state) {
+    private StateModel sharedMissing;
+
+    // ブロックではないが、ゲームがブロックの状態のモデルで描くもの (額縁)。状態はこちらで決めるので、そのまま覚えてよい
+    private static final java.util.Set<String> ENTITY_STATES = new java.util.HashSet<String>(
+            java.util.Arrays.asList("minecraft:item_frame", "minecraft:glow_item_frame"));
+
+    StateModel model(BlockState input) {
+        // 表にあるブロックは、性質をそろえた状態で覚える。表にないブロック (別の Mod のものや、壊れた名前) は覚えずに、紫と黒の立方体にする
+        // (状態は構造物のファイルの中身で決まり、そのまま覚えるといくらでも増えうるため)
+        BlockState state = input;
+        try {
+            final BlockData data = BlockData.get();
+            final BlockData.Block block = data.block(input.name);
+            if (block == null && !ENTITY_STATES.contains(input.name)) {
+                if (MISSING.size() < 256) MISSING.add(input.name);
+                if (sharedMissing == null) sharedMissing = missingModel();
+                return sharedMissing;
+            }
+            if (block != null) state = data.complete(block, input);
+        } catch (IOException e) {
+            // 表が読めなければ、そのままの状態で探す
+        }
         StateModel model = states.get(state);
         if (model == null) {
             try {
@@ -169,7 +190,7 @@ final class BlockModels {
     private StateModel build(BlockState state) throws IOException {
         final Map<String, Object> file = blockstateFile(state.name);
         if (file.isEmpty()) {
-            MISSING.add(state.name);
+            if (MISSING.size() < 256) MISSING.add(state.name);
             return missingModel();
         }
         final List<Choice> choices = new ArrayList<Choice>();

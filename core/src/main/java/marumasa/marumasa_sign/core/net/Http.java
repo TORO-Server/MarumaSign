@@ -3,6 +3,7 @@ package marumasa.marumasa_sign.core.net;
 import java.io.ByteArrayOutputStream;
 import java.io.File;
 import java.io.FileInputStream;
+import java.io.FilterInputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
@@ -13,6 +14,11 @@ import java.net.URL;
 import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
 import java.util.Locale;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.ScheduledFuture;
+import java.util.concurrent.ThreadFactory;
+import java.util.concurrent.TimeUnit;
 
 /**
  * 画像のダウンロード・アップロードと URL の短縮。
@@ -157,10 +163,110 @@ public final class Http {
     }
 
     public static byte[] download(String url, ContentCheck check) throws IOException {
-        return download(url, check, MAX_SIZE);
+        return download(url, check, MAX_SIZE, 0L);
+    }
+
+    /**
+     * deadline (System.nanoTime の値) までに読み終わらなければ IOException。
+     */
+    public static byte[] downloadBefore(String url, ContentCheck check, long deadline) throws IOException {
+        return download(url, check, MAX_SIZE, deadline);
     }
 
     private static byte[] download(String url, ContentCheck check, int defaultMaxSize) throws IOException {
+        return download(url, check, defaultMaxSize, 0L);
+    }
+
+    // 応答が返ってくるまで (リダイレクトを含む) の時間の上限
+    private static final long RESPONSE_NANOS = 60L * 1000000000L;
+    // 読み始めてからこの時間が過ぎても、この速さ (バイト/秒) より遅ければ諦める。
+    // 1 バイトずつゆっくり送って、読み込みの枠をいつまでも埋めておくようなサーバーに付き合わないため
+    private static final long SLOW_GRACE_NANOS = 30L * 1000000000L;
+    private static final long MIN_BYTES_PER_SECOND = 16 * 1024;
+
+    // 時間切れの接続を切る
+    private static final ScheduledExecutorService WATCHDOG = Executors.newSingleThreadScheduledExecutor(new ThreadFactory() {
+        @Override
+        public Thread newThread(Runnable r) {
+            final Thread thread = new Thread(r, "MarumaSign-HttpWatchdog");
+            thread.setDaemon(true);
+            return thread;
+        }
+    });
+
+    // 1 回のダウンロードの時間の見張り。期限 (until) を過ぎたら接続を切り、止まっている読み込みを終わらせる
+    private static final class Guard implements Runnable {
+        volatile HttpURLConnection connection;
+        volatile long until;
+        volatile boolean expired;
+
+        @Override
+        public void run() {
+            final HttpURLConnection current = connection;
+            if (current != null && System.nanoTime() - until > 0) {
+                expired = true;
+                current.disconnect();
+            }
+        }
+    }
+
+    // 読んだ量と時間を見て、遅すぎるときや期限を過ぎたときに止める
+    private static final class PacedInputStream extends FilterInputStream {
+        private final long start = System.nanoTime();
+        private final long deadline;
+        private long total;
+
+        PacedInputStream(InputStream input, long deadline) {
+            super(input);
+            this.deadline = deadline;
+        }
+
+        private void count(long read) throws IOException {
+            if (read > 0) total += read;
+            final long now = System.nanoTime();
+            if (deadline != 0 && now - deadline > 0) throw new IOException("Download timed out");
+            final long elapsed = now - start;
+            if (elapsed > SLOW_GRACE_NANOS && total * 1000000000L / elapsed < MIN_BYTES_PER_SECOND) {
+                throw new IOException("Download is too slow");
+            }
+        }
+
+        @Override
+        public int read() throws IOException {
+            final int value = super.read();
+            count(value < 0 ? 0 : 1);
+            return value;
+        }
+
+        @Override
+        public int read(byte[] buffer, int offset, int length) throws IOException {
+            final int read = super.read(buffer, offset, length);
+            count(read);
+            return read;
+        }
+    }
+
+    /**
+     * 手元や家の中のネットワークを指す URL は読まない (UrlPolicy)。リダイレクトの行き先も、つなぐ前に確かめる。
+     */
+    private static byte[] download(String url, ContentCheck check, int defaultMaxSize, long deadline) throws IOException {
+        final Guard guard = new Guard();
+        final long now = System.nanoTime();
+        guard.until = deadline != 0 && deadline - now < RESPONSE_NANOS ? deadline : now + RESPONSE_NANOS;
+        final ScheduledFuture<?> watch = WATCHDOG.scheduleWithFixedDelay(guard, 1, 1, TimeUnit.SECONDS);
+        try {
+            return download(url, check, defaultMaxSize, deadline, guard);
+        } catch (IOException e) {
+            if (guard.expired) throw new IOException("Download timed out", e);
+            throw e;
+        } finally {
+            watch.cancel(false);
+        }
+    }
+
+    private static byte[] download(String url, ContentCheck check, int defaultMaxSize, long deadline, Guard guard) throws IOException {
+        // 看板の URL は誰でも書けるので、手元や家の中のネットワークは読まない (UrlPolicy)
+        if (!UrlPolicy.isAllowed(url)) throw new IOException("Blocked URL: " + url);
         // 前にダウンロードして残しておいたもの (DownloadCache)。あれば、変わったかだけを問い合わせる
         final DownloadCache.Entry cached = DownloadCache.lookup(url);
         String currentUrl = url;
@@ -170,8 +276,10 @@ public final class Http {
         try {
             for (int redirects = 0; ; redirects++) {
                 final int status;
+                if (redirects > 0 && !UrlPolicy.isAllowed(currentUrl)) throw new IOException("Blocked URL: " + currentUrl);
                 try {
                     connection = open(currentUrl);
+                    guard.connection = connection;
                     connection.setReadTimeout(30000);
                     connection.setInstanceFollowRedirects(false);
                     connection.setRequestMethod("GET");
@@ -218,7 +326,10 @@ public final class Http {
                 return null;
             }
             final String resolvedName = resolveName(connection, currentUrl, url);
-            final InputStream input = connection.getInputStream();
+            // 本体を読む間は、期限 (なければ遅すぎないか) だけを見る
+            guard.until = deadline != 0 ? deadline : Long.MAX_VALUE;
+            if (deadline == 0) guard.connection = null;
+            final InputStream input = new PacedInputStream(connection.getInputStream(), deadline);
             final byte[] all;
             try {
                 byte[] head = new byte[0];

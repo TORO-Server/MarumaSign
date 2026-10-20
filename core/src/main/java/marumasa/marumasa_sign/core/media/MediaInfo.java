@@ -1,9 +1,12 @@
 package marumasa.marumasa_sign.core.media;
 
+import marumasa.marumasa_sign.core.net.FilteringProxy;
+
 import java.io.BufferedReader;
 import java.io.IOException;
 import java.io.InputStreamReader;
 import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.concurrent.TimeUnit;
 
@@ -66,7 +69,7 @@ final class MediaInfo {
 
     static MediaInfo probe(String url) throws IOException {
         // 結果を「項目=値」の形式で 1 行ずつ出力させる
-        final Process process = new ProcessBuilder(Arrays.asList(
+        final ProcessBuilder builder = new ProcessBuilder(new ArrayList<String>(Arrays.asList(
                 Ffmpeg.requireFfprobe().getPath(),
                 "-v", "error",
                 "-protocol_whitelist", MediaPlayer.PROTOCOLS,
@@ -74,7 +77,9 @@ final class MediaInfo {
                 "-show_entries", "stream=codec_type,width,height,avg_frame_rate,r_frame_rate,nb_frames:format=duration,format_name",
                 "-of", "default=noprint_wrappers=1",
                 url
-        )).redirectErrorStream(false).start();
+        )));
+        FilteringProxy.apply(builder, url);
+        final Process process = builder.redirectErrorStream(false).start();
         process.getOutputStream().close();
         MediaPlayer.drain(process.getErrorStream(), null);
 

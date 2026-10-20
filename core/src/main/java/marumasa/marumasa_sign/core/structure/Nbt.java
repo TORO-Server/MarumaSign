@@ -34,6 +34,8 @@ public final class Nbt {
 
     // 入れ子の深さの上限 (Minecraft と同じ)
     private static final int MAX_DEPTH = 512;
+    // 値の数の上限。リストや複合タグの要素はそれぞれ Java のオブジェクトになるので、数が多すぎるとメモリを使い切る
+    static final int MAX_VALUES = 6 * 1024 * 1024;
 
     // 読み込んだ NBT の一番外側
     public static final class Root {
@@ -49,6 +51,7 @@ public final class Nbt {
     private final byte[] data;
     private final boolean little;
     private int pos;
+    private int values;
 
     private Nbt(byte[] data, boolean little) {
         this.data = data;
@@ -203,6 +206,7 @@ public final class Nbt {
     }
 
     private Object value(int type, int depth) throws IOException {
+        if (++values > MAX_VALUES) throw new IOException("NBT has too many values");
         switch (type) {
             case BYTE:
                 return (byte) u8();

@@ -16,6 +16,8 @@ final class FakePlatform implements Platform {
     int[] pixels;
     int width, height;
     int textureCount;
+    // 作成して、まだ解放されていないテクスチャの大きさの合計 (バイト)
+    long liveBytes;
 
     // 作成したテクスチャの内容
     public static final class Texture {
@@ -88,6 +90,7 @@ final class FakePlatform implements Platform {
         this.width = width;
         this.height = height;
         textureCount++;
+        liveBytes += 4L * width * height;
         return new Texture(width, height, this.pixels);
     }
 
@@ -102,6 +105,8 @@ final class FakePlatform implements Platform {
 
     @Override
     public void releaseTexture(Object texture) {
+        final Texture released = (Texture) texture;
+        liveBytes -= 4L * released.width * released.height;
     }
 
     @Override

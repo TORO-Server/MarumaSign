@@ -37,7 +37,6 @@ public final class GameAssets {
 
     private final ZipFile zip;
     private final Map<String, byte[]> cache = new ConcurrentHashMap<String, byte[]>();
-    private static final byte[] MISSING = new byte[0];
 
     private GameAssets(ZipFile zip) {
         this.zip = zip;
@@ -261,12 +260,10 @@ public final class GameAssets {
     // jar の中のファイルを読む (assets/minecraft/... など)。なければ null
     public byte[] read(String path) throws IOException {
         final byte[] cached = cache.get(path);
-        if (cached != null) return cached == MISSING ? null : cached;
+        if (cached != null) return cached;
+        // ないものは覚えない (名前は構造物のファイルの中身で決まることがあり、いくらでも増えうる)
         final ZipEntry entry = zip.getEntry(path);
-        if (entry == null) {
-            cache.put(path, MISSING);
-            return null;
-        }
+        if (entry == null) return null;
         final InputStream input = zip.getInputStream(entry);
         final byte[] bytes;
         try {
@@ -278,7 +275,8 @@ public final class GameAssets {
         } finally {
             input.close();
         }
-        cache.put(path, bytes);
+        // 画像は読み込んだ側 (Sprite) が覚えるので、ここでは覚えない
+        if (!path.endsWith(".png")) cache.put(path, bytes);
         return bytes;
     }
 

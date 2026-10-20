@@ -108,6 +108,21 @@ tasks.register('downloadCacheCheck', JavaExec) {
     javaLauncher = javaToolchains.launcherFor(java.toolchain)
 }
 
+// 看板の URL で、見た人のパソコンの中や家の中のネットワークにアクセスさせられないことを確かめる
+tasks.register('securityCheck', JavaExec) {
+    classpath = sourceSets.test.runtimeClasspath
+    mainClass = 'marumasa.marumasa_sign.core.net.SecurityCheck'
+    javaLauncher = javaToolchains.launcherFor(java.toolchain)
+}
+
+// 違う URL の看板や動画をたくさん並べられても、メモリと再生の数が上限を超えないことを確かめる
+tasks.register('signLimitsCheck', JavaExec) {
+    classpath = sourceSets.test.runtimeClasspath
+    mainClass = 'marumasa.marumasa_sign.core.SignLimitsCheck'
+    javaLauncher = javaToolchains.launcherFor(java.toolchain)
+    maxHeapSize = '3g'
+}
+
 // 看板に表示するファイルの、ダウンロードと読み込みの時間を測る。引数は -PloadBenchArgs="回数 ファイル..." で渡す
 tasks.register('loadBenchmark', JavaExec) {
     classpath = sourceSets.test.runtimeClasspath
@@ -125,6 +140,29 @@ tasks.register('structureCheck', JavaExec) {
     javaLauncher = javaToolchains.launcherFor(java.toolchain)
     maxHeapSize = '4g'
     args = providers.gradleProperty('structureArgs').getOrElse('').tokenize(' ')
+    if (providers.gradleProperty('assetJar').isPresent()) systemProperty 'marumasign.assetJar', providers.gradleProperty('assetJar').get()
+    systemProperty 'marumasign.gameDir', layout.buildDirectory.dir('structure-game').get().asFile.path
+}
+
+// 壊した構造物のファイルを読ませて、想定外の例外や長い時間にならないかを確かめる。
+// 引数は -PfuzzArgs="回数 ファイルまたはフォルダ..." で渡す。-PfuzzMesh を付けると、3D モデルにするところまで確かめる
+tasks.register('structureFuzz', JavaExec) {
+    classpath = sourceSets.test.runtimeClasspath
+    mainClass = 'marumasa.marumasa_sign.core.structure.StructureFuzz'
+    javaLauncher = javaToolchains.launcherFor(java.toolchain)
+    maxHeapSize = '4g'
+    args = providers.gradleProperty('fuzzArgs').getOrElse('').tokenize(' ')
+    if (providers.gradleProperty('fuzzMesh').isPresent()) systemProperty 'fuzz.mesh', 'true'
+    if (providers.gradleProperty('assetJar').isPresent()) systemProperty 'marumasign.assetJar', providers.gradleProperty('assetJar').get()
+    systemProperty 'marumasign.gameDir', layout.buildDirectory.dir('structure-game').get().asFile.path
+}
+
+// 構造物の中にある MarumaSign の看板を、悪用を含めて確かめる。-PassetJar は structureCheck と同じ
+tasks.register('nestedSignCheck', JavaExec) {
+    classpath = sourceSets.test.runtimeClasspath
+    mainClass = 'marumasa.marumasa_sign.core.structure.NestedSignCheck'
+    javaLauncher = javaToolchains.launcherFor(java.toolchain)
+    maxHeapSize = '4g'
     if (providers.gradleProperty('assetJar').isPresent()) systemProperty 'marumasign.assetJar', providers.gradleProperty('assetJar').get()
     systemProperty 'marumasign.gameDir', layout.buildDirectory.dir('structure-game').get().asFile.path
 }

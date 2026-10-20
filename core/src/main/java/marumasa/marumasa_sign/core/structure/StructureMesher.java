@@ -45,7 +45,15 @@ final class StructureMesher {
             return index;
         }
 
+        // 集める四角形の数の上限。超えたら、それ以上は捨てて overflow にする (読み込み側で粗くしてやり直す)
+        static final int HARD_LIMIT = StructureLoader.MAX_QUADS * 4;
+        boolean overflow;
+
         void add(int layer, float[] position, float[] uv, int[] color, Sprite sprite) {
+            if (quadCount >= HARD_LIMIT) {
+                overflow = true;
+                return;
+            }
             positions[layer].addAll(position, 12);
             uvs[layer].addAll(uv, 8);
             colors[layer].addAll(color, 4);
@@ -206,16 +214,20 @@ final class StructureMesher {
     // ---------- 全体 ----------
 
     void build() {
+        special.startPass();
         for (int y = 0; y < structure.sizeY; y++) {
             for (int z = 0; z < structure.sizeZ; z++) {
                 for (int x = 0; x < structure.sizeX; x++) {
+                    // 多すぎる面は集めない (読み込み側で粗くしてやり直す)
+                    if (output.overflow) return;
                     final int index = structure.index(x, y, z);
                     final int id = structure.id(index);
                     if (id == 0) continue;
                     if (fluid[id] != 0) fluid(x, y, z, id);
-                    if (specialBlock[id]) special.emit(this, structure.state(id), structure.blockEntity(index), x, y, z);
+                    boolean hidden = false;
+                    if (specialBlock[id]) hidden = special.emit(this, structure.state(id), structure.blockEntity(index), x, y, z);
                     final BlockModels.StateModel model = stateModels[id];
-                    if (model != null) block(x, y, z, id, model);
+                    if (model != null && !hidden) block(x, y, z, id, model);
                 }
             }
         }
@@ -786,6 +798,11 @@ final class StructureMesher {
         }
         final int c = scale(quadColor, brightnessValue);
         output.add(layer, positions, uvs, new int[]{c, c, c, c}, sprite);
+    }
+
+    // 頂点ごとの色を決めてある四角形を書き出す (看板の 3D モデルなど)
+    void addColoredQuad(int layer, float[] positions, float[] uvs, int[] colors, Sprite sprite) {
+        output.add(layer, positions, uvs, colors, sprite);
     }
 
     // ---------- 増える配列 ----------

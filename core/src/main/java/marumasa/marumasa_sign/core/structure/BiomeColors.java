@@ -67,7 +67,11 @@ final class BiomeColors {
         Colors colors = cache.get(key);
         if (colors == null) {
             colors = load(key);
-            if (colors == null) colors = key.equals(DEFAULT_BIOME) ? new Colors(0xFF91BD59, 0xFF77AB2F, 0xFF8D6B4B, DEFAULT_WATER) : colors(DEFAULT_BIOME);
+            if (colors == null) {
+                // 知らないバイオームは覚えない (名前は構造物のファイルの中身で決まる)
+                if (!key.equals(DEFAULT_BIOME)) return colors(DEFAULT_BIOME);
+                colors = new Colors(0xFF91BD59, 0xFF77AB2F, 0xFF8D6B4B, DEFAULT_WATER);
+            }
             cache.put(key, colors);
         }
         return colors;

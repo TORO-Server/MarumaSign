@@ -26,6 +26,10 @@ final class SignTexts {
 
     // 絵の大きさ (文字の座標で、看板の中心からの範囲) と、文字の座標 1 あたりのピクセル数
     static final int HALF_WIDTH = 50, HALF_HEIGHT = 26, SCALE = 2;
+    // 文字ディスプレイの幅 (文字の座標) と行の数の上限
+    static final int MAX_BLOCK_WIDTH = 512, MAX_BLOCK_LINES = 48;
+    // 1 つの文字のデータから読む文字の数の上限
+    static final int MAX_TEXT = 2048;
 
     // ChatFormatting の色 (§0 - §f と同じ順)
     private static final String[] COLOR_NAMES = {"black", "dark_blue", "dark_green", "dark_aqua", "dark_red", "dark_purple", "gold", "gray",
@@ -71,7 +75,7 @@ final class SignTexts {
     private static final Map<Integer, Glyph> BITMAP = new ConcurrentHashMap<Integer, Glyph>();
     private static volatile boolean bitmapLoaded;
     private static volatile Map<Integer, String> unifont;
-    private static final Map<String, Sprite> CACHE = new ConcurrentHashMap<String, Sprite>();
+    private static final BoundedCache<String, Sprite> CACHE = new BoundedCache<String, Sprite>(256);
 
     private final GameAssets assets;
 
@@ -365,7 +369,9 @@ final class SignTexts {
      * @return {絵, 幅, 高さ} (幅と高さは文字の座標。背景の分の 1 を含む)
      */
     Object[] renderBlock(List<Run> runs, int lineWidth, String alignment, int background, int opacity) {
-        final List<List<Run>> lines = wrap(runs, Math.max(1, lineWidth));
+        // 絵が大きくなりすぎないように、幅と行の数に上限を設ける (データは構造物のファイルの中身で決まる)
+        List<List<Run>> lines = wrap(runs, Math.max(1, Math.min(MAX_BLOCK_WIDTH, lineWidth)));
+        if (lines.size() > MAX_BLOCK_LINES) lines = lines.subList(0, MAX_BLOCK_LINES);
         int textWidth = 0;
         for (List<Run> line : lines) textWidth = Math.max(textWidth, (int) width(line));
         final int lineHeight = 10;
@@ -503,6 +509,10 @@ final class SignTexts {
 
     // § の書式記号を読みながら加える
     private static void addLegacy(String text, Integer color, boolean bold, List<Run> runs) {
+        int total = 0;
+        for (Run run : runs) total += run.text.length();
+        if (total >= MAX_TEXT) return;
+        if (text.length() > MAX_TEXT - total) text = text.substring(0, MAX_TEXT - total);
         Integer current = color;
         boolean currentBold = bold;
         final StringBuilder builder = new StringBuilder();

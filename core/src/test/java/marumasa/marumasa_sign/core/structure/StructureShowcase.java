@@ -36,7 +36,7 @@ public final class StructureShowcase {
     // 置く位置の z をずらす量 (壁を手前の看板の正面から見えるように、奥に置くため)
     private int zShift;
 
-    private void put(int x, int y, int z, String state, Map<String, Object> nbt) {
+    void put(int x, int y, int z, String state, Map<String, Object> nbt) {
         z += zShift;
         final BlockState parsed = BlockState.parse(state);
         final String key = parsed.toString();
@@ -67,7 +67,7 @@ public final class StructureShowcase {
         maxZ = Math.max(maxZ, z);
     }
 
-    private void put(int x, int y, int z, String state) {
+    void put(int x, int y, int z, String state) {
         put(x, y, z, state, null);
     }
 
@@ -96,13 +96,13 @@ public final class StructureShowcase {
         return s;
     }
 
-    private static Map<String, Object> map(Object... pairs) {
+    static Map<String, Object> map(Object... pairs) {
         final Map<String, Object> result = new LinkedHashMap<String, Object>();
         for (int i = 0; i < pairs.length; i += 2) result.put((String) pairs[i], pairs[i + 1]);
         return result;
     }
 
-    private static List<Object> list(Object... items) {
+    static List<Object> list(Object... items) {
         final List<Object> result = new ArrayList<Object>();
         java.util.Collections.addAll(result, items);
         return result;
@@ -173,12 +173,12 @@ public final class StructureShowcase {
         return s;
     }
 
-    private void entity(double x, double y, double z, Map<String, Object> nbt) {
+    void entity(double x, double y, double z, Map<String, Object> nbt) {
         z += zShift;
         entities.add(map("pos", list(x, y, z), "blockPos", list((int) Math.floor(x), (int) Math.floor(y), (int) Math.floor(z)), "nbt", nbt));
     }
 
-    private static Map<String, Object> item(String id) {
+    static Map<String, Object> item(String id) {
         return map("id", id, "count", 1);
     }
 
@@ -213,6 +213,17 @@ public final class StructureShowcase {
     }
 
     private void write(File file) throws IOException {
+        final FileOutputStream output = new FileOutputStream(file);
+        try {
+            output.write(bytes());
+        } finally {
+            output.close();
+        }
+        System.out.println(file + ": " + blocks.size() + " blocks, " + palette.size() + " states");
+    }
+
+    // 構造物のファイル (gzip で圧縮した .nbt) の中身
+    byte[] bytes() throws IOException {
         final Map<String, Object> root = new LinkedHashMap<String, Object>();
         root.put("DataVersion", 5023);
         root.put("size", list(maxX + 1, maxY + 1, maxZ + 1));
@@ -225,10 +236,11 @@ public final class StructureShowcase {
         out.writeUTF("");
         writeCompound(out, root);
         out.close();
-        final GZIPOutputStream gzip = new GZIPOutputStream(new FileOutputStream(file));
+        final ByteArrayOutputStream compressed = new ByteArrayOutputStream();
+        final GZIPOutputStream gzip = new GZIPOutputStream(compressed);
         gzip.write(bytes.toByteArray());
         gzip.close();
-        System.out.println(file + ": " + blocks.size() + " blocks, " + palette.size() + " states");
+        return compressed.toByteArray();
     }
 
     @SuppressWarnings("unchecked")

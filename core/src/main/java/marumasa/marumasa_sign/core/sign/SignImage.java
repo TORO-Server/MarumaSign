@@ -80,11 +80,46 @@ public final class SignImage {
 
     // PDF のページ送りの操作。なければ null
     private final PdfControls controls;
+    // 最後に看板として引かれた時刻 (System.currentTimeMillis)。SignManager が、使われていないものを消すのに使う
+    volatile long lastUsed = System.currentTimeMillis();
 
     SignImage(SignSpec spec, TextureEntry texture, PdfControls controls) {
         this.spec = spec;
         this.texture = texture;
         this.controls = controls;
+    }
+
+    // ---------- 構造物の中の MarumaSign の看板 (描画しない、形だけの計算) ----------
+
+    /**
+     * 画像の看板の頂点 (mesh() と同じ形)。
+     *
+     * @param signYaw 看板の向き (度)。立て看板は rotation * 22.5、壁掛け看板は向いている方角の角度
+     */
+    public static float[] detachedImageMesh(SignSpec spec, int width, int height, float signYaw, boolean wall) {
+        final TextureEntry entry = new TextureEntry(TextureEntry.LOADED, width, height, null);
+        return new SignImage(spec, entry, null).mesh(signYaw, wall);
+    }
+
+    // アイテムとしての画像の四角形 (itemBatches() と同じ形。x, y, z, u, v が 8 頂点)
+    public static float[] detachedItemImage(int width, int height) {
+        final TextureEntry entry = new TextureEntry(TextureEntry.LOADED, width, height, null);
+        return new SignImage(new SignSpec("", 0, 0, 0, 1, 1, 0, 0, 0), entry, null).itemBatches(0)[0].vertices.clone();
+    }
+
+    /**
+     * 3D モデルの看板で、モデルの座標からブロックの角を原点とした座標への変換 (列優先の 4x4)。
+     *
+     * @param item アイテムとして描くとき true (signYaw と wall は使わない)
+     */
+    public static float[] detachedModelPlacement(SignSpec spec, GltfScene scene, float signYaw, boolean wall, boolean item) {
+        final TextureEntry entry = new TextureEntry(TextureEntry.LOADED, 1, 1, null);
+        entry.setModel(scene, new Object[scene.model().textureCount()]);
+        final SignImage image = new SignImage(spec, entry, null);
+        image.ensureBuilt();
+        final float[] placement = new float[16];
+        image.computePlacement(item ? ITEM : meshIndex(signYaw, wall), signYaw, wall, placement);
+        return placement;
     }
 
     public TextureEntry textureEntry() {
