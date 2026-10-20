@@ -6,6 +6,7 @@ import marumasa.marumasa_sign.core.gltf.draco.DracoMesh;
 import marumasa.marumasa_sign.core.gltf.draco.IntList;
 import marumasa.marumasa_sign.core.gltf.draco.PointAttribute;
 import marumasa.marumasa_sign.core.gltf.meshopt.MeshoptDecoder;
+import marumasa.marumasa_sign.core.image.ArgbPixels;
 import marumasa.marumasa_sign.core.texture.TextureDecoder;
 import marumasa.marumasa_sign.core.util.Json;
 
@@ -138,6 +139,8 @@ public final class GltfLoader {
         TexRef mapping;
         int width, height;
         int[] pixels;
+        // pixels を作る処理。まだ作っていなければ null でない
+        Runnable pending;
         final List<GltfModel.Primitive> primitives = new ArrayList<GltfModel.Primitive>();
         // 細かい表現をテクスチャに焼き込むための情報。焼き込む必要がなければ null
         GltfBaker.Input bake;
@@ -258,6 +261,7 @@ public final class GltfLoader {
                     // 陰影まで計算したテクスチャになったので、描画のときは陰影を付けない
                     GltfBaker.apply(surfaces, baked.layers);
                     draft.pixels = baked.pixels;
+                    draft.pending = null;
                     draft.width = width * baked.layers;
                     draft.height = height;
                     draft.material.unlit = true;
@@ -619,7 +623,7 @@ public final class GltfLoader {
                 }
                 decoded = scaled;
             }
-            images[index] = new Pixels(width, height, decoded.getRGB(0, 0, width, height, null, 0, width));
+            images[index] = new Pixels(width, height, ArgbPixels.read(decoded));
         } catch (Exception e) {
             // 画像が読めなくても、形だけは表示する
             images[index] = null;
@@ -929,48 +933,61 @@ public final class GltfLoader {
         final boolean constantGlow = glows && emissiveRef == null;
 
         final int width = size.width, height = size.height;
-        final int[] pixels = new int[width * height];
-        for (int y = 0; y < height; y++) {
-            for (int x = 0; x < width; x++) {
-                final int source = baseImage != null ? baseImage.argb[y * width + x] : 0xFFFFFFFF;
-                float r = ((source >> 16) & 0xFF) / 255f * base[0];
-                float g = ((source >> 8) & 0xFF) / 255f * base[1];
-                float b = (source & 0xFF) / 255f * base[2];
-                float a = ((source >>> 24) & 0xFF) / 255f * base[3];
-
-                if (occlusionMap != null) {
-                    final int sample = sample(occlusionMap, x, y, width, height);
-                    final float occlusion = 1 + occlusionStrength * (((sample >> 16) & 0xFF) / 255f - 1);
-                    final float shade = gamma(occlusion);
-                    r *= shade;
-                    g *= shade;
-                    b *= shade;
-                }
-                if (emissiveMap != null) {
-                    final int sample = sample(emissiveMap, x, y, width, height);
-                    r += ((sample >> 16) & 0xFF) / 255f * emissive[0];
-                    g += ((sample >> 8) & 0xFF) / 255f * emissive[1];
-                    b += (sample & 0xFF) / 255f * emissive[2];
-                } else if (constantGlow) {
-                    r += emissive[0];
-                    g += emissive[1];
-                    b += emissive[2];
-                }
-
-                if (transmissionFactor > 0) a = GltfLight.transmittedAlpha(a, transmissionFactor);
-                r *= volumeTint[0];
-                g *= volumeTint[1];
-                b *= volumeTint[2];
-                if (material.alphaMode == GltfModel.ALPHA_OPAQUE) a = 1;
-                else if (material.alphaMode == GltfModel.ALPHA_MASK) a = a >= alphaCutoff ? 1 : 0;
-
-                pixels[y * width + x] = (channel(a) << 24) | (channel(r) << 16) | (channel(g) << 8) | channel(b);
-            }
-        }
         draft.mapping = mapping;
         draft.width = width;
         draft.height = height;
-        draft.pixels = pixels;
+        // 色のテクスチャは、焼き込む材質では焼き込んだものに置き換わり、どの面も使わない材質では要らないので、使うときに作る
+        final int blending = material.alphaMode;
+        draft.pending = new Runnable() {
+            @Override
+            public void run() {
+                final int[] pixels = new int[width * height];
+                // 遮蔽による暗さは、遮蔽のテクスチャの値 (0 - 255) だけで決まるので、先にすべて求めておく (点ごとに累乗を計算しない)
+                final float[] occlusionShade = new float[256];
+                if (occlusionMap != null) {
+                    for (int value = 0; value < 256; value++) {
+                        occlusionShade[value] = gamma(1 + occlusionStrength * (value / 255f - 1));
+                    }
+                }
+                for (int y = 0; y < height; y++) {
+                    for (int x = 0; x < width; x++) {
+                        final int source = baseImage != null ? baseImage.argb[y * width + x] : 0xFFFFFFFF;
+                        float r = ((source >> 16) & 0xFF) / 255f * base[0];
+                        float g = ((source >> 8) & 0xFF) / 255f * base[1];
+                        float b = (source & 0xFF) / 255f * base[2];
+                        float a = ((source >>> 24) & 0xFF) / 255f * base[3];
+
+                        if (occlusionMap != null) {
+                            final int sample = sample(occlusionMap, x, y, width, height);
+                            final float shade = occlusionShade[(sample >> 16) & 0xFF];
+                            r *= shade;
+                            g *= shade;
+                            b *= shade;
+                        }
+                        if (emissiveMap != null) {
+                            final int sample = sample(emissiveMap, x, y, width, height);
+                            r += ((sample >> 16) & 0xFF) / 255f * emissive[0];
+                            g += ((sample >> 8) & 0xFF) / 255f * emissive[1];
+                            b += (sample & 0xFF) / 255f * emissive[2];
+                        } else if (constantGlow) {
+                            r += emissive[0];
+                            g += emissive[1];
+                            b += emissive[2];
+                        }
+
+                        if (transmissionFactor > 0) a = GltfLight.transmittedAlpha(a, transmissionFactor);
+                        r *= volumeTint[0];
+                        g *= volumeTint[1];
+                        b *= volumeTint[2];
+                        if (blending == GltfModel.ALPHA_OPAQUE) a = 1;
+                        else if (blending == GltfModel.ALPHA_MASK) a = a >= alphaCutoff ? 1 : 0;
+
+                        pixels[y * width + x] = (channel(a) << 24) | (channel(r) << 16) | (channel(g) << 8) | channel(b);
+                    }
+                }
+                draft.pixels = pixels;
+            }
+        };
 
         // ピクセル単位の計算が必要な表現があれば、あとで陰影ごとテクスチャに焼き込む
         final boolean detailed = normalImage != null || roughnessImage != null || emissiveImage != null
@@ -1122,6 +1139,10 @@ public final class GltfLoader {
 
     // 繰り返しの指定に合わせて画像を並べたテクスチャを作る。tilesU, tilesV は fit で求めたもの
     private static GltfModel.Texture tile(Draft draft, int[] tilesU, int[] tilesV) {
+        if (draft.pending != null) {
+            draft.pending.run();
+            draft.pending = null;
+        }
         if (tilesU[0] == 1 && tilesV[0] == 1) return new GltfModel.Texture(draft.width, draft.height, draft.pixels);
 
         final int width = draft.width * tilesU[0], height = draft.height * tilesV[0];

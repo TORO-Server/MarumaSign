@@ -15,7 +15,6 @@ import marumasa.marumasa_sign.core.pdf.PdfFile;
 
 import javax.imageio.ImageIO;
 import java.awt.image.BufferedImage;
-import java.io.ByteArrayInputStream;
 import java.io.File;
 import java.io.IOException;
 import java.io.InputStream;
@@ -92,30 +91,53 @@ public final class ImageLoader {
         }
     });
 
+    // 同時ロード数の上限。最初に pump が呼ばれるまでは 0 (読み込みを始めない)
+    private volatile int maxThreads;
+
     public void request(String url, Callback callback) {
         queue.add(new Request(url, callback));
+        // 次の tick を待たずに始める
+        final int limit = maxThreads;
+        if (limit > 0) pump(limit);
     }
 
     public boolean isBusy() {
         return !queue.isEmpty() || activeDownloads.get() > 0;
     }
 
-    // 同時ロード数の上限まで、待っている画像の読み込みを始める
+    // 同時ロード数の上限まで、待っている画像の読み込みを始める。どのスレッドから呼んでもよい
     public void pump(int maxThreads) {
-        while (activeDownloads.get() < maxThreads) {
+        this.maxThreads = maxThreads;
+        while (!queue.isEmpty() && reserve(maxThreads)) {
             final Request request = queue.poll();
-            if (request == null) break;
-            activeDownloads.incrementAndGet();
+            if (request == null) {
+                activeDownloads.decrementAndGet();
+                break;
+            }
             executor.submit(new Runnable() {
                 @Override
                 public void run() {
                     try {
-                        load(request);
+                        // 読み終えたら、待っている次の読み込みを続けて始める (次の tick を待たない)
+                        Request current = request;
+                        while (current != null) {
+                            load(current);
+                            current = activeDownloads.get() <= ImageLoader.this.maxThreads ? queue.poll() : null;
+                        }
                     } finally {
                         activeDownloads.decrementAndGet();
                     }
                 }
             });
+        }
+    }
+
+    // 同時ロード数の枠を 1 つ取る。上限に達していれば false
+    private boolean reserve(int limit) {
+        while (true) {
+            final int active = activeDownloads.get();
+            if (active >= limit) return false;
+            if (activeDownloads.compareAndSet(active, active + 1)) return true;
         }
     }
 
@@ -303,7 +325,7 @@ public final class ImageLoader {
     private static DecodedImage decodeStatic(byte[] content) throws IOException {
         final BufferedImage image;
         try {
-            image = ImageIO.read(new ByteArrayInputStream(content));
+            image = ImageBytes.read(content);
         } catch (RuntimeException e) {
             throw new IOException("Not an image", e);
         }
@@ -317,8 +339,7 @@ public final class ImageLoader {
         if (width <= 0 || height <= 0 || width > MAX_STATIC_SIZE || height > MAX_STATIC_SIZE) {
             throw new IOException("Image exceeds safety limits (max " + MAX_STATIC_SIZE + "x" + MAX_STATIC_SIZE + ")");
         }
-        final int[] pixels = image.getRGB(0, 0, width, height, null, 0, width);
-        return new DecodedImage(width, height, new int[][]{pixels}, new int[]{1}, 0);
+        return new DecodedImage(width, height, new int[][]{ArgbPixels.read(image)}, new int[]{1}, 0);
     }
 
     // jar に同梱されている画像を読み込む

@@ -3,6 +3,7 @@ package marumasa.marumasa_sign.core;
 import marumasa.marumasa_sign.core.sign.PdfControls;
 import marumasa.marumasa_sign.core.sign.SignImage;
 import marumasa.marumasa_sign.core.sign.SignSpec;
+import marumasa.marumasa_sign.core.sign.TextureEntry;
 import marumasa.marumasa_sign.core.ui.Key;
 import marumasa.marumasa_sign.core.ui.UiRoot;
 
@@ -47,6 +48,10 @@ final class SelfTest {
 
     // 1 つの手順にかけられる時間の上限 (tick)
     private static final int STEP_TIMEOUT = 20 * 120;
+
+    // 看板が初めて描かれようとしてから表示されるまでの時間の上限 (ミリ秒)。
+    // 確認に使うファイルは小さく、手元のサーバーから読むので、これより遅ければ読み込みの処理に問題がある
+    private static final long LOAD_LIMIT = Long.getLong("marumasign.selftest.loadLimit", 15000L);
 
     private final Platform platform;
     private final File directory;
@@ -134,7 +139,8 @@ final class SelfTest {
         }
         try {
             run();
-        } catch (RuntimeException e) {
+        } catch (RuntimeException | LinkageError e) {
+            // LinkageError: このバージョンの Minecraft にないメソッドやクラスを呼んだ。ゲームを落とさずに結果として残す
             MarumaSign.LOGGER.error("Self test failed", e);
             finish(false, "Exception at step " + STEP_NAMES[step] + ": " + e);
         }
@@ -214,7 +220,11 @@ final class SelfTest {
                 // 画像の全体が見えるように正面を向く。
                 // サーバーからの位置の補正で向きが戻されることがあるので、毎 tick 向き直す
                 platform.selfTestLook(0f);
-                if (drawnCount > 0 && ticksInStep > 40) next(LOOK_AT_SIGN);
+                if (loadFailed(expectedUrl, new File(images[index]).getName())) return;
+                if (drawnCount > 0 && ticksInStep > 40) {
+                    if (!loadedInTime(expectedUrl, new File(images[index]).getName())) return;
+                    next(LOOK_AT_SIGN);
+                }
                 break;
 
             case LOOK_AT_SIGN:
@@ -226,10 +236,16 @@ final class SelfTest {
                 if (ticksInStep >= 60 && ticksInStep < 140) platform.selfTestLook(50f);
                 if (ticksInStep == 90) writeFile("sign-view-" + index + ".txt", "ready\n");
                 if (ticksInStep >= 140 && ticksInStep < 150) platform.selfTestLook(0f);
-                // 動画や音声の看板では、真上を向いて看板が視界から外れても、音が大きくならないことを確かめる
+                // 動画や音声の看板では、真上を向いて看板が視界から外れても、音が大きくならないことを確かめる。
+                // 確認では音量を 0 にして音を出さないので、設定の音量を 100 としたときの大きさ (距離による変化) で比べる
                 final SignImage image = drawnImage;
-                final float gain = image == null ? -1f : image.textureEntry().mediaGain();
+                final float gain = image == null ? -1f : image.textureEntry().mediaFalloff();
                 if (ticksInStep == 150 && gain >= 0) {
+                    // 看板のすぐ前にいるので、聞こえるはず。0 なら、看板までの距離が求められていない
+                    if (gain <= 0f) {
+                        finish(false, summary + ", " + new File(images[index]).getName() + " is silent even when facing the sign");
+                        return;
+                    }
                     facingGain = gain;
                     facingDrawn = drawnCount;
                 }
@@ -238,7 +254,7 @@ final class SelfTest {
                 if (checkGain && ticksInStep >= 190) platform.selfTestLook(0f);
                 if (checkGain && ticksInStep == 190) {
                     if (summary.length() > 0) summary.append(", ");
-                    summary.append(String.format(java.util.Locale.ROOT, "%s volume facing %.3f, looking away %.3f (drawn %d times while away)",
+                    summary.append(String.format(java.util.Locale.ROOT, "%s loudness at full volume facing %.3f, looking away %.3f (drawn %d times while away)",
                             new File(images[index]).getName(), facingGain, gain, drawnCount - facingDrawn));
                     if (gain > facingGain + 0.01f) {
                         finish(false, summary + ": louder when looking away");
@@ -291,11 +307,14 @@ final class SelfTest {
                     }
                 } else if (itemViewAt < 0) {
                     // アイテムは手持ちの枠 (ホットバー) に入るので、画面の下に描かれる
+                    if (loadFailed(expectedUrl, "item")) return;
                     if (drawnCount > 0 && ticksInStep - itemGivenAt > 40) {
+                        if (!loadedInTime(expectedUrl, "item")) return;
                         writeFile("item-view.txt", "ready\n");
                         itemViewAt = ticksInStep;
                     } else if (ticksInStep - itemGivenAt > ITEM_TIMEOUT) {
-                        finish(true, summary + ", item not rendered");
+                        finish(false, summary + ", item not rendered (signs looked up " + lookups + " times, recognised "
+                                + recognised + " times)");
                     }
                 } else if (ticksInStep - itemViewAt > 60) {
                     finish(true, summary + ", item rendered " + drawnCount + " times");
@@ -305,6 +324,27 @@ final class SelfTest {
             default:
                 break;
         }
+    }
+
+    // 看板の URL が読み込めなかったなら、時間切れを待たずに失敗として終える
+    private boolean loadFailed(String url, String name) {
+        final TextureEntry entry = MarumaSign.signs().entry(url);
+        if (entry == null || entry.state() != TextureEntry.ERROR) return false;
+        finish(false, (summary.length() > 0 ? summary + ", " : "") + name + " could not be loaded (" + url + ")");
+        return true;
+    }
+
+    // 表示されるまでの時間を記録する。上限より遅ければ失敗として終える
+    private boolean loadedInTime(String url, String name) {
+        final TextureEntry entry = MarumaSign.signs().entry(url);
+        final long millis = entry == null ? -1 : entry.loadMillis();
+        if (summary.length() > 0) summary.append(", ");
+        summary.append(name).append(" loaded in ").append(millis).append(" ms");
+        if (millis > LOAD_LIMIT) {
+            finish(false, summary + " (limit " + LOAD_LIMIT + " ms)");
+            return false;
+        }
+        return true;
     }
 
     // 確認中のファイルが終わったので、次のファイルか、看板アイテムの確認に進む
