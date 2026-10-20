@@ -150,7 +150,7 @@ glTF 2.0 の `.glb` と `.gltf` を表示できます。
 
 - ページの切り替えは自分の画面だけで、ほかのプレイヤーには伝わりません。同じ PDF の看板は、すべて同じページを表示します。
 - 照準が絵に合っている間の使用キーは、ページ送りのためだけに使い、ブロックを置いたり看板を編集したりはしません。
-- 埋め込まれていないフォントは、パソコンにあるフォントで代わりに表示します。フォントの一覧は、ゲームを起動して初めて PDF を読むときに作ります (フォントが 6000 個ほどあるパソコンで 1 - 2 秒)。一覧は `marumasign/pdf-fonts.cache` に保存し、次からは変わったフォントだけを読み直します。
+- 埋め込まれていないフォントは、パソコンにあるフォントで代わりに表示します。フォントの一覧は、ゲームを起動して初めて PDF を読むときに作ります (フォントが 6000 個ほどあるパソコンで 0.3 秒ほど)。一覧は `marumasign/pdf-fonts.cache` に保存し、次からは変わったフォントだけを読み直します (変わったものがなければ 0.1 秒ほど)。
 - ファイルは 64 MB までです。
 
 ### 看板のフォーマット
@@ -180,6 +180,11 @@ OptiFine、Iris、Oculus などの影 Mod とシェーダーパックを使っ�
 - Minecraft 1.7.10 のサーバーは看板 1 行につき 15 文字までしか受け付けないため、特に URL が短縮されやすくなります。
 - スペクテイターモードでは、画像と一緒に看板そのものも表示されます。
 - 画像は 10 MB まで、3D モデルは 64 MB まで、アップロードできる動画・音声とガウシアンスプラッティングは 200 MB までです。
+- 一度読み込んだファイル (動画・音声を除く) は、ゲームフォルダの `marumasign/cache` に合計 512 MB まで保存します。
+  次に同じ看板を見たときは、サーバーにファイルが変わったかだけを問い合わせ、変わっていなければ保存したものを使います。
+  サーバーにつながらないときも、保存したものを表示します。
+  変わったかを問い合わせる情報 (ETag / Last-Modified) を返さないサーバーのファイルは保存しません。
+  合計が 512 MB を超えると、最後に使ったのが古いものから消します。フォルダごと消してもかまいません。
 - 画面とチャットのメッセージは、Minecraft で選べるすべての言語 (115 言語) に翻訳してあります。英語と日本語以外は、ネイティブの話者による確認をしていません。
 
 ## 開発者向け
@@ -228,6 +233,17 @@ python tools/verify/matrix.py
 [portablemc](https://github.com/mindstorm38/portablemc)、Pillow、FFmpeg が必要です。
 `tools/verify/verify.py --image` には、ファイルのほかにライブ配信などの URL も `|` で区切って指定できます。
 
+次のどれかに当てはまると、合格にしません。
+
+- Mod を入れていない状態 (基準) と比べて、新しい警告やエラーがログに出た。基準を取っていない組み合わせも合格にしない
+  (`tools/verify/known-noise.txt` の、Mod によらないと分かっている行は除く。行ごとにクライアントとサーバーのどちらのログに当てはめるかを決めている)
+- Mod がファイルの読み込みや再生に失敗した (ログでは INFO の行でも数える)
+- 看板が描かれようとしてから表示されるまでに 15 秒より長くかかった (`-Dmarumasign.selftest.loadLimit=ミリ秒` で変えられる)。
+  かかった時間は結果の `load_ms` に残り、`matrix.py` の最後に遅かったものを表示する
+- 看板アイテムが描かれなかった
+
+`matrix.py` は、失敗した組み合わせを 1 回だけやり直します。やり直して合格しても、1 回目の失敗の内容を結果に残し、表にも「1 回目は失敗」と書きます。
+
 ```bash
 # 3 つのクライアントを同時に動かす (1 つあたりメモリを 4 GB ほど使う)。前回合格したものは飛ばす
 python tools/verify/matrix.py --jobs 3 --skip-passed
@@ -256,8 +272,16 @@ python tools/check_linkage.py
 ./gradlew :core:splatPreview -PsplatPreviewArgs="build/splat scene.spz"
 # ガウシアンスプラッティングの読み込みの検査 (テスト用データのフォルダ)
 ./gradlew :core:splatCheck -PsplatArgs="splat-data"
-# PDF の看板の表示とページ送りを確かめ、ページと帯を PNG に書き出す (PDF のファイル, 出力先)
-./gradlew :core:pdfCheck -PpdfArgs="tools/verify/test-pdf.pdf build/pdf"
+# PDF の看板の表示とページ送りを確かめ、ページと帯を PNG に書き出す (PDF のファイル, 出力先。core フォルダからの位置か、絶対パスで指定する)
+./gradlew :core:pdfCheck -PpdfArgs="../tools/verify/test-pdf.pdf build/pdf"
+# 画像のピクセルを直接読む処理が、BufferedImage.getRGB と同じ結果になるかを確かめる (画像のファイルを足して確かめることもできる)
+./gradlew :core:argbCheck
+# ダウンロードしたファイルを保存しておく仕組みを、手元の HTTP サーバーで確かめる
+./gradlew :core:downloadCacheCheck
+# 3D モデルを読み込んだ結果のハッシュを表示する。読み込みを速くしたときに、変える前と結果が同じかを比べる
+./gradlew :core:gltfHash -PgltfHashArgs="model.glb other.gltf"
+# ダウンロードと読み込みにかかる時間を、ファイルごとに測る (回数, ファイル...)
+./gradlew :core:loadBenchmark -PloadBenchArgs="5 image.png model.glb scene.spz"
 ```
 
 ### 取り込んでいるソースコード

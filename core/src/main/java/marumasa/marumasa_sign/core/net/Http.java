@@ -80,13 +80,42 @@ public final class Http {
     }
 
     private static byte[] readLimited(InputStream input, int limit) throws IOException {
-        final ByteArrayOutputStream output = new ByteArrayOutputStream();
-        final byte[] buffer = new byte[8192];
-        int total = 0;
+        return readRest(input, new byte[0], -1, limit);
+    }
+
+    /**
+     * head に続く残りを読み、head とつなげて返す。全体が limit バイトを超えたら IOException。
+     * 大きさ (contentLength) が分かっていれば、その大きさの配列に直接読む (大きなファイルで、配列を何度も広げて写さないように)。
+     */
+    private static byte[] readRest(InputStream input, byte[] head, long contentLength, int limit) throws IOException {
+        if (contentLength >= head.length && contentLength <= limit) {
+            final byte[] all = new byte[(int) contentLength];
+            System.arraycopy(head, 0, all, 0, head.length);
+            int filled = head.length;
+            while (filled < all.length) {
+                final int read = input.read(all, filled, all.length - filled);
+                if (read < 0) return java.util.Arrays.copyOf(all, filled);
+                filled += read;
+            }
+            // 知らされた大きさより長く送られてきたら、大きさが分からない場合と同じく、上限までは読む
+            final int next = input.read();
+            if (next < 0) return all;
+            final ByteArrayOutputStream output = new ByteArrayOutputStream(all.length + 65536);
+            output.write(all);
+            output.write(next);
+            return copyRest(input, output, limit);
+        }
+        final ByteArrayOutputStream output = new ByteArrayOutputStream(Math.max(65536, head.length));
+        output.write(head);
+        return copyRest(input, output, limit);
+    }
+
+    private static byte[] copyRest(InputStream input, ByteArrayOutputStream output, int limit) throws IOException {
+        if (output.size() > limit) throw new IOException("Content size exceeds the limit of " + limit + " bytes.");
+        final byte[] buffer = new byte[65536];
         int len;
         while ((len = input.read(buffer)) != -1) {
-            total += len;
-            if (total > limit) throw new IOException("Content size exceeds the limit of " + limit + " bytes.");
+            if ((long) output.size() + len > limit) throw new IOException("Content size exceeds the limit of " + limit + " bytes.");
             output.write(buffer, 0, len);
         }
         return output.toByteArray();
@@ -132,18 +161,42 @@ public final class Http {
     }
 
     private static byte[] download(String url, ContentCheck check, int defaultMaxSize) throws IOException {
+        // 前にダウンロードして残しておいたもの (DownloadCache)。あれば、変わったかだけを問い合わせる
+        final DownloadCache.Entry cached = DownloadCache.lookup(url);
         String currentUrl = url;
         HttpURLConnection connection = null;
+        // 最後まで読めた接続は切らずに残し、同じサーバーへの次のダウンロードで使い回させる (接続と TLS の準備を省く)
+        boolean reusable = false;
         try {
             for (int redirects = 0; ; redirects++) {
-                connection = open(currentUrl);
-                connection.setReadTimeout(30000);
-                connection.setInstanceFollowRedirects(false);
-                connection.setRequestMethod("GET");
-                connection.setRequestProperty("Accept", "image/png, image/gif, image/jpeg, */*;q=0.5");
-                connection.connect();
-
-                final int status = connection.getResponseCode();
+                final int status;
+                try {
+                    connection = open(currentUrl);
+                    connection.setReadTimeout(30000);
+                    connection.setInstanceFollowRedirects(false);
+                    connection.setRequestMethod("GET");
+                    connection.setRequestProperty("Accept", "image/png, image/gif, image/jpeg, */*;q=0.5");
+                    if (cached != null && cached.etag != null) connection.setRequestProperty("If-None-Match", cached.etag);
+                    if (cached != null && cached.lastModified != null) {
+                        connection.setRequestProperty("If-Modified-Since", cached.lastModified);
+                    }
+                    connection.connect();
+                    status = connection.getResponseCode();
+                } catch (IOException e) {
+                    // サーバーにつながらない。残しておいたものがあれば、それを使う
+                    if (cached != null) return fromCache(cached, check, defaultMaxSize);
+                    throw e;
+                }
+                if (status == 304 && cached != null) {
+                    // 変わっていない
+                    try {
+                        connection.getInputStream().close();
+                        reusable = true;
+                    } catch (IOException e) {
+                        // 接続を使い回せないだけ
+                    }
+                    return fromCache(cached, check, defaultMaxSize);
+                }
                 if (status == 301 || status == 302 || status == 303 || status == 307 || status == 308) {
                     if (redirects >= 5) throw new IOException("Too many redirects");
                     final String location = connection.getHeaderField("Location");
@@ -153,6 +206,8 @@ public final class Http {
                     currentUrl = new URL(new URL(currentUrl), location).toString();
                     continue;
                 }
+                // サーバーの一時的な不具合なら、残しておいたものを使う (ファイルがなくなった 404 などでは使わない)
+                if (status / 100 == 5 && cached != null) return fromCache(cached, check, defaultMaxSize);
                 if (status / 100 != 2) throw new IOException("HTTP " + status);
                 break;
             }
@@ -164,6 +219,7 @@ public final class Http {
             }
             final String resolvedName = resolveName(connection, currentUrl, url);
             final InputStream input = connection.getInputStream();
+            final byte[] all;
             try {
                 byte[] head = new byte[0];
                 int maxSize = defaultMaxSize;
@@ -176,18 +232,29 @@ public final class Http {
                 if (contentLength > maxSize) {
                     throw new IOException("Content size exceeds the limit of " + maxSize + " bytes.");
                 }
-                final byte[] rest = readLimited(input, maxSize - head.length);
-                if (head.length == 0) return rest;
-                final byte[] all = new byte[head.length + rest.length];
-                System.arraycopy(head, 0, all, 0, head.length);
-                System.arraycopy(rest, 0, all, head.length, rest.length);
-                return all;
+                all = readRest(input, head, contentLength, maxSize);
+                reusable = true;
             } finally {
                 input.close();
             }
+            DownloadCache.store(url, resolvedName, connection.getHeaderField("ETag"), connection.getHeaderField("Last-Modified"), all);
+            return all;
         } finally {
-            if (connection != null) connection.disconnect();
+            if (connection != null && !reusable) connection.disconnect();
         }
+    }
+
+    // 残しておいたものを、ダウンロードしたものと同じように確かめて返す
+    private static byte[] fromCache(DownloadCache.Entry cached, ContentCheck check, int defaultMaxSize) throws IOException {
+        final byte[] content = cached.read();
+        int maxSize = defaultMaxSize;
+        if (check != null) {
+            final byte[] head = java.util.Arrays.copyOf(content, Math.min(512, content.length));
+            maxSize = check.maxBytes(head, head.length, cached.name);
+            if (maxSize <= 0) return null;
+        }
+        if (content.length > maxSize) throw new IOException("Content size exceeds the limit of " + maxSize + " bytes.");
+        return content;
     }
 
     // Content-Disposition またはリダイレクト後の最終 URL からファイル名 (または URL) を得る

@@ -2,43 +2,50 @@
 # 基準 (Mod なしでの起動) との差分で大半は除外できるが、基準側では通らない経路
 # (ゲームの正常終了など) で出るものだけをここに書く。
 # 1 行に 1 つの正規表現。なぜ Mod 由来でないと言えるのかを必ず添えること。
+# 行の頭に「client: 」か「server: 」を付けて、どちらのログに当てはめるかを決める (Mod はクライアントにしか入っていないので、
+# サーバーの側でしか出ない行をクライアントの側で見逃さないように)。付けなければ両方に当てはめる。
 
 # Minecraft 1.12.2 以前: サウンドライブラリが終了時に必ず WARN で出す署名
-Author: Paul Lamb, www\.paulscode\.com
+client: Author: Paul Lamb, www\.paulscode\.com
 
 # 検証ではクライアントを一方的に終了させるため、サーバー側に切断の例外が記録される (INFO)
-lost connection: .*Internal Exception: java\.io\.IOException
+server: lost connection: .*Internal Exception: java\.io\.IOException
 # 確認の途中で、スクリプトがプレイヤーを離れた場所へ移動させるために出る
-moved too quickly
+server: moved too quickly
 
 # シェーダーパックを読み込むときに影 Mod が出す、パックの内容についての知らせ (毎回違う関数の名前が出る)
-Removing unused function \w+ and omitting further such messages
+client: Removing unused function \w+ and omitting further such messages
 
 # サーバーの処理が遅れたときに、サーバー自身が出す知らせ (確認用の PC が他の処理で忙しいと出る)
-Can't keep up! Is the server overloaded\?
+server: Can't keep up! Is the server overloaded\?
 # Forge 1.14 - 1.15 が、初回の起動で設定ファイルを書き直したことを自分で検知して出す (出る時点が起動ごとに違う)
-Forge config just got changed on the file system!
+client: Forge config just got changed on the file system!
 
 # 古いバージョンのサーバーが、終了の途中でログのファイルを閉じたあとに書こうとして出す (Mod はサーバーに入っていない)
-An exception occurred processing Appender File
-Error writing to RandomAccessFile logs/latest\.log
-java\.io\.IOException: Stream Closed
-Exception in thread "Server Shutdown Thread"
+server: An exception occurred processing Appender File
+server: Error writing to RandomAccessFile logs/latest\.log
+server: java\.io\.IOException: Stream Closed
+server: Exception in thread "Server Shutdown Thread"
 
 # 確認用のアカウントは実在しないので、Minecraft 自体がスキンの情報を取りに行って失敗することがある (通信の状況によって出たり出なかったりする)
-Couldn't look up profile properties for
-MinecraftClientHttpException
+client: Couldn't look up profile properties for
+client: MinecraftClientHttpException
 # Minecraft 自体が Realms (Mojang のサーバー) の状態を問い合わせて、相手のサーバーの一時的な障害 (502 など) で失敗したときに出す
-Realms Notification Availability checker
+client: Realms Notification Availability checker
 # 同じ失敗の例外に付く、呼び出し元の行 (Forge 26.3 ではこの行だけが警告として拾われる)
-at \S*com\.mojang\.authlib\.minecraft\.client\.MinecraftClient\.
+client: at \S*com\.mojang\.authlib\.minecraft\.client\.MinecraftClient\.
 
 # 影 Mod がシェーダーパックを組み立てるときに出す、パックの内容についての知らせ。
 # ワールドに入ったときに出るので、ワールドに入れない基準の取得 (起動が済んでから接続するバージョン) では基準に入らない
-\] Unsupported uniform:
-Failed to resolve uniform
-The following uniforms won't work
-Error while parsing the block ID map entry
+client: \] Unsupported uniform:
+client: Failed to resolve uniform
+client: The following uniforms won't work
+client: Error while parsing the block ID map entry
 
 # バニラが、アイテムの内容がまだ届いていない落ちたアイテムを描こうとしたときに出す (サーバーとの通信のタイミングによる)
-Item entity \d+ has no item\?!
+client: Item entity \d+ has no item\?!
+
+# Minecraft 自体が起動時にパソコンの情報 (SystemReport) を集めるとき、Windows のパフォーマンスカウンターが壊れていると
+# プロセスの情報が取れずに出す (OSHI というライブラリを通して読んでいる。パソコンの状態によって出たり出なかったりする)
+client: Failed to get system info for Process
+client: Cannot invoke "oshi\.software\.os\.OSProcess\.

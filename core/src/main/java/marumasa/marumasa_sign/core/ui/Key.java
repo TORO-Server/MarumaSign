@@ -65,6 +65,37 @@ public final class Key {
         return result;
     }
 
+    // SDL (Minecraft 26.3 以降) のスキャンコードから変換する。
+    // 文字のキー (A, C, V, X) はキーボードの配列で位置が変わるため、ここでは扱わない
+    public static int fromSdl(int scancode) {
+        switch (scancode) {
+            case 42: return BACKSPACE;
+            case 76: return DELETE;
+            case 80: return LEFT;
+            case 79: return RIGHT;
+            case 82: return UP;
+            case 81: return DOWN;
+            case 74: return HOME;
+            case 77: return END;
+            case 40:
+            case 88: return ENTER;
+            case 41: return ESCAPE;
+            case 43: return TAB;
+            case 75: return PAGE_UP;
+            case 78: return PAGE_DOWN;
+            case 44: return SPACE;
+            default: return UNKNOWN;
+        }
+    }
+
+    // SDL の修飾キーのビット (左右で別のビット) から変換する (Super は Ctrl として扱う)
+    public static int modifiersFromSdl(int mods) {
+        int result = 0;
+        if ((mods & 0x0003) != 0) result |= MOD_SHIFT;
+        if ((mods & 0x00c0) != 0 || (mods & 0x0c00) != 0) result |= MOD_CTRL;
+        return result;
+    }
+
     // LWJGL 2 (Minecraft 1.12.2 以前) のキーコードから変換する
     public static int fromLwjgl2(int key) {
         switch (key) {

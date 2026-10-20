@@ -1,5 +1,6 @@
 package marumasa.marumasa_sign.adapter;
 
+import com.mojang.blaze3d.platform.InputConstants;
 import com.mojang.blaze3d.platform.Window;
 import marumasa.marumasa_sign.core.MarumaSign;
 import marumasa.marumasa_sign.core.ui.Key;
@@ -20,6 +21,10 @@ import java.util.List;
  */
 abstract class UiScreenBase extends Screen {
 
+    // 26.3 から入力が GLFW から SDL に変わり、キーとマウスボタンの番号が変わった (左クリックは 0 から 1 に)。
+    // InputConstants の値はコンパイル時に埋め込まれるため、バージョンごとにどちらの番号かが決まる
+    private static final boolean SDL = InputConstants.MOUSE_BUTTON_LEFT != 0;
+
     protected final UiRoot ui = MarumaSign.ui();
 
     protected UiScreenBase() {
@@ -31,10 +36,12 @@ abstract class UiScreenBase extends Screen {
     protected void init() {
         final Window window = minecraft.getWindow();
         ui.layout(window.getWidth(), window.getHeight());
+        Mc.startTextInput(minecraft, this);
     }
 
     @Override
     public void removed() {
+        Mc.stopTextInput(minecraft, this);
         ui.closed();
     }
 
@@ -69,13 +76,13 @@ abstract class UiScreenBase extends Screen {
 
     @Override
     public boolean mouseClicked(MouseButtonEvent event, boolean doubleClick) {
-        if (event.button() == 0) ui.mousePressed(mouseX(), mouseY());
+        if (event.button() == InputConstants.MOUSE_BUTTON_LEFT) ui.mousePressed(mouseX(), mouseY());
         return true;
     }
 
     @Override
     public boolean mouseReleased(MouseButtonEvent event) {
-        if (event.button() == 0) ui.mouseReleased(mouseX(), mouseY());
+        if (event.button() == InputConstants.MOUSE_BUTTON_LEFT) ui.mouseReleased(mouseX(), mouseY());
         return true;
     }
 
@@ -87,9 +94,19 @@ abstract class UiScreenBase extends Screen {
 
     @Override
     public boolean keyPressed(KeyEvent event) {
-        final int key = Key.fromGlfw(event.key());
-        if (key != Key.UNKNOWN) ui.keyPressed(key, Key.modifiersFromGlfw(event.modifiers()));
+        final int key = SDL ? sdlKey(event) : Key.fromGlfw(event.key());
+        final int modifiers = SDL ? Key.modifiersFromSdl(event.modifiers()) : Key.modifiersFromGlfw(event.modifiers());
+        if (key != Key.UNKNOWN) ui.keyPressed(key, modifiers);
         return true;
+    }
+
+    // SDL のキー。Ctrl+V などの文字のキーは、Minecraft と同じくキーボードの配列に合わせて判定する
+    private static int sdlKey(KeyEvent event) {
+        if (event.isSelectAll()) return Key.A;
+        if (event.isCopy()) return Key.C;
+        if (event.isPaste()) return Key.V;
+        if (event.isCut()) return Key.X;
+        return Key.fromSdl(event.key());
     }
 
     @Override

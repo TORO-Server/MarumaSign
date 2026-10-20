@@ -23,6 +23,9 @@ public final class TextureEntry {
     private int[] frameEnd;
     private int repetitions;
     private long loadedAt;
+    // 看板が初めて描かれようとした時刻と、そこから表示できるようになるまでの時間 (ミリ秒、まだなら -1)
+    private final long requestedAt = System.currentTimeMillis();
+    private volatile long loadMillis = -1;
     // 状態が変わるたびに増える。SignImage が頂点を作り直すために使う
     private volatile int revision;
     // 動画や音声の再生。画像なら null
@@ -48,6 +51,7 @@ public final class TextureEntry {
         this.repetitions = repetitions;
         this.ownsTextures = ownsTextures;
         this.loadedAt = System.currentTimeMillis();
+        if (state == LOADED && loadMillis < 0) loadMillis = loadedAt - requestedAt;
         this.state = state;
         this.revision++;
     }
@@ -98,6 +102,11 @@ public final class TextureEntry {
         return media == null ? -1f : media.currentGain();
     }
 
+    // 動画や音声の、設定の音量を 100 としたときの今の音の大きさ (0 - 1)。動画や音声でないか、再生していなければ -1
+    public float mediaFalloff() {
+        return media == null ? -1f : media.currentFalloff();
+    }
+
     void setPdf(PdfSession pdf) {
         this.pdf = pdf;
     }
@@ -114,6 +123,11 @@ public final class TextureEntry {
 
     public int state() {
         return state;
+    }
+
+    // 看板が初めて描かれようとしてから、表示できるようになるまでにかかった時間 (ミリ秒)。まだ表示できていなければ -1
+    public long loadMillis() {
+        return loadMillis;
     }
 
     public int width() {

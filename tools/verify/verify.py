@@ -6,7 +6,7 @@ Mod 内蔵のセルフテスト (画面を開く -> 画像を選ぶ -> 看板を
 
 使い方:
     python tools/verify/verify.py --minecraft 1.12.2 --loader forge --loader-version 14.23.5.2860 \
-        --mod dist/build/libs/MarumaSign-4.0.1.jar
+        --mod dist/build/libs/MarumaSign-4.0.2.jar
 """
 
 import argparse
@@ -1084,6 +1084,10 @@ def judge_colours(sums, width, height):
 # ---------- ログの確認 ----------
 
 LEVEL_PATTERN = re.compile(r"(\[|/)(WARN|WARNING|ERROR|FATAL|SEVERE)(\]|:)")
+# Mod が、ファイルの読み込みやページの描画、再生に失敗したときに INFO で出す行
+MOD_FAILURE_PATTERN = re.compile(r"\b(Failure: https?://|Media failure: |Audio stopped: |Could not draw page"
+                                 r"|Not enough memory to draw page|Could not prepare the sign text|Could not load the "
+                                 r"|Could not search for FFmpeg|FFmpeg was not found)")
 
 
 def scan_log(path):
@@ -1094,18 +1098,26 @@ def scan_log(path):
     for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
         # OpenGL のエラーは、ログには INFO として出る (Minecraft 1.17 以降、GL のデバッグ出力から)
         gl_error = "OpenGL debug message" in line and "type=ERROR" in line
-        if LEVEL_PATTERN.search(line) or gl_error or "Exception" in line or "marumasa" in line.lower() and "error" in line.lower():
+        # Mod が読み込みに失敗したときの行は INFO で出る (確認に使うファイルはどれも読み込めるはずなので、出れば不具合)
+        load_failure = MOD_FAILURE_PATTERN.search(line)
+        if (LEVEL_PATTERN.search(line) or gl_error or load_failure or "Exception" in line
+                or "marumasa" in line.lower() and "error" in line.lower()):
             findings.append(line[:400])
     return findings
 
 
 def load_known_noise():
-    """Mod 由来でないと分かっている行の正規表現を読み込む。"""
-    patterns = []
+    """Mod 由来でないと分かっている行の正規表現を、当てはめるログの側 ("client" / "server") ごとに読み込む。"""
+    patterns = {"client": [], "server": []}
     for line in Path(__file__).with_name("known-noise.txt").read_text(encoding="utf-8").splitlines():
         line = line.strip()
-        if line and not line.startswith("#"):
-            patterns.append(re.compile(line))
+        if not line or line.startswith("#"):
+            continue
+        side = re.match(r"(client|server): ", line)
+        sides = [side.group(1)] if side else ["client", "server"]
+        pattern = re.compile(line[side.end():] if side else line)
+        for name in sides:
+            patterns[name].append(pattern)
     return patterns
 
 
@@ -1384,6 +1396,8 @@ def run(args):
         lines = result_file.read_text(encoding="utf-8").splitlines()
         result["ok"] = bool(lines) and lines[0] == "OK"
         result["detail"] = lines[1] if len(lines) > 1 else ""
+        # ファイルごとの、看板が初めて描かれようとしてから表示されるまでの時間 (ミリ秒)
+        result["load_ms"] = {name: int(millis) for name, millis in re.findall(r"(\S+) loaded in (-?\d+) ms", result["detail"])}
     elif not result["detail"]:
         result["detail"] = "The client exited without a self test result"
     result["joined"] = server.joined.is_set()
@@ -1421,19 +1435,21 @@ def run(args):
         baseline = {side: {normalize(line) for line in lines} for side, lines in baseline.items()}
         noise = load_known_noise()
 
-        def is_new(line, known):
-            return normalize(line) not in known and not any(pattern.search(line) for pattern in noise)
+        def is_new(line, side):
+            return normalize(line) not in baseline[side] and not any(pattern.search(line) for pattern in noise[side])
 
         result["baseline"] = True
-        result["new_client_findings"] = [line for line in client_findings if is_new(line, baseline["client"])]
-        result["new_server_findings"] = [line for line in server_findings if is_new(line, baseline["server"])]
+        result["new_client_findings"] = [line for line in client_findings if is_new(line, "client")]
+        result["new_server_findings"] = [line for line in server_findings if is_new(line, "server")]
         result["clean"] = (result["ok"] and bool(result.get("image_visible")) and bool(result.get("sign_hidden"))
                            and bool(result.get("pdf_ok", True))
                            and bool(result.get("item_visible"))
                            and (not shaders or bool(result.get("shaders_active")))
                            and not result["new_client_findings"] and not result["new_server_findings"])
     else:
+        # 基準がないと、警告が Mod によるものかを判断できないので、合格にはしない
         result["baseline"] = False
+        result["clean"] = False
         result["client_findings"] = client_findings
         result["server_findings"] = server_findings
 

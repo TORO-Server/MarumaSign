@@ -40,13 +40,20 @@ def cell(entry, digest):
         # Mod を入れなくても起動しなかった。Mod の結果ではない
         return "対象外"
     if entry.get("clean"):
+        notes = []
         missing = [name for kind, name in MEDIA_NAMES.items() if kind not in entry.get("media", [])]
         if missing:
-            return "OK (" + "・".join(missing) + "は未確認)"
-        # 看板アイテムとしての見た目も、種類ごとに確かめたか
-        items = entry.get("item_media", [])
-        no_item = [name for kind, name in MEDIA_NAMES.items() if matrix.MEDIA[kind] not in items]
-        return "OK" if not no_item else "OK (" + "・".join(no_item) + "のアイテムは未確認)"
+            notes.append("・".join(missing) + "は未確認")
+        else:
+            # 看板アイテムとしての見た目も、種類ごとに確かめたか
+            items = entry.get("item_media", [])
+            no_item = [name for kind, name in MEDIA_NAMES.items() if matrix.MEDIA[kind] not in items]
+            if no_item:
+                notes.append("・".join(no_item) + "のアイテムは未確認")
+        if entry.get("first_attempt"):
+            # 1 回目は失敗して、やり直して合格した
+            notes.append("1 回目は失敗")
+        return "OK" + (" (" + "、".join(notes) + ")" if notes else "")
     if entry.get("ok"):
         # 動作はしたが、基準にない警告が出たか、表示を確認できなかった
         return "要確認"
@@ -75,7 +82,8 @@ def main():
         "画面は自動の判定に加えて目でも確かめ、絵にすき間や縞模様がないこと (ガウシアンスプラットの重なり方) も調べています。",
         "",
         "- **OK**: 5 つとも正しい向きで、すき間なく表示され、看板そのものは隠れていて、5 つの看板アイテムもその絵の見た目になり、",
-        "  Mod を入れていない状態と比べて新しい警告やエラーが出なかった",
+        "  Mod を入れていない状態と比べて新しい警告やエラーが出なかった。どのファイルも、看板が描かれようとしてから 15 秒以内に表示された",
+        "- **OK (1 回目は失敗)**: 1 回目の確認で失敗し、やり直して合格した (たまにしか起きない不具合かもしれないので、1 回目の内容を結果に残している)",
         "- **要確認**: 動作はしたが、新しい警告が出たか、表示を確認できなかった",
         "- **失敗**: 動作しなかった",
         "- **対象外**: Mod を入れていない状態でもゲームが起動しないか、サーバーに入れなかった (ローダーや影 Mod 側の問題)",
