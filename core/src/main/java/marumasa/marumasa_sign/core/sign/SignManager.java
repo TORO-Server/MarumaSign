@@ -76,6 +76,11 @@ public final class SignManager {
         return image;
     }
 
+    // URL の読み込みの状態。まだ看板に使われていなければ null
+    public TextureEntry entry(String url) {
+        return url == null ? null : textures.get(url);
+    }
+
     private TextureEntry texture(final String url) {
         TextureEntry entry = textures.get(url);
         if (entry != null) return entry;
@@ -162,7 +167,7 @@ public final class SignManager {
                 frameEnd[i] = time;
             }
             entry.set(TextureEntry.LOADED, decoded.width, decoded.height, frames, frameEnd, decoded.repetitions, true);
-            MarumaSign.LOGGER.info("Load: " + url);
+            MarumaSign.LOGGER.info("Load: " + url + " (" + entry.loadMillis() + " ms)");
         } catch (RuntimeException | Error e) {
             // スケジュールされたタスクの中の例外は呼び出し元で捨てられるため、ここで記録する
             MarumaSign.LOGGER.error("Failed to register texture: " + url, e);
@@ -180,7 +185,7 @@ public final class SignManager {
                 created[i] = platform.createTexture(texture.width, texture.height, texture.pixels);
             }
             entry.setModel(scene, created);
-            MarumaSign.LOGGER.info("Load: " + url + " (" + model.triangleCount() + " triangles)");
+            MarumaSign.LOGGER.info("Load: " + url + " (" + model.triangleCount() + " triangles, " + entry.loadMillis() + " ms)");
         } catch (RuntimeException | Error e) {
             MarumaSign.LOGGER.error("Failed to register model: " + url, e);
             for (Object texture : created) {
@@ -196,7 +201,7 @@ public final class SignManager {
         try {
             created = platform.createTexture(SplatScene.TEXTURE_SIZE, SplatScene.TEXTURE_SIZE, SplatScene.gaussianTexture());
             entry.setSplat(scene, created);
-            MarumaSign.LOGGER.info("Load: " + url + " (" + scene.cloud().count + " splats)");
+            MarumaSign.LOGGER.info("Load: " + url + " (" + scene.cloud().count + " splats, " + entry.loadMillis() + " ms)");
         } catch (RuntimeException | Error e) {
             MarumaSign.LOGGER.error("Failed to register splat: " + url, e);
             MarumaSign.releaseTexture(platform, created);
@@ -213,7 +218,7 @@ public final class SignManager {
         entry.setPdf(session);
         pdfs.add(session);
         session.start(firstPage);
-        MarumaSign.LOGGER.info("Load: " + url + " (PDF, " + file.pageCount() + " pages)");
+        MarumaSign.LOGGER.info("Load: " + url + " (PDF, " + file.pageCount() + " pages, " + entry.loadMillis() + " ms)");
     }
 
     // 画像ではなかった URL を、動画や音声として再生する
@@ -240,7 +245,7 @@ public final class SignManager {
                     // 音声だけの場合は、スピーカーの絵を表示する
                     entry.set(TextureEntry.LOADED, placeholderWidth, placeholderHeight, new Object[]{audioTexture}, new int[]{1}, 0, false);
                 }
-                MarumaSign.LOGGER.info("Play: " + url);
+                MarumaSign.LOGGER.info("Play: " + url + " (" + entry.loadMillis() + " ms)");
             }
 
             @Override

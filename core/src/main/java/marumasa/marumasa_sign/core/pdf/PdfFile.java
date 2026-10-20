@@ -1,5 +1,6 @@
 package marumasa.marumasa_sign.core.pdf;
 
+import marumasa.marumasa_sign.core.image.ArgbPixels;
 import marumasa.marumasa_sign.core.image.DecodedImage;
 import org.apache.pdfbox.pdmodel.PDDocument;
 import org.apache.pdfbox.pdmodel.PDPage;
@@ -95,8 +96,7 @@ public final class PdfFile {
         final int width = image.getWidth();
         final int height = image.getHeight();
         if (width <= 0 || height <= 0) throw new IOException("Empty page " + (index + 1));
-        final int[] pixels = image.getRGB(0, 0, width, height, null, 0, width);
-        return new DecodedImage(width, height, new int[][]{pixels}, new int[]{1}, 0);
+        return new DecodedImage(width, height, new int[][]{ArgbPixels.read(image)}, new int[]{1}, 0);
     }
 
     public synchronized void close() {

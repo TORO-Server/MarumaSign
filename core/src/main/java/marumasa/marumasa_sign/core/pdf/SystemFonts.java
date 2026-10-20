@@ -7,7 +7,11 @@ import org.apache.fontbox.ttf.TTFParser;
 import org.apache.fontbox.ttf.TrueTypeCollection;
 import org.apache.fontbox.ttf.TrueTypeFont;
 import org.apache.fontbox.type1.Type1Font;
-import org.apache.fontbox.util.autodetect.FontFileFinder;
+import org.apache.fontbox.util.autodetect.FontDirFinder;
+import org.apache.fontbox.util.autodetect.MacFontDirFinder;
+import org.apache.fontbox.util.autodetect.OS400FontDirFinder;
+import org.apache.fontbox.util.autodetect.UnixFontDirFinder;
+import org.apache.fontbox.util.autodetect.WindowsFontDirFinder;
 import org.apache.pdfbox.pdmodel.font.CIDSystemInfo;
 import org.apache.pdfbox.pdmodel.font.FontFormat;
 import org.apache.pdfbox.pdmodel.font.FontInfo;
@@ -23,13 +27,25 @@ import java.io.InputStream;
 import java.io.RandomAccessFile;
 import java.lang.ref.SoftReference;
 import java.lang.reflect.Method;
-import java.net.URI;
 import java.nio.charset.Charset;
+import java.nio.file.FileVisitOption;
+import java.nio.file.FileVisitResult;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.SimpleFileVisitor;
+import java.nio.file.attribute.BasicFileAttributes;
 import java.util.ArrayList;
+import java.util.EnumSet;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.concurrent.Callable;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.ThreadFactory;
 
 /**
  * パソコンに入っているフォントの一覧。PDF に埋め込まれていないフォントの代わりを探すのに使う。
@@ -58,10 +74,9 @@ final class SystemFonts extends FontProvider {
         installed = true;
         try {
             final long start = System.nanoTime();
-            final SystemFonts provider = new SystemFonts();
             final File cache = MarumaSign.platform() == null ? null
                     : new File(MarumaSign.platform().gameDirectory(), "marumasign/pdf-fonts.cache");
-            provider.scan(new FontFileFinder().find(), cache);
+            final SystemFonts provider = create(cache);
             // 標準の FontMapper は公開されていないクラスなので、公開されているメソッドを reflection で呼ぶ
             final FontMapper mapper = FontMappers.instance();
             final Method setProvider = mapper.getClass().getMethod("setProvider", FontProvider.class);
@@ -72,6 +87,17 @@ final class SystemFonts extends FontProvider {
         } catch (Exception | LinkageError e) {
             MarumaSign.LOGGER.warn("Could not set up the system fonts for PDF: " + e);
         }
+    }
+
+    /**
+     * パソコンのフォントの一覧を作る。
+     *
+     * @param cache 前に読んだ結果を保存するファイル (なければ null)
+     */
+    static SystemFonts create(File cache) {
+        final SystemFonts provider = new SystemFonts();
+        provider.scan(findFiles(), cache);
+        return provider;
     }
 
     @Override
@@ -85,44 +111,127 @@ final class SystemFonts extends FontProvider {
     }
 
     /**
+     * パソコンのフォントファイルを、大きさと更新日時と一緒に探す。
+     * PDFBox の FontFileFinder と同じフォルダを同じ順にたどり、同じ条件のファイルを同じ順に返す。
+     * FontFileFinder はファイルごとにフォルダかどうかを問い合わせ (6000 個ほどで 1 秒)、大きさなどもあとで別に調べる必要があるが、
+     * ここではフォルダの一覧を読むときに一緒に得られる情報を使う (同じ数で 40 ms ほど)。
+     */
+    static List<CachedFile> findFiles() {
+        final String os = System.getProperty("os.name", "");
+        final FontDirFinder finder = os.startsWith("Windows") ? new WindowsFontDirFinder()
+                : os.startsWith("Mac") ? new MacFontDirFinder()
+                : os.startsWith("OS/400") ? new OS400FontDirFinder() : new UnixFontDirFinder();
+        final List<CachedFile> files = new ArrayList<>();
+        for (File directory : finder.find()) {
+            final Path root = directory.toPath();
+            try {
+                // FontFileFinder と同じく、リンクの先もたどる
+                Files.walkFileTree(root, EnumSet.of(FileVisitOption.FOLLOW_LINKS), Integer.MAX_VALUE, new SimpleFileVisitor<Path>() {
+                    @Override
+                    public FileVisitResult preVisitDirectory(Path path, BasicFileAttributes attributes) {
+                        // 名前が "." で始まるフォルダは見ない
+                        return !path.equals(root) && path.getFileName().toString().startsWith(".")
+                                ? FileVisitResult.SKIP_SUBTREE : FileVisitResult.CONTINUE;
+                    }
+
+                    @Override
+                    public FileVisitResult visitFile(Path path, BasicFileAttributes attributes) {
+                        final String name = path.getFileName().toString().toLowerCase(Locale.US);
+                        if (!attributes.isDirectory() && !name.startsWith("fonts.") && (name.endsWith(".ttf")
+                                || name.endsWith(".otf") || name.endsWith(".pfb") || name.endsWith(".ttc"))) {
+                            files.add(new CachedFile(path.toFile().getPath(), attributes.size(),
+                                    attributes.lastModifiedTime().toMillis()));
+                        }
+                        return FileVisitResult.CONTINUE;
+                    }
+
+                    @Override
+                    public FileVisitResult visitFileFailed(Path path, IOException e) {
+                        // 読めないファイルやフォルダは飛ばす (FontFileFinder も飛ばす)
+                        return FileVisitResult.CONTINUE;
+                    }
+                });
+            } catch (IOException | RuntimeException e) {
+                // このフォルダは読めない。ほかのフォルダは使える
+            }
+        }
+        return files;
+    }
+
+    /**
      * フォントファイルを読んで一覧を作る。
      *
+     * @param files findFiles で探したファイル
      * @param cache 前に読んだ結果を保存するファイル (なければ null)。大きさと更新日時が同じファイルは読み直さない
      */
-    private void scan(List<URI> files, File cache) {
+    private void scan(List<CachedFile> files, File cache) {
         final Map<String, CachedFile> cached = cache == null ? new HashMap<String, CachedFile>() : readCache(cache);
         final List<CachedFile> scanned = new ArrayList<>();
         boolean changed = cached.size() != files.size();
-        for (URI uri : files) {
-            final File file;
-            try {
-                file = new File(uri);
-            } catch (IllegalArgumentException e) {
-                continue;
-            }
-            // 大きさと更新日時を 1 回で調べる (File.length と lastModified では 2 回になる)
-            final CachedFile entry;
-            try {
-                final java.nio.file.attribute.BasicFileAttributes attributes = java.nio.file.Files.readAttributes(
-                        file.toPath(), java.nio.file.attribute.BasicFileAttributes.class);
-                entry = new CachedFile(file.getPath(), attributes.size(), attributes.lastModifiedTime().toMillis());
-            } catch (IOException | RuntimeException e) {
-                continue;
-            }
-            final CachedFile previous = cached.get(entry.path);
-            if (previous != null && previous.size == entry.size && previous.modified == entry.modified) {
-                for (String[] line : previous.lines) {
-                    final Info info = Info.parse(file, line);
-                    if (info != null) fonts.add(info);
+        // 前に読んだ結果がないか、変わったファイルは読み直す。ファイルを開くたびに待ち時間があるので (ウイルス対策の検査など)、
+        // いくつかのスレッドで同時に読む。一覧の順番は PDFBox と同じにしたいので、結果はファイルの順に並べる
+        final List<Future<List<Info>>> reads = new ArrayList<>();
+        ExecutorService readers = null;
+        try {
+            for (CachedFile entry : files) {
+                final CachedFile previous = cached.get(entry.path);
+                if (previous != null && previous.size == entry.size && previous.modified == entry.modified) {
+                    reads.add(null);
+                    continue;
                 }
-                entry.lines.addAll(previous.lines);
-            } else {
-                changed = true;
-                final int before = fonts.size();
-                read(file);
-                for (int i = before; i < fonts.size(); i++) entry.lines.add(fonts.get(i).fields());
+                if (readers == null) {
+                    readers = Executors.newFixedThreadPool(Math.max(1, Math.min(8, Runtime.getRuntime().availableProcessors())),
+                            new ThreadFactory() {
+                                @Override
+                                public Thread newThread(Runnable r) {
+                                    final Thread thread = new Thread(r, "MarumaSign-Fonts");
+                                    thread.setDaemon(true);
+                                    return thread;
+                                }
+                            });
+                }
+                final File file = new File(entry.path);
+                reads.add(readers.submit(new Callable<List<Info>>() {
+                    @Override
+                    public List<Info> call() {
+                        final SystemFonts part = new SystemFonts();
+                        part.read(file);
+                        return part.fonts;
+                    }
+                }));
             }
-            scanned.add(entry);
+            for (int index = 0; index < files.size(); index++) {
+                final CachedFile entry = files.get(index);
+                final File file = new File(entry.path);
+                final Future<List<Info>> read = reads.get(index);
+                if (read == null) {
+                    final CachedFile previous = cached.get(entry.path);
+                    for (String[] line : previous.lines) {
+                        final Info info = Info.parse(file, line);
+                        if (info != null) fonts.add(info);
+                    }
+                    entry.lines.addAll(previous.lines);
+                } else {
+                    changed = true;
+                    List<Info> found;
+                    try {
+                        found = read.get();
+                    } catch (InterruptedException e) {
+                        Thread.currentThread().interrupt();
+                        return;
+                    } catch (ExecutionException e) {
+                        // 読めないフォントは、PDFBox の一覧でも除かれる
+                        found = new ArrayList<>();
+                    }
+                    for (Info info : found) {
+                        fonts.add(info);
+                        entry.lines.add(info.fields());
+                    }
+                }
+                scanned.add(entry);
+            }
+        } finally {
+            if (readers != null) readers.shutdownNow();
         }
         if (cache != null && changed) writeCache(cache, scanned);
     }
@@ -147,7 +256,7 @@ final class SystemFonts extends FontProvider {
     // ---------- 前に読んだ結果 ----------
 
     // 1 つのフォントファイルと、その中のフォントの項目 (Info.fields の形)
-    private static final class CachedFile {
+    static final class CachedFile {
         final String path;
         final long size, modified;
         final List<String[]> lines = new ArrayList<>();

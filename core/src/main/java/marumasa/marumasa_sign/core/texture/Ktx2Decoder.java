@@ -1,5 +1,7 @@
 package marumasa.marumasa_sign.core.texture;
 
+import marumasa.marumasa_sign.core.image.ArgbPixels;
+
 import java.awt.image.BufferedImage;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
@@ -113,9 +115,8 @@ public final class Ktx2Decoder {
             }
         }
 
-        final BufferedImage image = new BufferedImage(width, height, BufferedImage.TYPE_INT_ARGB);
-        image.setRGB(0, 0, width, height, argb, 0, width);
-        return image;
+        // 配列をそのまま使う (setRGB は 1 ピクセルずつ変換するので遅い)
+        return ArgbPixels.wrap(width, height, argb);
     }
 
     // ETC1S: 全体のデータ (端点と選択子の表) と、画像ごとの位置の一覧を読んで、最初の画像を展開する

@@ -1,8 +1,9 @@
 package marumasa.marumasa_sign.core.anim;
 
-import javax.imageio.ImageIO;
+import marumasa.marumasa_sign.core.image.ArgbPixels;
+import marumasa.marumasa_sign.core.image.ImageBytes;
+
 import java.awt.image.BufferedImage;
-import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
@@ -170,15 +171,15 @@ public class ApngDecoder {
             byte[] singlePng = reconstructPng(ihdrData, metadataChunks, frame);
             
             BufferedImage image;
-            try (ByteArrayInputStream bais = new ByteArrayInputStream(singlePng)) {
-                image = ImageIO.read(bais);
-            }
+            image = ImageBytes.read(singlePng);
             if (image == null) {
                 throw new IOException("Failed to decode APNG frame");
             }
 
-            int[] pixels = new int[frame.w * frame.h];
-            image.getRGB(0, 0, frame.w, frame.h, pixels, 0, frame.w);
+            if (image.getWidth() != frame.w || image.getHeight() != frame.h) {
+                throw new IOException("APNG frame size does not match its header");
+            }
+            int[] pixels = ArgbPixels.read(image);
 
             // APNG blend_op: 
             // 0 (SOURCE) -> 1 (OVERWRITE)

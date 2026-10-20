@@ -1,8 +1,8 @@
 package marumasa.marumasa_sign.core.texture;
 
-import javax.imageio.ImageIO;
+import marumasa.marumasa_sign.core.image.ImageBytes;
+
 import java.awt.image.BufferedImage;
-import java.io.ByteArrayInputStream;
 import java.io.IOException;
 
 /**
@@ -52,7 +52,7 @@ public final class TextureDecoder {
 
         // 5. 標準形式 (PNG, JPEG 等)
         try {
-            final BufferedImage image = ImageIO.read(new ByteArrayInputStream(data));
+            final BufferedImage image = ImageBytes.read(data);
             if (image != null) {
                 if (image.getWidth() > MAX_TEXTURE_SIZE || image.getHeight() > MAX_TEXTURE_SIZE) {
                     throw new IOException("Image dimension exceeds limit: " + image.getWidth() + "x" + image.getHeight());

@@ -1,10 +1,9 @@
 package marumasa.marumasa_sign.core.texture;
 
+import marumasa.marumasa_sign.core.image.ImageBytes;
 import marumasa.marumasa_sign.core.media.Ffmpeg;
 
-import javax.imageio.ImageIO;
 import java.awt.image.BufferedImage;
-import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.File;
 import java.io.FileOutputStream;
@@ -120,7 +119,7 @@ public final class AvifDecoder {
             }
 
             if (bytes.size() == 0) return null;
-            return ImageIO.read(new ByteArrayInputStream(bytes.toByteArray()));
+            return ImageBytes.read(bytes.toByteArray());
         } catch (Exception e) {
             return null;
         } finally {

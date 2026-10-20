@@ -45,6 +45,15 @@ tasks.register('gltfCheck', JavaExec) {
     args = providers.gradleProperty('gltfArgs').getOrElse('').tokenize(' ')
 }
 
+// 3D モデルを読み込んだ結果のハッシュを表示する (読み込みを速くしても結果が変わらないことを確かめる)。引数は -PgltfHashArgs="モデルのファイル..."
+tasks.register('gltfHash', JavaExec) {
+    classpath = sourceSets.test.runtimeClasspath
+    mainClass = 'marumasa.marumasa_sign.core.gltf.GltfHash'
+    javaLauncher = javaToolchains.launcherFor(java.toolchain)
+    maxHeapSize = '4g'
+    args = providers.gradleProperty('gltfHashArgs').getOrElse('').tokenize(' ')
+}
+
 // Draco デコーダの単体テスト・安全性検査を実行する
 tasks.register('dracoCheck', JavaExec) {
     classpath = sourceSets.test.runtimeClasspath
@@ -74,6 +83,38 @@ tasks.register('splatBenchmark', JavaExec) {
     mainClass = 'marumasa.marumasa_sign.core.splat.SplatBenchmark'
     javaLauncher = javaToolchains.launcherFor(java.toolchain)
     args = providers.gradleProperty('splatBenchArgs').getOrElse('').tokenize(' ')
+}
+
+// 画像のピクセルを直接読む処理 (ArgbPixels) が、BufferedImage.getRGB と同じ結果になるかを確かめる。引数は -PimageArgs="画像のファイル..."
+tasks.register('argbCheck', JavaExec) {
+    classpath = sourceSets.test.runtimeClasspath
+    mainClass = 'marumasa.marumasa_sign.core.image.ArgbPixelsCheck'
+    javaLauncher = javaToolchains.launcherFor(java.toolchain)
+    args = providers.gradleProperty('imageArgs').getOrElse('').tokenize(' ')
+}
+
+// PDF の代わりのフォントを探す一覧 (SystemFonts) が、PDFBox の標準の一覧と同じになるかを確かめる (フォントが多いと 1 分ほどかかる)
+tasks.register('fontListCheck', JavaExec) {
+    classpath = sourceSets.test.runtimeClasspath
+    mainClass = 'marumasa.marumasa_sign.core.pdf.FontListCheck'
+    javaLauncher = javaToolchains.launcherFor(java.toolchain)
+    maxHeapSize = '2g'
+}
+
+// ダウンロードしたファイルを残しておく仕組み (DownloadCache) を、手元の HTTP サーバーで確かめる
+tasks.register('downloadCacheCheck', JavaExec) {
+    classpath = sourceSets.test.runtimeClasspath
+    mainClass = 'marumasa.marumasa_sign.core.net.DownloadCacheCheck'
+    javaLauncher = javaToolchains.launcherFor(java.toolchain)
+}
+
+// 看板に表示するファイルの、ダウンロードと読み込みの時間を測る。引数は -PloadBenchArgs="回数 ファイル..." で渡す
+tasks.register('loadBenchmark', JavaExec) {
+    classpath = sourceSets.test.runtimeClasspath
+    mainClass = 'marumasa.marumasa_sign.core.LoadBenchmark'
+    javaLauncher = javaToolchains.launcherFor(java.toolchain)
+    maxHeapSize = '4g'
+    args = providers.gradleProperty('loadBenchArgs').getOrElse('').tokenize(' ')
 }
 
 // ガウシアンスプラッティングのデコーダの動作と安全性を確認する。

@@ -1,8 +1,8 @@
 package marumasa.marumasa_sign.core.media;
 
-import javax.imageio.ImageIO;
+import marumasa.marumasa_sign.core.image.ImageBytes;
+
 import java.awt.image.BufferedImage;
-import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.File;
 import java.io.IOException;
@@ -78,7 +78,7 @@ public final class MediaTools {
             Thread.currentThread().interrupt();
         }
         if (bytes.size() == 0) return null;
-        return ImageIO.read(new ByteArrayInputStream(bytes.toByteArray()));
+        return ImageBytes.read(bytes.toByteArray());
     }
 
     // FFmpeg で再生できるファイルかどうか
