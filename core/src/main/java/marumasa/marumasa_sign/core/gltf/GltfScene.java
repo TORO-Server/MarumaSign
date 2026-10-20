@@ -161,7 +161,7 @@ public final class GltfScene {
             final GltfModel.Primitive[] primitives = model.meshes[mesh].primitives;
             int targets = 0;
             for (int p = 0; p < primitives.length; p++) {
-                final int quads = primitives[p].indices.length / 3;
+                final int quads = primitives[p].indices.length / (primitives[p].quads ? 4 : 3);
                 final boolean doubleSided = model.materials[primitives[p].material].doubleSided;
                 groups[groupIndex[mesh][p]].vertexCount += quads * 4 * (doubleSided ? 2 : 1);
                 targets = Math.max(targets, primitives[p].morphPositions.length);
@@ -729,6 +729,24 @@ public final class GltfScene {
 
         final boolean smooth = primitive.normals != null;
         final boolean doubleSided = material.doubleSided;
+
+        if (primitive.quads && smooth) {
+            // 四角形のまま書き出す (構造物のブロックの面など)
+            for (int i = 0; i + 3 < indices.length; i += 4) {
+                final int c0 = i, c1 = flip ? i + 3 : i + 1, c2 = i + 2, c3 = flip ? i + 1 : i + 3;
+                count = put(vertices, colors, count, indices[c0], c0, front[indices[c0]], uv);
+                count = put(vertices, colors, count, indices[c1], c1, front[indices[c1]], uv);
+                count = put(vertices, colors, count, indices[c2], c2, front[indices[c2]], uv);
+                count = put(vertices, colors, count, indices[c3], c3, front[indices[c3]], uv);
+                if (doubleSided) {
+                    count = put(vertices, colors, count, indices[c3], c3, back[indices[c3]], uv);
+                    count = put(vertices, colors, count, indices[c2], c2, back[indices[c2]], uv);
+                    count = put(vertices, colors, count, indices[c1], c1, back[indices[c1]], uv);
+                    count = put(vertices, colors, count, indices[c0], c0, back[indices[c0]], uv);
+                }
+            }
+            return count;
+        }
 
         for (int i = 0; i + 2 < indices.length; i += 3) {
             // 変換で裏返っている場合は、頂点の順序を逆にして表を保つ

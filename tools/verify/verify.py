@@ -1087,6 +1087,7 @@ LEVEL_PATTERN = re.compile(r"(\[|/)(WARN|WARNING|ERROR|FATAL|SEVERE)(\]|:)")
 # Mod が、ファイルの読み込みやページの描画、再生に失敗したときに INFO で出す行
 MOD_FAILURE_PATTERN = re.compile(r"\b(Failure: https?://|Media failure: |Audio stopped: |Could not draw page"
                                  r"|Not enough memory to draw page|Could not prepare the sign text|Could not load the "
+                                 r"|Could not draw "
                                  r"|Could not search for FFmpeg|FFmpeg was not found)")
 
 
@@ -1152,6 +1153,27 @@ def find_client_log(work_dir):
         if candidate.is_file():
             return candidate
     return work_dir / "logs" / "latest.log"
+
+
+# 構造物のブロックのテクスチャに使う Minecraft の版 (core の GameAssets.VERSION と同じ)
+STRUCTURE_ASSET_VERSION = "26.3"
+
+
+def asset_jvm_args(main_dir):
+    """構造物の表示に使うリソース (クライアントの jar と Unifont) を、確認のたびにダウンロードしないよう、ランチャーのものを指定する。
+
+    環境変数 MARUMASIGN_VERIFY_DOWNLOAD_ASSETS を設定すると指定せず、ダウンロードする道筋を確かめる。
+    """
+    if os.environ.get("MARUMASIGN_VERIFY_DOWNLOAD_ASSETS"):
+        return []
+    args = []
+    jar = main_dir / "versions" / STRUCTURE_ASSET_VERSION / f"{STRUCTURE_ASSET_VERSION}.jar"
+    if jar.is_file():
+        args.append(f"-Dmarumasign.assetJar={jar}")
+    objects = main_dir / "assets" / "objects"
+    if objects.is_dir():
+        args.append(f"-Dmarumasign.assetObjects={objects}")
+    return args
 
 
 def is_url(item):
@@ -1256,6 +1278,7 @@ def run(args):
             f"-Dmarumasign.uploadUrl=http://127.0.0.1:{host.port}/upload",
             f"-Dmarumasign.shortenUrl=http://127.0.0.1:{host.port}/shorten",
         ] + ([f"-Dmarumasign.selftest.server=127.0.0.1:{args.port}"] if mod_join else [])
+            + asset_jvm_args(main_dir)
             + os.environ.get("MARUMASIGN_VERIFY_JVM_ARGS", "").split())
         command = base + ["start", spec, "-u", PLAYER] + ([] if mod_join else ["-s", "127.0.0.1", "-p", str(args.port)]) \
             + ["--resolution", "1280x720", f"--jvm-args={jvm_args}"]

@@ -11,6 +11,7 @@ import marumasa.marumasa_sign.core.media.Ffmpeg;
 import marumasa.marumasa_sign.core.net.Http;
 import marumasa.marumasa_sign.core.splat.SplatLoader;
 import marumasa.marumasa_sign.core.splat.SplatScene;
+import marumasa.marumasa_sign.core.structure.StructureLoader;
 import marumasa.marumasa_sign.core.pdf.PdfFile;
 
 import javax.imageio.ImageIO;
@@ -164,6 +165,10 @@ public final class ImageLoader {
                         kind[0] = KIND_MODEL;
                         return MAX_MODEL_SIZE;
                     }
+                    if (StructureLoader.isStructure(head, length)) {
+                        kind[0] = KIND_MODEL;
+                        return StructureLoader.MAX_SIZE;
+                    }
                     if (SplatLoader.isSplat(head, length, name)) {
                         kind[0] = KIND_SPLAT;
                         return MAX_SPLAT_SIZE;
@@ -210,9 +215,14 @@ public final class ImageLoader {
         }
     }
 
-    // 先頭のバイト列が 3D モデル (.glb / .gltf) らしいかどうか
+    // 先頭のバイト列が 3D モデル (.glb / .gltf) か構造物のファイル (.schem / .litematic / .nbt / .mcstructure / .schematic) らしいかどうか
     public static boolean isModel(byte[] head, int length) {
-        return GltfLoader.isGlb(head, length) || GltfLoader.looksLikeJson(head, length);
+        return GltfLoader.isGlb(head, length) || StructureLoader.isStructure(head, length) || GltfLoader.looksLikeJson(head, length);
+    }
+
+    // 先頭のバイト列が構造物のファイルらしいかどうか
+    public static boolean isStructure(byte[] head, int length) {
+        return StructureLoader.isStructure(head, length);
     }
 
     // 先頭のバイト列と名前がガウシアンスプラッティングのファイルらしいかどうか
@@ -233,13 +243,17 @@ public final class ImageLoader {
 
     // URL からダウンロードした内容を 3D モデルとして読み込む
     public static GltfScene model(String url, byte[] content) throws IOException {
+        if (StructureLoader.isStructure(content, Math.min(content.length, 512))) return StructureLoader.load(content);
         return scene(content, new ModelResources(url, content.length));
     }
 
     // ファイルを 3D モデルとして読み込む
     public static GltfScene model(File file) throws IOException {
-        if (file.length() > MAX_MODEL_SIZE) throw new IOException("Content size exceeds the limit of " + MAX_MODEL_SIZE + " bytes.");
-        return scene(Files.readAllBytes(file.toPath()), fileResources(file));
+        final long limit = Math.max(MAX_MODEL_SIZE, StructureLoader.MAX_SIZE);
+        if (file.length() > limit) throw new IOException("Content size exceeds the limit of " + limit + " bytes.");
+        final byte[] content = Files.readAllBytes(file.toPath());
+        if (StructureLoader.isStructure(content, Math.min(content.length, 512))) return StructureLoader.load(content);
+        return scene(content, fileResources(file));
     }
 
     private static GltfScene scene(byte[] content, GltfLoader.Resources resources) throws IOException {

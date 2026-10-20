@@ -20,7 +20,8 @@ final class FileBrowserPage extends Page {
             ".png", ".jpg", ".jpeg", ".gif", ".apng",
             ".glb", ".gltf",
             ".ply", ".spz", ".sog", ".splat", ".ksplat",
-            ".pdf"
+            ".pdf",
+            ".schem", ".schematic", ".litematic", ".nbt", ".mcstructure"
     };
 
     private final MainPage owner;
