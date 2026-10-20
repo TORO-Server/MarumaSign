@@ -36,10 +36,12 @@ abstract class UiScreenBase extends Screen {
     protected void init() {
         final Window window = minecraft.getWindow();
         ui.layout(window.getWidth(), window.getHeight());
+        Mc.startTextInput(minecraft, this);
     }
 
     @Override
     public void removed() {
+        Mc.stopTextInput(minecraft, this);
         ui.closed();
     }
 
