@@ -54,8 +54,9 @@ final class Mc {
         mc.gui.getChat().addMessage(new TextComponent(message));
     }
 
-    static KeyMapping newKey(String name, int keyCode) {
-        return new KeyMapping(name, InputConstants.Type.KEYSYM, keyCode, "key.categories.misc");
+    // B キーを既定にしたキー割り当てを作る
+    static KeyMapping newKey(String name) {
+        return new KeyMapping(name, InputConstants.Type.KEYSYM, 66, "key.categories.misc");
     }
 
     // 看板に書いてある文字を 1 つの文字列にする
