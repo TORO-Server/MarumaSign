@@ -83,6 +83,15 @@ final class Mc {
         System.arraycopy(lines, 0, messages, 0, 4);
     }
 
+    // 画面が文字の入力を受け付け始める、受け付けを終える
+    static void startTextInput(Minecraft mc, Object owner) {
+        mc.textInputManager().startTextInput(owner);
+    }
+
+    static void stopTextInput(Minecraft mc, Object owner) {
+        mc.textInputManager().stopTextInput(owner);
+    }
+
     // ---------- 動作確認用 ----------
 
     static void look(Minecraft mc, float pitch) {

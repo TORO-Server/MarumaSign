@@ -884,7 +884,13 @@ WRAPPER_CLASSIC = wrapper_classic("", "", "")
 
 
 def mc_source(title, imports, sign_type, screen_get, screen_set, chat, text, key, version, sign_text, edit_class, look, select, quads,
-              window="mc.getWindow()"):
+              window="mc.getWindow()", text_input=None):
+    text_input_block = ""
+    if text_input is not None:
+        text_input_block = f'''
+    // 画面が文字の入力を受け付け始める、受け付けを終える
+{text_input}
+'''
     quads_block = ""
     if quads:
         quads_block = f'''
@@ -958,7 +964,7 @@ final class Mc {{
         final String[] messages = Reflect.get(signMessages, screen);
         System.arraycopy(lines, 0, messages, 0, 4);
     }}
-{quads_block}
+{text_input_block}{quads_block}
     // ---------- 動作確認用 ----------
 
     static void look(Minecraft mc, float pitch) {{
@@ -1022,7 +1028,21 @@ SIGN_TEXT_SLOTS = '''        // 表、裏の順に並んでいる
                 text.append(line.getString());
             }
         }'''
-QUADS_ADD_VERTEX = '''        final PoseStack.Pose pose = poseStack.last();
+# 26.3 から入力が SDL になり、文字の入力は画面が開始を伝えたときだけ届く
+TEXT_INPUT_SDL = '''    static void startTextInput(Minecraft mc, Object owner) {
+        mc.textInputManager().startTextInput(owner);
+    }
+
+    static void stopTextInput(Minecraft mc, Object owner) {
+        mc.textInputManager().stopTextInput(owner);
+    }'''
+# 26.2 以前は、何もしなくても文字の入力が届く
+TEXT_INPUT_GLFW = '''    static void startTextInput(Minecraft mc, Object owner) {
+    }
+
+    static void stopTextInput(Minecraft mc, Object owner) {
+    }'''
+QUADS_ADD_VERTEX ='''        final PoseStack.Pose pose = poseStack.last();
         final float[] mesh = batch.vertices;
         final int[] colors = batch.colors;
         for (int i = 0; i < batch.vertexCount; i++) {
@@ -1048,7 +1068,8 @@ ERAS = {
                      "BlockEntityTypes.SIGN", "mc.gui.screen()", "mc.gui.setScreen(screen)",
                      "mc.gui.hud.getChat().addClientSystemMessage(Component.literal(message))", "Component.literal(text)",
                      KEY_CATEGORY_263, "SharedConstants.getCurrentVersion().name()", SIGN_TEXT_SLOTS, "AbstractSignEditScreen",
-                     "mc.player.setXRot(pitch)", "mc.player.getInventory().setSelectedSlot(slot)", None),
+                     "mc.player.setXRot(pitch)", "mc.player.getInventory().setSelectedSlot(slot)", None,
+                     text_input=TEXT_INPUT_SDL),
     ),
     # 26.2
     "v26_2": dict(
@@ -1057,7 +1078,8 @@ ERAS = {
                      "BlockEntityTypes.SIGN", "mc.gui.screen()", "mc.gui.setScreen(screen)",
                      "mc.gui.hud.getChat().addClientSystemMessage(Component.literal(message))", "Component.literal(text)",
                      KEY_CATEGORY, "SharedConstants.getCurrentVersion().name()", SIGN_TEXT_FRONT_BACK, "AbstractSignEditScreen",
-                     "mc.player.setXRot(pitch)", "mc.player.getInventory().setSelectedSlot(slot)", None),
+                     "mc.player.setXRot(pitch)", "mc.player.getInventory().setSelectedSlot(slot)", None,
+                     text_input=TEXT_INPUT_GLFW),
     ),
     # 26.1 - 26.1.2
     "v26_1": dict(
@@ -1066,7 +1088,8 @@ ERAS = {
                      "BlockEntityType.SIGN", "mc.screen", "mc.setScreen(screen)",
                      "mc.gui.getChat().addClientSystemMessage(Component.literal(message))", "Component.literal(text)",
                      KEY_CATEGORY, "SharedConstants.getCurrentVersion().name()", SIGN_TEXT_FRONT_BACK, "AbstractSignEditScreen",
-                     "mc.player.setXRot(pitch)", "mc.player.getInventory().setSelectedSlot(slot)", None),
+                     "mc.player.setXRot(pitch)", "mc.player.getInventory().setSelectedSlot(slot)", None,
+                     text_input=TEXT_INPUT_GLFW),
     ),
     # 1.21.9 - 1.21.11
     "v1_21_9": dict(
@@ -1075,7 +1098,8 @@ ERAS = {
                      "BlockEntityType.SIGN", "mc.screen", "mc.setScreen(screen)",
                      "mc.gui.getChat().addMessage(Component.literal(message))", "Component.literal(text)",
                      KEY_CATEGORY, "SharedConstants.getCurrentVersion().name()", SIGN_TEXT_FRONT_BACK, "AbstractSignEditScreen",
-                     "mc.player.setXRot(pitch)", "mc.player.getInventory().setSelectedSlot(slot)", None),
+                     "mc.player.setXRot(pitch)", "mc.player.getInventory().setSelectedSlot(slot)", None,
+                     text_input=TEXT_INPUT_GLFW),
         screen=SCREEN_GRAPHICS_2D, wrapper=WRAPPER_RS_121,
     ),
     # 1.21.6 - 1.21.8
