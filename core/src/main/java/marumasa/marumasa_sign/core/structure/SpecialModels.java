@@ -37,18 +37,24 @@ final class SpecialModels {
     }
 
     // 作った絵 (旗の模様を重ねたものなど) を、同じ内容なら使い回す
-    private static final Map<String, Sprite> COMPOSED = new ConcurrentHashMap<String, Sprite>();
+    private static final BoundedCache<String, Sprite> COMPOSED = new BoundedCache<String, Sprite>(256);
 
     private final BlockModels models;
     private final GameAssets assets;
     private final PlayerSkins skins;
     private final SignTexts signs;
+    final NestedSigns nested;
+    // 1 つの構造物で使う、看板の文字の絵と旗の絵の数の上限
+    private static final int MAX_TEXT_SPRITES = 64, MAX_BANNER_SPRITES = 64;
+    private final java.util.Set<Sprite> usedTexts = new java.util.HashSet<Sprite>();
+    private final java.util.Set<String> usedBanners = new java.util.HashSet<String>();
 
     SpecialModels(BlockModels models) {
         this.models = models;
         this.assets = models.assets();
         this.skins = new PlayerSkins(assets);
         this.signs = new SignTexts(assets);
+        this.nested = new NestedSigns();
     }
 
     private static boolean isChest(String path) {
@@ -70,16 +76,21 @@ final class SpecialModels {
                 || path.equals("moving_piston") || path.endsWith("_sign");
     }
 
-    void emit(StructureMesher mesher, BlockState state, Map<String, Object> entity, int x, int y, int z) {
+    /**
+     * 描く。ブロックのモデルを描かないほうがよいとき (MarumaSign の看板の板は消える) は true を返す。
+     */
+    boolean emit(StructureMesher mesher, BlockState state, Map<String, Object> entity, int x, int y, int z) {
         try {
-            emitChecked(mesher, state, entity == null ? new HashMap<String, Object>() : entity, x, y, z);
+            return emitChecked(mesher, state, entity == null ? new HashMap<String, Object>() : entity, x, y, z);
         } catch (IOException | RuntimeException e) {
             MarumaSign.LOGGER.info("Could not draw " + state + " (" + e + ")");
+            return false;
         }
     }
 
-    private void emitChecked(StructureMesher mesher, BlockState state, Map<String, Object> entity, int x, int y, int z) throws IOException {
+    private boolean emitChecked(StructureMesher mesher, BlockState state, Map<String, Object> entity, int x, int y, int z) throws IOException {
         final String path = state.path();
+        if (path.endsWith("_sign")) return signText(mesher, state, entity, mesher.structure().source, x, y, z);
         if (isChest(path)) chest(mesher, state, x, y, z);
         else if (path.endsWith("shulker_box")) shulkerBox(mesher, state, x, y, z);
         else if (path.endsWith("_banner")) banner(mesher, state, entity, mesher.structure().source, x, y, z);
@@ -99,12 +110,12 @@ final class SpecialModels {
         } else if (path.endsWith("copper_golem_statue")) copperGolem(mesher, state, x, y, z);
         else if (path.equals("end_portal") || path.equals("end_gateway")) endCube(mesher, path.equals("end_portal"), x, y, z);
         else if (path.equals("moving_piston")) movingPiston(mesher, entity, x, y, z);
-        else if (path.endsWith("_sign")) signText(mesher, state, entity, mesher.structure().source, x, y, z);
+        return false;
     }
 
     // ---------- 看板の文字 ----------
 
-    private void signText(StructureMesher mesher, BlockState state, Map<String, Object> entity, Structure.Source source, int x, int y, int z) {
+    private boolean signText(StructureMesher mesher, BlockState state, Map<String, Object> entity, Structure.Source source, int x, int y, int z) {
         final String path = state.path();
         final boolean hanging = path.endsWith("_hanging_sign");
         final boolean wall = path.contains("_wall_");
@@ -120,6 +131,15 @@ final class SpecialModels {
             }
             angle = rotation * 22.5f;
         }
+        // MarumaSign の看板 (吊り看板は対象外)。表と裏の行をつなげた文字が形式に合えば、板を消して中身を描く
+        if (!hanging) {
+            final marumasa.marumasa_sign.core.sign.SignSpec spec = signSpec(entity, source);
+            if (spec != null) {
+                final float scale = 1.0f / mesher.structure().step;
+                nested.emitSign(mesher, spec, angle, wall, new float[]{x, y, z}, scale);
+                return true;
+            }
+        }
         for (int side = 0; side < 2; side++) {
             final Object[] text = signSide(entity, side == 0, source);
             if (text == null) continue;
@@ -132,6 +152,11 @@ final class SpecialModels {
             final int outline = glowing ? dark : -1;
             final Sprite sprite = signs.render(lines, hanging ? 9 : 10, hanging ? 60 : 90, color, outline);
             if (sprite == null) continue;
+            // 違う文字の看板は 1 つずつ絵になるので、数に上限を設ける (まとめた画像が大きくなりすぎないように)
+            if (!usedTexts.contains(sprite)) {
+                if (usedTexts.size() >= MAX_TEXT_SPRITES) continue;
+                usedTexts.add(sprite);
+            }
             final Transform t = Transform.identity();
             if (hanging) {
                 t.translate(0.5f, 0.9375f, 0.5f).rotateY(-angle).translate(0, -0.3125f, 0);
@@ -168,6 +193,20 @@ final class SpecialModels {
             // 光る文字は明るさを付けない
             mesher.addQuad(StructureMesher.LAYER_CUTOUT, positions, uvs, 0xFFFFFFFF, sprite, !glowing);
         }
+        return false;
+    }
+
+    // 看板のデータの文字 (表、裏の順に行をつなげたもの) が MarumaSign の形式なら、その内容。そうでなければ null
+    static marumasa.marumasa_sign.core.sign.SignSpec signSpec(Map<String, Object> entity, Structure.Source source) {
+        final List<List<SignTexts.Run>> all = new ArrayList<List<SignTexts.Run>>();
+        for (int side = 0; side < 2; side++) {
+            final Object[] text = signSide(entity, side == 0, source);
+            if (text != null) {
+                @SuppressWarnings("unchecked") final List<List<SignTexts.Run>> lines = (List<List<SignTexts.Run>>) text[0];
+                all.addAll(lines);
+            }
+        }
+        return NestedSigns.spec(all);
     }
 
     private static void reverse(float[] values, int stride) {
@@ -388,8 +427,13 @@ final class SpecialModels {
     // 旗の絵 (下地に模様を重ねたもの)。BannerRenderer は模様を 1 枚ずつ重ねて描く
     private Sprite bannerTexture(int base, List<Object[]> patterns) {
         final StringBuilder key = new StringBuilder("banner:").append(base);
-        for (Object[] pattern : patterns) key.append('|').append(pattern[0]).append(':').append(pattern[1]);
+        for (int i = 0; i < patterns.size() && i < 16; i++) key.append('|').append(patterns.get(i)[0]).append(':').append(patterns.get(i)[1]);
         final String id = key.toString();
+        // 違う模様の旗は 1 つずつ絵になるので、数に上限を設ける。超えたら模様を付けない
+        if (!usedBanners.contains(id)) {
+            if (usedBanners.size() >= MAX_BANNER_SPRITES) return sprite("minecraft:entity/banner/banner_base");
+            usedBanners.add(id);
+        }
         Sprite sprite = COMPOSED.get(id);
         if (sprite != null) return sprite;
         final Sprite background = sprite("minecraft:entity/banner/banner_base");
@@ -678,7 +722,17 @@ final class SpecialModels {
 
     // ---------- 文字ディスプレイ ----------
 
+    private int textDisplays;
+
+    // 構造物を描き始めるときに呼ぶ (粗くしてやり直すときも)
+    void startPass() {
+        textDisplays = 0;
+    }
+
     void textDisplay(StructureMesher mesher, List<SignTexts.Run> runs, int lineWidth, int background, int opacity, String alignment, Transform transform) {
+        // 文字ディスプレイは 1 つずつ絵になるので、数に上限を設ける
+        if (textDisplays >= MAX_TEXT_SPRITES) return;
+        textDisplays++;
         final Object[] block = signs.renderBlock(runs, lineWidth, alignment, background, opacity);
         final Sprite sprite = (Sprite) block[0];
         final int width = (Integer) block[1], height = (Integer) block[2];
@@ -840,9 +894,14 @@ final class SpecialModels {
 
     // ---------- エンティティ ----------
 
+    // 描くエンティティの数の上限
+    static final int MAX_ENTITIES = 4096;
+
     void emitEntities(StructureMesher mesher, Structure structure) {
         if (entities == null) entities = new Entities(this, models);
+        int count = 0;
         for (Structure.Entity entity : structure.entities()) {
+            if (++count > MAX_ENTITIES) break;
             try {
                 entities.emit(mesher, entity, structure);
             } catch (IOException | RuntimeException e) {

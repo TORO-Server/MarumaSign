@@ -19,6 +19,21 @@ public final class StructureDump {
             StructureFixer.fix(structure);
             System.out.println(" after fix:");
             for (int id = 0; id < structure.paletteSize(); id++) System.out.println("  " + id + " " + structure.state(id));
+            // エンティティと、そのまわり (3 x 3 x 3) にあるブロックの数 (0 なら宙に浮いている)
+            System.out.println(" entities:");
+            for (Structure.Entity entity : structure.entities()) {
+                int near = 0;
+                for (int dy = -1; dy <= 1; dy++) {
+                    for (int dz = -1; dz <= 1; dz++) {
+                        for (int dx = -1; dx <= 1; dx++) {
+                            final int x = (int) Math.floor(entity.x) + dx, y = (int) Math.floor(entity.y) + dy, z = (int) Math.floor(entity.z) + dz;
+                            if (x < 0 || y < 0 || z < 0 || x >= structure.sizeX || y >= structure.sizeY || z >= structure.sizeZ) continue;
+                            if (!structure.state(structure.id(x, y, z)).name.endsWith(":air")) near++;
+                        }
+                    }
+                }
+                System.out.println(String.format("  %s %.2f %.2f %.2f near=%d", entity.id, entity.x, entity.y, entity.z, near));
+            }
         }
     }
 }

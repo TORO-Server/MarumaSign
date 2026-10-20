@@ -54,9 +54,16 @@ final class Sprite {
         return new Sprite(id, width, height, new int[][]{pixels}, null, null, false, false);
     }
 
+    // 作ったアニメーション (看板の GIF など)。times は tick 単位
+    static Sprite animated(String id, int width, int height, int[][] frames, int[] sequence, int[] times) {
+        return new Sprite(id, width, height, frames, sequence, times, false, false);
+    }
+
     boolean isAnimated() {
         return sequence != null && sequence.length > 1;
     }
+
+    private static final Sprite MISSING_SPRITE = missing();
 
     // テクスチャがないときの、紫と黒の市松模様 (Minecraft と同じ)
     static Sprite missing() {
@@ -82,8 +89,9 @@ final class Sprite {
             sprite = null;
         }
         if (sprite == null) {
-            MISSING.add(key);
-            sprite = missing();
+            // ないテクスチャは覚えない (名前は構造物のファイルの中身で決まることがあり、いくらでも増えうる)
+            if (MISSING.size() < 256) MISSING.add(key);
+            return MISSING_SPRITE;
         }
         CACHE.put(key, sprite);
         return sprite;

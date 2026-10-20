@@ -1277,6 +1277,8 @@ def run(args):
             "-Dmarumasign.selftest.item=true",
             f"-Dmarumasign.uploadUrl=http://127.0.0.1:{host.port}/upload",
             f"-Dmarumasign.shortenUrl=http://127.0.0.1:{host.port}/shorten",
+            # 確認用の画像はこのコンピューターの中のサーバーから配るので、手元の URL を読めるようにする
+            "-Dmarumasign.allowLocalUrls=true",
         ] + ([f"-Dmarumasign.selftest.server=127.0.0.1:{args.port}"] if mod_join else [])
             + asset_jvm_args(main_dir)
             + os.environ.get("MARUMASIGN_VERIFY_JVM_ARGS", "").split())

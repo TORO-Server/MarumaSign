@@ -28,9 +28,12 @@ public final class PdfFile {
     private final PDDocument document;
     private final PDFRenderer renderer;
     private final int pageCount;
+    // ファイルの大きさ (バイト)
+    private final long size;
 
-    private PdfFile(PDDocument document) throws IOException {
+    private PdfFile(PDDocument document, long size) throws IOException {
         this.document = document;
+        this.size = size;
         this.pageCount = document.getNumberOfPages();
         if (pageCount <= 0) {
             document.close();
@@ -56,7 +59,7 @@ public final class PdfFile {
     public static PdfFile open(byte[] content) throws IOException {
         SystemFonts.install();
         try {
-            return new PdfFile(PDDocument.load(content));
+            return new PdfFile(PDDocument.load(content), content.length);
         } catch (RuntimeException e) {
             // 壊れたファイルでは、読み込みの途中で想定外の例外が出ることがある
             throw new IOException("Not a readable PDF", e);
@@ -67,7 +70,7 @@ public final class PdfFile {
         if (file.length() > MAX_SIZE) throw new IOException("Content size exceeds the limit of " + MAX_SIZE + " bytes.");
         SystemFonts.install();
         try {
-            return new PdfFile(PDDocument.load(file));
+            return new PdfFile(PDDocument.load(file), file.length());
         } catch (RuntimeException e) {
             throw new IOException("Not a readable PDF", e);
         }
@@ -75,6 +78,10 @@ public final class PdfFile {
 
     public int pageCount() {
         return pageCount;
+    }
+
+    public long size() {
+        return size;
     }
 
     /**

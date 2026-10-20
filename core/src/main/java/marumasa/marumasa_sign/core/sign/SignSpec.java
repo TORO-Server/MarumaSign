@@ -44,20 +44,26 @@ public final class SignSpec {
         return false;
     }
 
+    // 数値の上限 (画面で入力できる範囲と同じ)。看板は誰でも書けるので、とても大きな画像で空を覆うようなことはさせない
+    public static final float MAX_VALUE = 1000f;
+
     public static SignSpec parse(String text) {
         if (!looksLikeSign(text)) return null;
         final String[] p = text.split("\\|");
         if (p.length < PARAMETER_COUNT) return null;
-        try {
-            return new SignSpec(
-                    p[0],
-                    Float.parseFloat(p[1]), Float.parseFloat(p[2]), Float.parseFloat(p[3]),
-                    Float.parseFloat(p[4]), Float.parseFloat(p[5]),
-                    Float.parseFloat(p[6]), Float.parseFloat(p[7]), Float.parseFloat(p[8])
-            );
-        } catch (NumberFormatException e) {
-            return null;
+        final float[] values = new float[PARAMETER_COUNT - 1];
+        for (int i = 0; i < values.length; i++) {
+            final float value;
+            try {
+                value = Float.parseFloat(p[i + 1]);
+            } catch (NumberFormatException e) {
+                return null;
+            }
+            // NaN や無限大では、描く位置や大きさが決まらない
+            if (Float.isNaN(value) || Float.isInfinite(value)) return null;
+            values[i] = Math.max(-MAX_VALUE, Math.min(MAX_VALUE, value));
         }
+        return new SignSpec(p[0], values[0], values[1], values[2], values[3], values[4], values[5], values[6], values[7]);
     }
 
     public static boolean isSign(String text) {

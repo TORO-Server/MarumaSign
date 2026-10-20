@@ -51,7 +51,8 @@ final class Items {
             } catch (IOException | RuntimeException e) {
                 definition = Collections.emptyMap();
             }
-            definitions.put(id, definition);
+            // ないアイテムは覚えない (名前は構造物のファイルの中身で決まる)
+            if (!definition.isEmpty()) definitions.put(id, definition);
         }
         return definition;
     }
@@ -71,6 +72,17 @@ final class Items {
             // 定義のないアイテム (別の Mod のものなど) は、紫と黒の模様の立方体にする
             emitModel(mesher, "minecraft:missing", Collections.<Object>emptyList(), components(item), context, transform, Collections.<String, Object>emptyMap());
             return;
+        }
+        // MarumaSign の看板の文字を持つ看板のアイテムは、ゲームでも看板と同じものが表示される
+        if (id.endsWith("_sign") && !id.endsWith("_hanging_sign")) {
+            Map<String, Object> data = Nbt.compound(components(item), "minecraft:block_entity_data");
+            if (data.isEmpty()) data = Nbt.compound(Nbt.compound(item, "tag"), "BlockEntityTag");
+            final marumasa.marumasa_sign.core.sign.SignSpec spec = data.isEmpty() ? null : SpecialModels.signSpec(data, Structure.Source.JAVA);
+            if (spec != null) {
+                final BlockModels.ItemModel model = models.itemModel("minecraft:item/" + id.substring(id.indexOf(':') + 1));
+                special.nested.emitItem(mesher, spec, withDisplay(transform, model, context));
+                return;
+            }
         }
         emitNode(mesher, definition, item, components(item), context, transform, 0);
     }

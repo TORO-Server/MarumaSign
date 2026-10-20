@@ -31,6 +31,8 @@ final class MediaSession {
     private boolean ready;
     private boolean failed;
     private long lastUsed = System.currentTimeMillis();
+    // 再生してよいか。同時に再生する数の上限の中に入っていれば true (SignManager が決める)
+    private boolean allowed;
 
     // 映像を貼るテクスチャと、その内容を受け取るための配列
     private Object texture;
@@ -107,11 +109,30 @@ final class MediaSession {
         lastUsed = System.currentTimeMillis();
         if (distance < nearestDistance) nearestDistance = distance;
         if (player == null) {
-            start();
+            if (allowed) start();
             return;
         }
         if (texture != null && player.pollFrame(pixels)) {
             platform.updateTexture(texture, width, height, pixels);
+        }
+    }
+
+    // 描かれていて、再生したいかどうか
+    boolean isWanted() {
+        return !failed && System.currentTimeMillis() - lastUsed <= IDLE_MILLIS;
+    }
+
+    // 最も近い看板までの、最近の距離 (ブロック)
+    double recentDistance() {
+        return nearestDistance != Double.MAX_VALUE ? nearestDistance : lastDistance;
+    }
+
+    // 再生してよいかを決める。止められたら、再生を止めて最後のフレームを残す (また許されたら最初から再生する)
+    void setAllowed(boolean value) {
+        allowed = value;
+        if (!value && player != null) {
+            player.stop();
+            player = null;
         }
     }
 

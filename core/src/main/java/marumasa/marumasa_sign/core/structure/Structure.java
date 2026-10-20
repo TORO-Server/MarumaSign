@@ -13,7 +13,7 @@ import java.util.Map;
 public final class Structure {
 
     // 持つブロックの数の上限。これより大きい構造物は間引く
-    static final int MAX_CELLS = 32 * 1024 * 1024;
+    static final int MAX_CELLS = 16 * 1024 * 1024;
     // 1 辺の長さの上限
     static final int MAX_EDGE = 1 << 16;
 

@@ -21,9 +21,10 @@ import java.util.TreeMap;
 public final class StructureReader {
 
     // 展開したあとの大きさの上限
-    static final int MAX_DECOMPRESSED = 512 * 1024 * 1024;
+    // (小さく圧縮した巨大なファイルで、ゲームのメモリを使い切らせないように)
+    static final int MAX_DECOMPRESSED = 96 * 1024 * 1024;
     // 1 つの領域で読むます目の数の上限 (壊れたファイルで、長い時間かからないように)
-    static final long MAX_SCANNED = 512L * 1024 * 1024;
+    static final long MAX_SCANNED = 128L * 1024 * 1024;
 
     private StructureReader() {
     }
@@ -290,11 +291,17 @@ public final class StructureReader {
                 structure.setBlockEntity(offsetX + Nbt.integer(entity, "x", 0), offsetY + Nbt.integer(entity, "y", 0),
                         offsetZ + Nbt.integer(entity, "z", 0), entity);
             }
+            // エンティティの位置は、最も小さい角ではなく、領域の位置 (Position) からの位置
+            // (大きさが負の領域では、両者がずれる)
+            final Map<String, Object> position = Nbt.compound(region, "Position");
+            final int entityX = Nbt.integer(position, "x", 0) - minX;
+            final int entityY = Nbt.integer(position, "y", 0) - minY;
+            final int entityZ = Nbt.integer(position, "z", 0) - minZ;
             for (Object entityItem : Nbt.list(region, "Entities")) {
                 final Map<String, Object> entity = Nbt.compound(entityItem);
                 final double[] pos = Nbt.doubles(entity.get("Pos"));
                 if (pos == null || pos.length < 3) continue;
-                structure.addEntity(Nbt.string(entity, "id", ""), offsetX + pos[0], offsetY + pos[1], offsetZ + pos[2], entity);
+                structure.addEntity(Nbt.string(entity, "id", ""), entityX + pos[0], entityY + pos[1], entityZ + pos[2], entity);
             }
         }
         return structure;

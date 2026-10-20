@@ -17,9 +17,13 @@ import java.util.concurrent.ConcurrentHashMap;
  */
 final class PlayerSkins {
 
-    private static final Map<String, Sprite> CACHE = new ConcurrentHashMap<String, Sprite>();
+    private static final BoundedCache<String, Sprite> CACHE = new BoundedCache<String, Sprite>(128);
+
+    // 1 つの構造物で、スキンをサーバーに問い合わせる数の上限
+    private static final int MAX_LOOKUPS = 16;
 
     private final GameAssets assets;
+    private int lookups;
 
     PlayerSkins(GameAssets assets) {
         this.assets = assets;
@@ -30,6 +34,8 @@ final class PlayerSkins {
         final String key = profile[0] + "|" + profile[1] + "|" + profile[2];
         Sprite sprite = CACHE.get(key);
         if (sprite != null) return sprite;
+        if (lookups >= MAX_LOOKUPS) return Sprite.get(assets, "minecraft:entity/player/wide/steve");
+        lookups++;
         sprite = load(profile);
         if (sprite == null) sprite = Sprite.get(assets, "minecraft:entity/player/wide/steve");
         CACHE.put(key, sprite);

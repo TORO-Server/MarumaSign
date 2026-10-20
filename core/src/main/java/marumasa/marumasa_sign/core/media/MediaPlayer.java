@@ -1,6 +1,8 @@
 package marumasa.marumasa_sign.core.media;
 
 import marumasa.marumasa_sign.core.MarumaSign;
+import marumasa.marumasa_sign.core.net.FilteringProxy;
+import marumasa.marumasa_sign.core.net.UrlPolicy;
 
 import javax.sound.sampled.AudioFormat;
 import javax.sound.sampled.AudioSystem;
@@ -29,7 +31,8 @@ import java.util.List;
  */
 public final class MediaPlayer {
 
-    // FFmpeg に許可する通信の種類。ローカルのファイルなどは読ませない
+    // FFmpeg に許可する通信の種類。ローカルのファイルなどは読ませない。
+    // http と https の行き先は FilteringProxy が確かめる (手元や家の中のネットワークにはつながせない)
     static final String PROTOCOLS = "http,https,tcp,tls,crypto,httpproxy";
     // 通信が止まってから諦めるまでの時間 (マイクロ秒)。止まったライブ配信を待ち続けないようにする
     static final String NETWORK_TIMEOUT = "15000000";
@@ -156,6 +159,7 @@ public final class MediaPlayer {
     private void run() {
         boolean ready = false;
         try {
+            if (!UrlPolicy.isAllowed(url)) throw new IOException("Blocked URL: " + url);
             final MediaInfo info = MediaInfo.probe(url);
             if (stopped) return;
 
@@ -275,7 +279,9 @@ public final class MediaPlayer {
             startAudioThread(server);
         }
 
-        final Process started = new ProcessBuilder(command).redirectErrorStream(false).start();
+        final ProcessBuilder builder = new ProcessBuilder(command);
+        FilteringProxy.apply(builder, url);
+        final Process started = builder.redirectErrorStream(false).start();
         process = started;
         started.getOutputStream().close();
         final StringBuilder errors = new StringBuilder();

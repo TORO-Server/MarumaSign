@@ -43,18 +43,35 @@ public final class StructureLoader {
         return loadDetailed(content).scene;
     }
 
+    // 構造物は 1 つずつ読み込む (大きな構造物の看板がいくつも同時に読み込まれて、メモリを使い切らないように)。
+    // 看板の中の構造物は同じスレッドで読み込むので、同じスレッドからは入り直せるロックにする
+    private static final java.util.concurrent.locks.ReentrantLock LOCK = new java.util.concurrent.locks.ReentrantLock(true);
+
     public static Result loadDetailed(byte[] content) throws IOException {
         if (content.length > MAX_SIZE) throw new IOException("Content size exceeds the limit of " + MAX_SIZE + " bytes.");
+        LOCK.lock();
+        try {
+            // いちばん外側の構造物なら、看板の中身を読んだ数を数え直す
+            if (LOCK.getHoldCount() == 1) NestedSigns.startTopLevel();
+            return loadLocked(content);
+        } finally {
+            LOCK.unlock();
+        }
+    }
+
+    private static Result loadLocked(byte[] content) throws IOException {
         Structure structure = StructureReader.read(content);
         StructureFixer.fix(structure);
         final GameAssets assets = GameAssets.get();
         final BlockModels blockModels = models(assets);
         final BiomeColors biomeColors = biomes(assets);
+        // 看板の中身などの読み込み結果を、粗くしてやり直すときにも使い回す
+        final SpecialModels special = new SpecialModels(blockModels);
         while (true) {
-            final StructureMesher mesher = new StructureMesher(structure, BlockData.get(), blockModels, biomeColors, new SpecialModels(blockModels));
+            final StructureMesher mesher = new StructureMesher(structure, BlockData.get(), blockModels, biomeColors, special);
             mesher.build();
             final StructureMesher.Output output = mesher.output();
-            if (output.quadCount > MAX_QUADS && structure.sizeX * structure.sizeY * structure.sizeZ > 1) {
+            if ((output.quadCount > MAX_QUADS || output.overflow) && structure.sizeX * structure.sizeY * structure.sizeZ > 1) {
                 MarumaSign.LOGGER.info("Structure has " + output.quadCount + " faces; drawing it with fewer blocks");
                 structure = structure.halve();
                 continue;
