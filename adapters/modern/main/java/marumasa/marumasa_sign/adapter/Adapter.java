@@ -60,6 +60,7 @@ public final class Adapter {
             MarumaSign.init(new PlatformImpl(loaderName));
             active = true;
             registerKey(mc);
+            UseKey.install(mc);
         }
         if (!active) return;
 

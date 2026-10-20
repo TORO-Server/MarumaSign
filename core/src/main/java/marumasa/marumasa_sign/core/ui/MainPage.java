@@ -11,7 +11,10 @@ import marumasa.marumasa_sign.core.image.DecodedImage;
 import marumasa.marumasa_sign.core.image.ImageLoader;
 import marumasa.marumasa_sign.core.media.MediaTools;
 import marumasa.marumasa_sign.core.net.Http;
+import marumasa.marumasa_sign.core.pdf.PdfFile;
 import marumasa.marumasa_sign.core.sign.SignSpec;
+import marumasa.marumasa_sign.core.splat.SplatLoader;
+import marumasa.marumasa_sign.core.splat.SplatScene;
 
 import java.awt.image.BufferedImage;
 import java.io.File;
@@ -194,11 +197,13 @@ public final class MainPage extends Page {
 
     // プレビューの画像の一辺の長さ (3D モデルの場合)
     private static final int MODEL_PREVIEW_SIZE = 256;
+    // PDF のプレビューの、長い辺の大きさ
+    private static final int PDF_PREVIEW_SIZE = 384;
 
     // ファイルの先頭のバイト列を読む
     private static byte[] readHead(File file) throws IOException {
         if (!file.isFile()) throw new IOException(Lang.get("ui.status.file_not_found", file.getPath()));
-        final byte[] head = new byte[16];
+        final byte[] head = new byte[512];
         final int length;
         final InputStream input = new FileInputStream(file);
         try {
@@ -221,6 +226,27 @@ public final class MainPage extends Page {
     private static boolean isModelFile(File file) throws IOException {
         final byte[] head = readHead(file);
         return ImageLoader.isModel(head, head.length);
+    }
+
+    // Gaussian Splatting のファイルかどうか
+    private static boolean isSplatFile(File file) throws IOException {
+        final byte[] head = readHead(file);
+        return SplatLoader.isSplat(head, head.length, file.getName());
+    }
+
+    // PDF ファイルかどうか
+    private static boolean isPdfFile(File file) throws IOException {
+        final byte[] head = readHead(file);
+        return PdfFile.isPdf(head, head.length);
+    }
+
+    // PDF の最初のページを、プレビューの大きさの画像にする
+    private static BufferedImage pdfPreview(PdfFile pdf) throws IOException {
+        try {
+            return toBufferedImage(pdf.render(0, PDF_PREVIEW_SIZE));
+        } finally {
+            pdf.close();
+        }
     }
 
     private static BufferedImage toBufferedImage(DecodedImage image) {
@@ -247,25 +273,60 @@ public final class MainPage extends Page {
             String info = "";
             try {
                 final boolean[] isImage = new boolean[1];
+                final boolean[] isModel = new boolean[1];
+                final boolean[] isSplat = new boolean[1];
+                final boolean[] isPdf = new boolean[1];
                 GltfScene model = null;
+                SplatScene splat = null;
+                PdfFile pdf = null;
                 final byte[] bytes;
                 if (Http.isHttpUrl(text)) {
-                    bytes = Http.download(text, new Http.HeadCheck() {
+                    final String[] resolvedName = new String[]{text};
+                    bytes = Http.download(text, new Http.ContentCheck() {
                         @Override
-                        public boolean accept(byte[] head, int length) {
-                            isImage[0] = ImageLoader.isSupportedImage(head, length);
-                            return isImage[0] || ImageLoader.isModel(head, length);
+                        public int maxBytes(byte[] head, int length, String name) {
+                            resolvedName[0] = name;
+                            if (ImageLoader.isSupportedImage(head, length)) {
+                                isImage[0] = true;
+                                return Http.MAX_SIZE;
+                            }
+                            if (PdfFile.isPdf(head, length)) {
+                                isPdf[0] = true;
+                                return PdfFile.MAX_SIZE;
+                            }
+                            if (ImageLoader.isModel(head, length)) {
+                                isModel[0] = true;
+                                return ImageLoader.MAX_MODEL_SIZE;
+                            }
+                            if (SplatLoader.isSplat(head, length, name)) {
+                                isSplat[0] = true;
+                                return ImageLoader.MAX_SPLAT_SIZE;
+                            }
+                            return 0;
                         }
-                    }, ImageLoader.MAX_MODEL_SIZE);
-                    if (bytes != null && !isImage[0]) model = ImageLoader.model(text, bytes);
+                    });
+                    if (bytes != null && isPdf[0]) pdf = PdfFile.open(bytes);
+                    else if (bytes != null && isModel[0]) model = ImageLoader.model(resolvedName[0], bytes);
+                    else if (bytes != null && isSplat[0]) splat = ImageLoader.splat(resolvedName[0], bytes);
                 } else {
                     final File file = new File(text);
                     bytes = readImageFile(file);
-                    if (bytes == null && isModelFile(file)) model = loadModelFile(file);
+                    if (bytes == null) {
+                        if (isPdfFile(file)) pdf = PdfFile.open(file);
+                        else if (isModelFile(file)) model = loadModelFile(file);
+                        else if (isSplatFile(file)) splat = loadSplatFile(file);
+                    }
                 }
-                if (model != null) {
+                if (pdf != null) {
+                    final int pages = pdf.pageCount();
+                    image = pdfPreview(pdf);
+                    info = Lang.get("ui.preview.pdf", pages);
+                } else if (model != null) {
                     image = GltfPreview.render(model, 0f, MODEL_PREVIEW_SIZE);
                     info = Lang.get("ui.preview.model", model.model().triangleCount());
+                } else if (splat != null) {
+                    image = splat.renderPreview(MODEL_PREVIEW_SIZE);
+                    info = Lang.get("ui.preview.splat", splat.cloud().count);
                 } else {
                     if (bytes != null) {
                         final DecodedImage decoded = ImageLoader.decode(bytes);
@@ -371,6 +432,16 @@ public final class MainPage extends Page {
         }
     }
 
+    // Gaussian Splatting のファイルを読み込む
+    private static SplatScene loadSplatFile(File file) {
+        try {
+            return ImageLoader.splat(file);
+        } catch (IOException e) {
+            MarumaSign.LOGGER.info("Could not load the splat file: " + e.getMessage());
+            return null;
+        }
+    }
+
     private String upload(File file) throws IOException {
         final byte[] bytes = readImageFile(file);
         File packed = null;
@@ -378,6 +449,15 @@ public final class MainPage extends Page {
             try {
                 ImageLoader.decode(bytes);
             } catch (IOException e) {
+                throw new IOException(Lang.get("ui.status.not_image"));
+            }
+        } else if (isPdfFile(file)) {
+            if (file.length() > PdfFile.MAX_SIZE) throw new IOException(Lang.get("ui.status.file_too_large", 64));
+            try {
+                // 表示できる PDF かどうかを確かめる
+                PdfFile.open(file).close();
+            } catch (IOException e) {
+                MarumaSign.LOGGER.info("Could not load the PDF: " + e.getMessage());
                 throw new IOException(Lang.get("ui.status.not_image"));
             }
         } else if (isModelFile(file)) {
@@ -395,6 +475,15 @@ public final class MainPage extends Page {
             } catch (IOException e) {
                 if (packed != null) packed.delete();
                 MarumaSign.LOGGER.info("Could not load the model: " + e.getMessage());
+                throw new IOException(Lang.get("ui.status.not_image"));
+            }
+        } else if (isSplatFile(file)) {
+            if (file.length() > ImageLoader.MAX_SPLAT_SIZE) throw new IOException(Lang.get("ui.status.file_too_large", 200));
+            final byte[] content = Files.readAllBytes(file.toPath());
+            try {
+                SplatLoader.load(content, file.getName());
+            } catch (IOException e) {
+                MarumaSign.LOGGER.info("Could not load the splat file: " + e.getMessage());
                 throw new IOException(Lang.get("ui.status.not_image"));
             }
         } else {

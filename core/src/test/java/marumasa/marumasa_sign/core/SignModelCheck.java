@@ -29,6 +29,11 @@ public final class SignModelCheck {
         MarumaSign.init(platform);
         MarumaSign.config().setVolume(0);
 
+        final double camAngle = Math.toRadians(yaw - 30), camPitch = Math.toRadians(20);
+        final float camX = 0.5f - (float) (Math.sin(camAngle) * Math.cos(camPitch) * 4.0);
+        final float camY = 0.5f + (float) (Math.sin(camPitch) * 4.0);
+        final float camZ = 0.5f + (float) (Math.cos(camAngle) * Math.cos(camPitch) * 4.0);
+
         SignImage image = null;
         final long begin = System.nanoTime();
         long loadedAt = -1;
@@ -38,7 +43,7 @@ public final class SignModelCheck {
             platform.runTasks();
             image = MarumaSign.sign(text);
             if (image == null) throw new IllegalStateException("not a sign text");
-            image.batches(yaw, wall, 4.0);
+            image.batches(yaw, wall, 4.0, camX, camY, camZ);
             if (image.isLoaded() && loadedAt < 0) loadedAt = elapsed;
             if (loadedAt >= 0 && elapsed - loadedAt >= seconds * 1000) break;
             if (image.textureEntry().state() == marumasa.marumasa_sign.core.sign.TextureEntry.ERROR) break;
@@ -47,7 +52,7 @@ public final class SignModelCheck {
         }
 
         final long start = System.nanoTime();
-        final SignImage.Batch[] batches = image.batches(yaw, wall, 4.0);
+        final SignImage.Batch[] batches = image.batches(yaw, wall, 4.0, camX, camY, camZ);
         final long built = System.nanoTime();
         int vertexCount = 0;
         for (SignImage.Batch batch : batches) vertexCount += batch.vertexCount;
@@ -87,7 +92,7 @@ public final class SignModelCheck {
                 view[o + 4] = batch.vertices[o + 4];
             }
             GltfPreview.draw(frame, depth, SIZE, view, batch.colors, batch.vertexCount,
-                    texture.width, texture.height, texture.pixels, false);
+                    texture.width, texture.height, texture.pixels, batch.blend);
         }
 
         final BufferedImage picture = new BufferedImage(SIZE, SIZE, BufferedImage.TYPE_INT_RGB);

@@ -6,6 +6,7 @@ import marumasa.marumasa_sign.core.util.Reflect;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.renderer.blockentity.BlockEntityRenderDispatcher;
 import net.minecraft.client.renderer.blockentity.BlockEntityRenderer;
+import net.minecraft.core.BlockPos;
 import net.minecraft.world.level.block.StandingSignBlock;
 import net.minecraft.world.level.block.WallSignBlock;
 import net.minecraft.world.level.block.entity.SignBlockEntity;
@@ -68,7 +69,9 @@ final class SignRendererBase extends BlockEntityRenderer<SignBlockEntity> {
         } else {
             return;
         }
-        final SignImage.Batch[] batches = image.batches(yaw, wall, Math.sqrt(x * x + y * y + z * z));
+        final BlockPos pos = sign.getBlockPos();
+        final SignImage.Batch[] batches = image.batches(yaw, wall, Math.sqrt(x * x + y * y + z * z),
+                (float) -x, (float) -y, (float) -z, pos.getX(), pos.getY(), pos.getZ());
 
         GL11.glPushMatrix();
         GL11.glTranslated(x, y, z);
@@ -96,11 +99,13 @@ final class SignRendererBase extends BlockEntityRenderer<SignBlockEntity> {
             Minecraft.getInstance().getTextureManager().bind(((Tex) batch.texture).id);
             if (batch.colors != null) {
                 // 3D モデルは裏を向いた面と、透明な部分を描かない
-                GL11.glEnable(GL11.GL_CULL_FACE);
+                if (batch.doubleSided) GL11.glDisable(GL11.GL_CULL_FACE);
+                else GL11.glEnable(GL11.GL_CULL_FACE);
                 GL11.glEnable(GL11.GL_ALPHA_TEST);
                 GL11.glAlphaFunc(GL11.GL_GREATER, 0.1f);
                 GL11.glDepthMask(!batch.blend);
                 ModelArrays.draw(batch);
+                if (batch.blend && batch.doubleSided) depthPass(batch);
                 continue;
             }
             final float[] mesh = batch.vertices;
@@ -122,6 +127,20 @@ final class SignRendererBase extends BlockEntityRenderer<SignBlockEntity> {
             GL11.glEnd();
         }
         GL11.glPopAttrib();
+    }
+
+    /**
+     * 半透明の面 (ガウシアンスプラッティング) の、ほぼ不透明な部分の奥行きだけを記録する。
+     * 色は奥行きを記録せずに描くので、そのままだと後から描かれる空や雲 (影 Mod では特に) に上書きされてしまう。
+     * 色を描き終えてから奥行きだけを書くので、重なりの順番には影響しない。
+     */
+    private static void depthPass(SignImage.Batch batch) {
+        GL11.glColorMask(false, false, false, false);
+        GL11.glDepthMask(true);
+        GL11.glAlphaFunc(GL11.GL_GREATER, 0.5f);
+        ModelArrays.draw(batch);
+        GL11.glAlphaFunc(GL11.GL_GREATER, 0.1f);
+        GL11.glColorMask(true, true, true, true);
     }
 
     @Override

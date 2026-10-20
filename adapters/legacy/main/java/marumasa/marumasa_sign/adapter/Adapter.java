@@ -48,6 +48,7 @@ public final class Adapter {
                 // 読めない値なら既定のキーのままにする
             }
         }
+        UseKey.install(mc);
         KeyBinding.resetKeyBindingArrayAndHash();
         return true;
     }

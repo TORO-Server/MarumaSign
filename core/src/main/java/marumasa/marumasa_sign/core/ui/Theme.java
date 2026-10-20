@@ -300,6 +300,58 @@ public final class Theme {
         }
     }
 
+    // 看板の PDF に重ねる、ページ送りの帯の高さと、ボタンの大きさ
+    public static final int PAGE_BAR_HEIGHT = 28;
+    public static final int PAGE_BUTTON_WIDTH = 40;
+    public static final int PAGE_BUTTON_MARGIN = 3;
+
+    /**
+     * 看板の PDF に重ねる、ページ送りの帯を描く。左右にページを戻す・進めるボタン、中央に「現在のページ / 総ページ数」。
+     *
+     * @param previousState 戻すボタンの状態 (Button.NORMAL など)
+     * @param nextState     進めるボタンの状態
+     */
+    public static void paintPageBar(Graphics2D g, int width, String text, int previousState, int nextState) {
+        final int h = PAGE_BAR_HEIGHT;
+        // ウィンドウと同じ色の枠を付けた、面の色の帯
+        g.setColor(FRAME);
+        g.fillRoundRect(0, 0, width, h, 8, 8);
+        g.setColor(FACE);
+        g.fillRoundRect(2, 2, width - 4, h - 4, 6, 6);
+
+        final int buttonHeight = h - PAGE_BUTTON_MARGIN * 2 - 2;
+        final int y = PAGE_BUTTON_MARGIN + 1;
+        final int previousX = PAGE_BUTTON_MARGIN + 1;
+        final int nextX = width - PAGE_BUTTON_MARGIN - 1 - PAGE_BUTTON_WIDTH;
+        paintButton(g, previousX, y, PAGE_BUTTON_WIDTH, buttonHeight, null, previousState, false);
+        paintButton(g, nextX, y, PAGE_BUTTON_WIDTH, buttonHeight, null, nextState, false);
+        paintArrow(g, previousX, y, PAGE_BUTTON_WIDTH, buttonHeight, false, previousState);
+        paintArrow(g, nextX, y, PAGE_BUTTON_WIDTH, buttonHeight, true, nextState);
+
+        final int textX = previousX + PAGE_BUTTON_WIDTH;
+        drawTextCentered(g, text, textX, 0, nextX - textX, h, TEXT);
+    }
+
+    // ページ送りのボタンの三角形。right なら右向き
+    private static void paintArrow(Graphics2D g, int x, int y, int w, int h, boolean right, int state) {
+        final int offset = state == Button.PRESSED ? 1 : 0;
+        final float cx = x + w / 2f + offset, cy = y + h / 2f + offset;
+        final float size = h * 0.28f;
+        final Path2D.Float path = new Path2D.Float();
+        if (right) {
+            path.moveTo(cx - size * 0.6f, cy - size);
+            path.lineTo(cx + size * 0.8f, cy);
+            path.lineTo(cx - size * 0.6f, cy + size);
+        } else {
+            path.moveTo(cx + size * 0.6f, cy - size);
+            path.lineTo(cx - size * 0.8f, cy);
+            path.lineTo(cx + size * 0.6f, cy + size);
+        }
+        path.closePath();
+        g.setColor(state == Button.DISABLED ? TEXT_DISABLED : new Color(0x1C3D82));
+        g.fill(path);
+    }
+
     public static void paintScrollBar(Graphics2D g, int x, int y, int w, int h, int thumbY, int thumbHeight) {
         g.setColor(SCROLL_TRACK);
         g.fillRect(x, y, w, h);

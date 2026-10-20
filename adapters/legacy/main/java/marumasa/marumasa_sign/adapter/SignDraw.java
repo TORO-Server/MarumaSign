@@ -30,12 +30,14 @@ final class SignDraw {
         }
     }
 
-    static void draw(SignImage image, TileEntitySign sign, double x, double y, double z) {
+    // x, y, z は描画の原点から見た看板の位置、camX, camY, camZ はブロックの角を原点としたカメラの位置
+    static void draw(SignImage image, TileEntitySign sign, double x, double y, double z,
+                     float camX, float camY, float camZ) {
         final boolean wall = Mc.isWallSign(sign);
         final int metadata = sign.getBlockMetadata();
         final float yaw = wall ? wallYaw(metadata) : metadata * 22.5f;
-        // x, y, z はカメラから見た位置なので、そのまま看板までの距離になる
-        final SignImage.Batch[] batches = image.batches(yaw, wall, Math.sqrt(x * x + y * y + z * z));
+        final SignImage.Batch[] batches = image.batches(yaw, wall, Math.sqrt(camX * camX + camY * camY + camZ * camZ),
+                camX, camY, camZ, (int) Mc.x(sign), (int) Mc.y(sign), (int) Mc.z(sign));
 
         GL11.glPushMatrix();
         GL11.glTranslated(x, y, z);
@@ -65,11 +67,13 @@ final class SignDraw {
             Minecraft.getMinecraft().getTextureManager().bindTexture(((PlatformImpl.Texture) batch.texture).location);
             if (batch.colors != null) {
                 // 3D モデルは裏を向いた面と、透明な部分を描かない
-                GL11.glEnable(GL11.GL_CULL_FACE);
+                if (batch.doubleSided) GL11.glDisable(GL11.GL_CULL_FACE);
+                else GL11.glEnable(GL11.GL_CULL_FACE);
                 GL11.glEnable(GL11.GL_ALPHA_TEST);
                 GL11.glAlphaFunc(GL11.GL_GREATER, 0.1f);
                 GL11.glDepthMask(!batch.blend);
                 ModelArrays.draw(batch);
+                if (batch.blend && batch.doubleSided) depthPass(batch);
                 continue;
             }
             final float[] mesh = batch.vertices;
@@ -91,5 +95,19 @@ final class SignDraw {
             GL11.glEnd();
         }
         GL11.glPopAttrib();
+    }
+
+    /**
+     * 半透明の面 (ガウシアンスプラッティング) の、ほぼ不透明な部分の奥行きだけを記録する。
+     * 色は奥行きを記録せずに描くので、そのままだと後から描かれる空や雲 (影 Mod では特に) に上書きされてしまう。
+     * 色を描き終えてから奥行きだけを書くので、重なりの順番には影響しない。
+     */
+    private static void depthPass(SignImage.Batch batch) {
+        GL11.glColorMask(false, false, false, false);
+        GL11.glDepthMask(true);
+        GL11.glAlphaFunc(GL11.GL_GREATER, 0.5f);
+        ModelArrays.draw(batch);
+        GL11.glAlphaFunc(GL11.GL_GREATER, 0.1f);
+        GL11.glColorMask(true, true, true, true);
     }
 }

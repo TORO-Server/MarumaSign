@@ -1,6 +1,9 @@
 package marumasa.marumasa_sign.core.sign;
 
 import marumasa.marumasa_sign.core.gltf.GltfScene;
+import marumasa.marumasa_sign.core.splat.SplatScene;
+
+import java.util.Arrays;
 
 /**
  * 看板 1 種類 (文字列 1 つ) に対応する、表示する画像や 3D モデルと、その形。
@@ -23,9 +26,11 @@ public final class SignImage {
         public int[] colors;
         public int vertexCount;
         // vertices と colors の内容が変わるたびに増える。描画用のバッファを作り直すかどうかの判断に使う
-        public int revision;
+        public volatile int revision;
         // 半透明の面かどうか。半透明の面は、奥行きを記録せずに描くと重なりが自然になる
         public boolean blend;
+        // 裏を向いた面も描くかどうか。ガウシアンスプラッティングの四角形はカメラの方を向けて作るので、裏面を省く必要がない
+        public boolean doubleSided;
     }
 
     // mesh() の 1 頂点あたりの要素数: x, y, z, u, v, nx, ny, nz
@@ -63,17 +68,23 @@ public final class SignImage {
     private final float[][] bounds = new float[ORIENTATIONS][];
     private final Batch[][] imageBatches = new Batch[ORIENTATIONS + 1][];
     private final ModelCache[] modelCaches = new ModelCache[ORIENTATIONS + 1];
+    private final SplatScene.View[] splatViews = new SplatScene.View[ORIENTATIONS + 1];
 
-    // 3D モデルを看板の大きさに合わせるための値
+    // 3D モデルやガウシアンスプラッティングを看板の大きさに合わせるための値
     private GltfScene model;
+    private SplatScene splat;
     private float modelCenterX, modelCenterY, modelCenterZ;
     private float modelFit;
     private float modelDepth;
     private final float[] point = new float[3];
 
-    SignImage(SignSpec spec, TextureEntry texture) {
+    // PDF のページ送りの操作。なければ null
+    private final PdfControls controls;
+
+    SignImage(SignSpec spec, TextureEntry texture, PdfControls controls) {
         this.spec = spec;
         this.texture = texture;
+        this.controls = controls;
     }
 
     public TextureEntry textureEntry() {
@@ -110,8 +121,9 @@ public final class SignImage {
         if (builtRevision == revision) return;
 
         model = texture.model();
+        splat = texture.splat();
         double maxDistSqr = 0;
-        if (model == null) {
+        if (model == null && splat == null) {
             final int width = texture.width();
             final int height = texture.height();
             float max = Math.max(width, height);
@@ -129,7 +141,7 @@ public final class SignImage {
             }
         } else {
             // モデルを囲む直方体の最も長い辺が、画像の長い辺と同じ大きさになるようにする
-            final float[] box = model.restBounds();
+            final float[] box = model != null ? model.restBounds() : splat.restBounds();
             modelCenterX = (box[0] + box[3]) / 2;
             modelCenterY = (box[1] + box[4]) / 2;
             modelCenterZ = (box[2] + box[5]) / 2;
@@ -150,6 +162,7 @@ public final class SignImage {
         for (int i = 0; i <= ORIENTATIONS; i++) {
             imageBatches[i] = null;
             modelCaches[i] = null;
+            splatViews[i] = null;
         }
         builtRevision = revision;
     }
@@ -214,17 +227,56 @@ public final class SignImage {
         return Math.round(signYaw / 22.5f) & 15;
     }
 
+    public Batch[] batches(float signYaw, boolean wall, double distance) {
+        return batches(signYaw, wall, distance, 0.5f, 0.5f, 4.5f);
+    }
+
     /**
      * 描画する四角形を返す。描画のたびに呼ぶ。
      *
      * @param signYaw  看板の向き (度)。立て看板は rotation * 22.5、壁掛け看板は向いている方角の角度
      * @param wall     壁掛け看板かどうか
      * @param distance カメラから看板までの距離 (ブロック)。動画や音声の音量に使う
+     * @param cameraX  ブロックの角を原点としたカメラの X 座標
+     * @param cameraY  ブロックの角を原点としたカメラの Y 座標
+     * @param cameraZ  ブロックの角を原点としたカメラの Z 座標
      */
-    public Batch[] batches(float signYaw, boolean wall, double distance) {
+    public Batch[] batches(float signYaw, boolean wall, double distance, float cameraX, float cameraY, float cameraZ) {
+        return batches(signYaw, wall, distance, cameraX, cameraY, cameraZ, 0, 0, 0, false);
+    }
+
+    /**
+     * 描画する四角形を返す。描画のたびに呼ぶ。
+     * 看板の位置も渡すと、PDF の看板に照準が合っているときに、ページ送りの帯も返す。
+     *
+     * @param signYaw  看板の向き (度)。立て看板は rotation * 22.5、壁掛け看板は向いている方角の角度
+     * @param wall     壁掛け看板かどうか
+     * @param distance カメラから看板までの距離 (ブロック)。動画や音声の音量に使う
+     * @param cameraX  ブロックの角を原点としたカメラの X 座標。cameraY, cameraZ も同じ
+     * @param blockX   看板のブロックの位置 (ワールド座標)。blockY, blockZ も同じ
+     */
+    public Batch[] batches(float signYaw, boolean wall, double distance, float cameraX, float cameraY, float cameraZ,
+                           int blockX, int blockY, int blockZ) {
+        return batches(signYaw, wall, distance, cameraX, cameraY, cameraZ, blockX, blockY, blockZ, true);
+    }
+
+    private Batch[] batches(float signYaw, boolean wall, double distance, float cameraX, float cameraY, float cameraZ,
+                            int blockX, int blockY, int blockZ, boolean placed) {
+        final Batch[] batches = imageBatches(signYaw, wall, distance, cameraX, cameraY, cameraZ);
+        final PdfSession pdf = texture.pdf();
+        if (!placed || pdf == null || controls == null || model != null || splat != null) return batches;
+        final Batch bar = controls.overlay(pdf, mesh(signYaw, wall), blockX, blockY, blockZ);
+        if (bar == null) return batches;
+        final Batch[] withBar = Arrays.copyOf(batches, batches.length + 1);
+        withBar[batches.length] = bar;
+        return withBar;
+    }
+
+    private Batch[] imageBatches(float signYaw, boolean wall, double distance, float cameraX, float cameraY, float cameraZ) {
         ensureBuilt();
         final int index = meshIndex(signYaw, wall);
         if (model != null) return modelBatches(index, signYaw, wall);
+        if (splat != null) return splatBatches(index, signYaw, wall, distance, cameraX, cameraY, cameraZ);
 
         Batch[] batches = imageBatches[index];
         if (batches == null) {
@@ -252,6 +304,7 @@ public final class SignImage {
     public Batch[] itemBatches(double distance) {
         ensureBuilt();
         if (model != null) return modelBatches(ITEM, 0, false);
+        if (splat != null) return splatBatches(ITEM, 0, false, distance, 0.5f, 0.5f, 100f);
 
         Batch[] batches = imageBatches[ITEM];
         if (batches == null) {
@@ -279,34 +332,37 @@ public final class SignImage {
         return batches;
     }
 
+    private void computePlacement(int index, float signYaw, boolean wall, float[] placement) {
+        if (index == ITEM) {
+            // 立方体の中央に、収まる大きさで置く
+            final float size = modelFit / 2;
+            placement[0] = placement[5] = placement[10] = size;
+            placement[12] = 0.5f - modelCenterX * size;
+            placement[13] = 0.5f - modelCenterY * size;
+            placement[14] = 0.5f - modelCenterZ * size;
+            placement[15] = 1;
+        } else {
+            // 変換は平行移動と線形変換の組み合わせなので、原点と各軸の行き先から行列を作る
+            final float[] origin = new float[3];
+            place(0, 0, 0, signYaw, wall, origin);
+            for (int axis = 0; axis < 3; axis++) {
+                place(axis == 0 ? 1 : 0, axis == 1 ? 1 : 0, axis == 2 ? 1 : 0, signYaw, wall, point);
+                placement[axis * 4] = point[0] - origin[0];
+                placement[axis * 4 + 1] = point[1] - origin[1];
+                placement[axis * 4 + 2] = point[2] - origin[2];
+            }
+            placement[12] = origin[0];
+            placement[13] = origin[1];
+            placement[14] = origin[2];
+            placement[15] = 1;
+        }
+    }
+
     private Batch[] modelBatches(int index, float signYaw, boolean wall) {
         ModelCache cache = modelCaches[index];
         if (cache == null) {
             cache = new ModelCache();
-            if (index == ITEM) {
-                // 立方体の中央に、収まる大きさで置く
-                final float size = modelFit / 2;
-                cache.placement[0] = cache.placement[5] = cache.placement[10] = size;
-                cache.placement[12] = 0.5f - modelCenterX * size;
-                cache.placement[13] = 0.5f - modelCenterY * size;
-                cache.placement[14] = 0.5f - modelCenterZ * size;
-                cache.placement[15] = 1;
-            } else {
-                // 変換は平行移動と線形変換の組み合わせなので、原点と各軸の行き先から行列を作る
-                final float[] origin = new float[3];
-                place(0, 0, 0, signYaw, wall, origin);
-                for (int axis = 0; axis < 3; axis++) {
-                    place(axis == 0 ? 1 : 0, axis == 1 ? 1 : 0, axis == 2 ? 1 : 0, signYaw, wall, point);
-                    cache.placement[axis * 4] = point[0] - origin[0];
-                    cache.placement[axis * 4 + 1] = point[1] - origin[1];
-                    cache.placement[axis * 4 + 2] = point[2] - origin[2];
-                }
-                cache.placement[12] = origin[0];
-                cache.placement[13] = origin[1];
-                cache.placement[14] = origin[2];
-                cache.placement[15] = 1;
-            }
-
+            computePlacement(index, signYaw, wall, cache.placement);
 
             final GltfScene.Group[] groups = model.groups();
             cache.vertices = new float[groups.length][];
@@ -333,6 +389,18 @@ public final class SignImage {
             for (Batch batch : cache.batches) batch.revision++;
         }
         return cache.batches;
+    }
+
+    private Batch[] splatBatches(int index, float signYaw, boolean wall, double distance,
+                                 float cameraX, float cameraY, float cameraZ) {
+        SplatScene.View view = splatViews[index];
+        if (view == null) {
+            final float[] placement = new float[16];
+            computePlacement(index, signYaw, wall, placement);
+            view = splat.createView(placement, texture.current(distance));
+            splatViews[index] = view;
+        }
+        return view.batches(cameraX, cameraY, cameraZ, texture.current(distance));
     }
 
     /**
@@ -367,20 +435,20 @@ public final class SignImage {
                 Float.POSITIVE_INFINITY, Float.POSITIVE_INFINITY, Float.POSITIVE_INFINITY,
                 Float.NEGATIVE_INFINITY, Float.NEGATIVE_INFINITY, Float.NEGATIVE_INFINITY
         };
-        if (model == null) {
+        if (model == null && splat == null) {
             final float[] mesh = mesh(signYaw, wall);
             for (int i = 0; i < VERTEX_COUNT; i++) {
                 extend(box, mesh[i * STRIDE], mesh[i * STRIDE + 1], mesh[i * STRIDE + 2]);
             }
         } else {
-            final float[] rest = model.restBounds();
+            final float[] rest = model != null ? model.restBounds() : splat.restBounds();
             for (int corner = 0; corner < 8; corner++) {
                 place(rest[(corner & 1) * 3], rest[1 + ((corner >> 1) & 1) * 3], rest[2 + ((corner >> 2) & 1) * 3],
                         signYaw, wall, point);
                 extend(box, point[0], point[1], point[2]);
             }
-            if (model.isAnimated()) {
-                // 動きで最初の姿勢からはみ出す分の余裕を持たせる
+            if ((model != null && model.isAnimated()) || splat != null) {
+                // 動きや外れ値で直方体からはみ出す分の余裕を持たせる
                 for (int axis = 0; axis < 3; axis++) {
                     final float margin = (box[axis + 3] - box[axis]) / 2;
                     box[axis] -= margin;

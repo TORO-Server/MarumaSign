@@ -88,6 +88,10 @@ final class Mc {
         mc.player.setXRot(pitch);
     }
 
+    static void turn(Minecraft mc, float yaw) {
+        mc.player.setYRot(yaw);
+    }
+
     // ホットバーにある看板を手に持つ
     static void selectSign(Minecraft mc) {
         for (int slot = 0; slot < 9; slot++) {

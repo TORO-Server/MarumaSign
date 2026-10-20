@@ -3,6 +3,9 @@ package marumasa.marumasa_sign.adapter;
 import marumasa.marumasa_sign.core.Platform;
 import net.minecraft.client.KeyMapping;
 import net.minecraft.client.Minecraft;
+import net.minecraft.world.entity.Entity;
+import net.minecraft.world.phys.HitResult;
+import net.minecraft.world.phys.Vec3;
 
 import java.io.File;
 
@@ -96,8 +99,26 @@ final class PlatformImpl implements Platform {
     }
 
     @Override
+    public double[] crosshair() {
+        final Entity viewer = mc.getCameraEntity();
+        if (viewer == null || mc.level == null || Mc.screen(mc) != null) return null;
+        final Vec3 eye = viewer.getEyePosition(1f);
+        final Vec3 look = viewer.getViewVector(1f);
+        final HitResult target = mc.hitResult;
+        final double hit = target != null && target.getType() == HitResult.Type.BLOCK ? target.getLocation().distanceTo(eye) : -1;
+        return new double[]{eye.x, eye.y, eye.z, look.x, look.y, look.z, hit};
+    }
+
+    @Override
     public void selfTestLook(float pitch) {
         if (mc.player != null) Mc.look(mc, pitch);
+    }
+
+    @Override
+    public void selfTestLook(float yaw, float pitch) {
+        if (mc.player == null) return;
+        Mc.turn(mc, yaw);
+        Mc.look(mc, pitch);
     }
 
     @Override

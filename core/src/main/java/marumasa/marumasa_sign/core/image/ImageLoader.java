@@ -9,6 +9,9 @@ import marumasa.marumasa_sign.core.gltf.GltfLoader;
 import marumasa.marumasa_sign.core.gltf.GltfScene;
 import marumasa.marumasa_sign.core.media.Ffmpeg;
 import marumasa.marumasa_sign.core.net.Http;
+import marumasa.marumasa_sign.core.splat.SplatLoader;
+import marumasa.marumasa_sign.core.splat.SplatScene;
+import marumasa.marumasa_sign.core.pdf.PdfFile;
 
 import javax.imageio.ImageIO;
 import java.awt.image.BufferedImage;
@@ -39,7 +42,13 @@ public final class ImageLoader {
         // 3D モデルだったとき
         void onModel(GltfScene scene);
 
-        // 画像でも 3D モデルでもなかったとき。動画や音声として再生できるかもしれない
+        // ガウシアンスプラッティングだったとき
+        void onSplat(SplatScene scene);
+
+        // PDF だったとき。firstPage は最初のページを画像にしたもの
+        void onPdf(PdfFile file, DecodedImage firstPage);
+
+        // 画像でも 3D モデルでもガウシアンスプラッティングでも PDF でもなかったとき。動画や音声として再生できるかもしれない
         void onMedia();
 
         void onFailed();
@@ -52,6 +61,14 @@ public final class ImageLoader {
     private static final int MAX_ANIMATION_FRAMES = 512;
     // 3D モデルの大きさの上限 (外部ファイルを含む)
     public static final int MAX_MODEL_SIZE = 64 * 1024 * 1024;
+    // ガウシアンスプラッティングの大きさの上限
+    public static final int MAX_SPLAT_SIZE = 200 * 1024 * 1024;
+
+    private static final int KIND_NONE = 0;
+    private static final int KIND_IMAGE = 1;
+    private static final int KIND_MODEL = 2;
+    private static final int KIND_SPLAT = 3;
+    private static final int KIND_PDF = 4;
 
     private static final class Request {
         final String url;
@@ -106,29 +123,61 @@ public final class ImageLoader {
         final String url = request.url;
         MarumaSign.LOGGER.info("Start: " + url);
         try {
-            // 先頭だけを読んで、画像でも 3D モデルでもなければ残りは読まない
-            final boolean[] image = new boolean[1];
-            final byte[] content = Http.download(url, new Http.HeadCheck() {
+            // 先頭だけを読んで、画像・3D モデル・ガウシアンスプラッティング・PDF のどれでもなければ残りは読まない
+            final int[] kind = new int[]{KIND_NONE};
+            final String[] resolvedName = new String[]{url};
+            final byte[] content = Http.download(url, new Http.ContentCheck() {
                 @Override
-                public boolean accept(byte[] head, int length) {
-                    image[0] = isSupportedImage(head, length);
-                    return image[0] || GltfLoader.isGlb(head, length) || GltfLoader.looksLikeJson(head, length);
+                public int maxBytes(byte[] head, int length, String name) {
+                    resolvedName[0] = name;
+                    if (isSupportedImage(head, length)) {
+                        kind[0] = KIND_IMAGE;
+                        return Http.MAX_SIZE;
+                    }
+                    if (PdfFile.isPdf(head, length)) {
+                        kind[0] = KIND_PDF;
+                        return PdfFile.MAX_SIZE;
+                    }
+                    if (GltfLoader.isGlb(head, length)) {
+                        kind[0] = KIND_MODEL;
+                        return MAX_MODEL_SIZE;
+                    }
+                    if (SplatLoader.isSplat(head, length, name)) {
+                        kind[0] = KIND_SPLAT;
+                        return MAX_SPLAT_SIZE;
+                    }
+                    if (GltfLoader.looksLikeJson(head, length)) {
+                        kind[0] = KIND_MODEL;
+                        return MAX_MODEL_SIZE;
+                    }
+                    return 0;
                 }
-            }, MAX_MODEL_SIZE);
+            });
             if (content == null) {
                 // FFmpeg を探すのには時間がかかることがあるので、メインスレッドに渡す前にここで済ませておく
                 Ffmpeg.isAvailable();
                 request.callback.onMedia();
                 return;
             }
-            if (image[0]) {
-                if (content.length > Http.MAX_SIZE) {
-                    throw new IOException("Content size exceeds the limit of " + Http.MAX_SIZE + " bytes.");
-                }
+            if (kind[0] == KIND_IMAGE) {
                 request.callback.onLoaded(decode(content));
                 return;
             }
-            request.callback.onModel(model(url, content));
+            if (kind[0] == KIND_SPLAT) {
+                request.callback.onSplat(splat(resolvedName[0], content));
+                return;
+            }
+            if (kind[0] == KIND_PDF) {
+                final PdfFile file = PdfFile.open(content);
+                try {
+                    request.callback.onPdf(file, file.render(0, PdfFile.PAGE_SIZE));
+                } catch (IOException | RuntimeException e) {
+                    file.close();
+                    throw e;
+                }
+                return;
+            }
+            request.callback.onModel(model(resolvedName[0], content));
         } catch (Exception e) {
             MarumaSign.LOGGER.info("Failure: " + url + " (" + e + ")");
             request.callback.onFailed();
@@ -142,6 +191,22 @@ public final class ImageLoader {
     // 先頭のバイト列が 3D モデル (.glb / .gltf) らしいかどうか
     public static boolean isModel(byte[] head, int length) {
         return GltfLoader.isGlb(head, length) || GltfLoader.looksLikeJson(head, length);
+    }
+
+    // 先頭のバイト列と名前がガウシアンスプラッティングのファイルらしいかどうか
+    public static boolean isSplat(byte[] head, int length, String name) {
+        return SplatLoader.isSplat(head, length, name);
+    }
+
+    // バイト列をガウシアンスプラッティングとして読み込む
+    public static SplatScene splat(String name, byte[] content) throws IOException {
+        return new SplatScene(SplatLoader.load(content, name));
+    }
+
+    // ファイルをガウシアンスプラッティングとして読み込む
+    public static SplatScene splat(File file) throws IOException {
+        if (file.length() > MAX_SPLAT_SIZE) throw new IOException("Content size exceeds the limit of " + MAX_SPLAT_SIZE + " bytes.");
+        return splat(file.getName(), Files.readAllBytes(file.toPath()));
     }
 
     // URL からダウンロードした内容を 3D モデルとして読み込む

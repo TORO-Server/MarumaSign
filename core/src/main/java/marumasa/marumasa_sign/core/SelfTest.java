@@ -1,5 +1,6 @@
 package marumasa.marumasa_sign.core;
 
+import marumasa.marumasa_sign.core.sign.PdfControls;
 import marumasa.marumasa_sign.core.sign.SignImage;
 import marumasa.marumasa_sign.core.sign.SignSpec;
 import marumasa.marumasa_sign.core.ui.Key;
@@ -28,11 +29,18 @@ final class SelfTest {
     private static final int WAIT_MOVE = 7;
     private static final int WAIT_ITEM = 8;
     private static final int FINISHED = 9;
+    private static final int PDF_CONTROLS = 10;
 
     private static final String[] STEP_NAMES = {
             "WAIT_WORLD", "OPEN_UI", "FILL", "WAIT_WRITE_MODE", "USE_ITEM", "WAIT_RENDER", "LOOK_AT_SIGN", "WAIT_MOVE",
-            "WAIT_ITEM", "FINISHED"
+            "WAIT_ITEM", "FINISHED", "PDF_CONTROLS"
     };
+
+    // PDF のページ送りを確かめる手順の中の、各段階を始める tick
+    private static final int PDF_CLICK = 30;
+    private static final int PDF_TURN_TIMEOUT = 200;
+    // 外部のスクリプトが画面を記録し終えるのを待つ上限 (tick)。スクリプトなしで動かしたときは、これだけ待って進む
+    private static final int SHOT_WAIT = 200;
 
     // 看板アイテムを受け取ってから、描かれるのを待つ時間の上限 (tick)
     private static final int ITEM_TIMEOUT = 20 * 15;
@@ -95,8 +103,17 @@ final class SelfTest {
     // 読み込みが完了した看板が描画されたとき
     void onDrawn(SignImage image) {
         final String url = expectedUrl;
-        if (url != null && url.equals(image.spec.url)) drawnCount++;
+        if (url != null && url.equals(image.spec.url)) {
+            drawnCount++;
+            drawnImage = image;
+        }
     }
+
+    // 確認中の看板として最後に描画されたもの
+    private volatile SignImage drawnImage;
+    // 動画や音声の看板で、正面を向いているときの音の大きさ
+    private float facingGain;
+    private int facingDrawn;
 
     private void next(int nextStep) {
         step = nextStep;
@@ -208,23 +225,45 @@ final class SelfTest {
                 // 次に、看板そのものが消えていることを確認できるように、看板の位置を見下ろす
                 if (ticksInStep >= 60 && ticksInStep < 140) platform.selfTestLook(50f);
                 if (ticksInStep == 90) writeFile("sign-view-" + index + ".txt", "ready\n");
-                if (ticksInStep >= 140) platform.selfTestLook(0f);
-                if (ticksInStep == 150) {
+                if (ticksInStep >= 140 && ticksInStep < 150) platform.selfTestLook(0f);
+                // 動画や音声の看板では、真上を向いて看板が視界から外れても、音が大きくならないことを確かめる
+                final SignImage image = drawnImage;
+                final float gain = image == null ? -1f : image.textureEntry().mediaGain();
+                if (ticksInStep == 150 && gain >= 0) {
+                    facingGain = gain;
+                    facingDrawn = drawnCount;
+                }
+                final boolean checkGain = facingDrawn > 0;
+                if (checkGain && ticksInStep >= 150 && ticksInStep < 190) platform.selfTestLook(-90f);
+                if (checkGain && ticksInStep >= 190) platform.selfTestLook(0f);
+                if (checkGain && ticksInStep == 190) {
                     if (summary.length() > 0) summary.append(", ");
-                    summary.append(new File(images[index]).getName()).append(" rendered ").append(drawnCount).append(" times");
-                    if (index + 1 < images.length) {
-                        // 次のファイルは、前の看板が見えない場所で確認する
-                        writeFile("move-" + index + ".txt", "ready\n");
-                        next(WAIT_MOVE);
-                    } else if (checkItem) {
-                        // 外部のスクリプトに、看板の文字を持った看板アイテムを渡してもらう
-                        expectedUrl = null;
-                        writeFile("item-request.txt", "ready\n");
-                        next(WAIT_ITEM);
-                    } else {
-                        finish(true, summary.toString());
+                    summary.append(String.format(java.util.Locale.ROOT, "%s volume facing %.3f, looking away %.3f (drawn %d times while away)",
+                            new File(images[index]).getName(), facingGain, gain, drawnCount - facingDrawn));
+                    if (gain > facingGain + 0.01f) {
+                        finish(false, summary + ": louder when looking away");
+                        return;
                     }
                 }
+                if (ticksInStep == (checkGain ? 200 : 150)) {
+                    facingDrawn = 0;
+                    if (summary.length() > 0) summary.append(", ");
+                    summary.append(new File(images[index]).getName()).append(" rendered ").append(drawnCount).append(" times");
+                    final SignImage drawn = drawnImage;
+                    if (drawn != null && drawn.textureEntry().isPdf()) {
+                        // PDF なら、ページ送りの操作も確かめる
+                        final double[] ray = platform.crosshair();
+                        homeYaw = ray == null ? 0f : (float) Math.toDegrees(Math.atan2(-ray[3], ray[5]));
+                        pdfPhase = 0;
+                        next(PDF_CONTROLS);
+                    } else {
+                        nextMedium();
+                    }
+                }
+                break;
+
+            case PDF_CONTROLS:
+                checkPdfControls();
                 break;
 
             case WAIT_MOVE:
@@ -266,6 +305,121 @@ final class SelfTest {
             default:
                 break;
         }
+    }
+
+    // 確認中のファイルが終わったので、次のファイルか、看板アイテムの確認に進む
+    private void nextMedium() {
+        if (index + 1 < images.length) {
+            // 次のファイルは、前の看板が見えない場所で確認する
+            writeFile("move-" + index + ".txt", "ready\n");
+            next(WAIT_MOVE);
+        } else if (checkItem) {
+            // 外部のスクリプトに、看板の文字を持った看板アイテムを渡してもらう
+            expectedUrl = null;
+            writeFile("item-request.txt", "ready\n");
+            next(WAIT_ITEM);
+        } else {
+            finish(true, summary.toString());
+        }
+    }
+
+    // PDF の確認を始めたときに向いていた方角
+    private float homeYaw;
+    // PDF の確認の段階と、その段階を始めた tick
+    private int pdfPhase;
+    private int pdfPhaseAt;
+
+    private void pdfPhase(int phase) {
+        pdfPhase = phase;
+        pdfPhaseAt = ticksInStep;
+    }
+
+    // 照準を、PDF の看板の指定した部分に合わせる
+    private boolean aimAt(int part) {
+        final double[] target = MarumaSign.signs().pdfControls().lastTarget(part);
+        final double[] ray = platform.crosshair();
+        if (target == null || ray == null) return false;
+        final double dx = target[0] - ray[0], dy = target[1] - ray[1], dz = target[2] - ray[2];
+        final float yaw = (float) Math.toDegrees(Math.atan2(-dx, dz));
+        final float pitch = (float) -Math.toDegrees(Math.atan2(dy, Math.sqrt(dx * dx + dz * dz)));
+        platform.selfTestLook(yaw, pitch);
+        return true;
+    }
+
+    /**
+     * PDF のページ送りを確かめる。
+     * 進めるボタンに照準を合わせて帯が出ることと、使用キーで 2 ページ目に進むこと、
+     * 照準を外すと帯が消えることを、順に確かめる。画面の記録は外部のスクリプトに頼む。
+     */
+    private void checkPdfControls() {
+        final PdfControls controls = MarumaSign.signs().pdfControls();
+        final String name = new File(images[index]).getName();
+        final int elapsed = ticksInStep - pdfPhaseAt;
+        switch (pdfPhase) {
+            case 0:
+                // 進めるボタンに照準を合わせる
+                if (!aimAt(PdfControls.NEXT)) {
+                    if (elapsed > 40) finish(false, summary + ": " + name + " page controls have no position");
+                    return;
+                }
+                if (elapsed == 20) writeFile("pdf-ui-" + index + ".txt", "ready\n");
+                // 外部のスクリプトが帯の出た画面を記録し終えてから押す (記録が遅れて 2 ページ目が写らないように)
+                if (elapsed >= PDF_CLICK && (shotTaken("pdf-ui") || elapsed >= PDF_CLICK + SHOT_WAIT)) {
+                    final int[] page = controls.hoveredPage();
+                    if (controls.hoverPart() != PdfControls.NEXT || page == null) {
+                        finish(false, summary + ": " + name + " page controls not shown on the next button (part "
+                                + controls.hoverPart() + "; " + controls.missDetail() + ")");
+                        return;
+                    }
+                    if (page[0] != 0 || page[1] < 2) {
+                        finish(false, summary + ": " + name + " expected page 1 of 2 or more, got " + (page[0] + 1) + " / " + page[1]);
+                        return;
+                    }
+                    platform.selfTestUseItem();
+                    pdfPhase(1);
+                }
+                break;
+            case 1:
+                // 2 ページ目が表示されるのを待つ
+                aimAt(PdfControls.NEXT);
+                final int[] page = controls.hoveredPage();
+                if (page != null && page[0] == 1 && page[2] == 0) {
+                    pdfPhase(2);
+                } else if (elapsed > PDF_TURN_TIMEOUT) {
+                    finish(false, summary + ": " + name + " did not turn to page 2 ("
+                            + (page == null ? "not hovered" : (page[0] + 1) + " / " + page[1]) + ")");
+                }
+                break;
+            case 2:
+                // ページの中央を見て、2 ページ目を画面に記録してもらう
+                aimAt(PdfControls.PAGE);
+                if (elapsed == 20) writeFile("pdf-page-" + index + ".txt", "ready\n");
+                if (elapsed >= 40 && (shotTaken("pdf-page") || elapsed >= 40 + SHOT_WAIT)) pdfPhase(3);
+                break;
+            case 3:
+                // 真上を見て照準を外すと、帯が消える
+                platform.selfTestLook(homeYaw, -90f);
+                if (elapsed == 20) {
+                    if (controls.isHovering()) {
+                        finish(false, summary + ": " + name + " page controls still shown after looking away");
+                        return;
+                    }
+                    writeFile("pdf-hidden-" + index + ".txt", "ready\n");
+                }
+                if (elapsed >= 30) {
+                    platform.selfTestLook(homeYaw, 0f);
+                    summary.append(", ").append(name).append(" turned to page 2 with the page controls");
+                    nextMedium();
+                }
+                break;
+            default:
+                break;
+        }
+    }
+
+    // 外部のスクリプトが、その画面を記録し終えたか
+    private boolean shotTaken(String key) {
+        return new File(directory, key + "-" + index + "-done.txt").isFile();
     }
 
     // 外部のスクリプトが書いたファイルを読む。まだなければ null

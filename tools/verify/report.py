@@ -20,7 +20,7 @@ def version_key(version):
     return tuple(int(part) for part in re.findall(r"\d+", version))
 
 
-MEDIA_NAMES = {"image": "画像", "model": "3D モデル", "video": "動画"}
+MEDIA_NAMES = {"image": "画像", "model": "3D モデル", "video": "動画", "splat": "ガウシアンスプラット", "pdf": "PDF"}
 # シェーダーパックの、表に書く名前
 PACK_NAMES = {
     "bsl-shaders": "BSL",
@@ -41,7 +41,12 @@ def cell(entry, digest):
         return "対象外"
     if entry.get("clean"):
         missing = [name for kind, name in MEDIA_NAMES.items() if kind not in entry.get("media", [])]
-        return "OK" if not missing else "OK (" + "・".join(missing) + "は未確認)"
+        if missing:
+            return "OK (" + "・".join(missing) + "は未確認)"
+        # 看板アイテムとしての見た目も、種類ごとに確かめたか
+        items = entry.get("item_media", [])
+        no_item = [name for kind, name in MEDIA_NAMES.items() if matrix.MEDIA[kind] not in items]
+        return "OK" if not no_item else "OK (" + "・".join(no_item) + "のアイテムは未確認)"
     if entry.get("ok"):
         # 動作はしたが、基準にない警告が出たか、表示を確認できなかった
         return "要確認"
@@ -65,10 +70,11 @@ def main():
         "",
         "確認の内容: バニラのサーバーを起動し、各ローダーを入れた実際のクライアントで接続して、",
         "サバイバルモードのまま、ゲーム内のウィンドウでファイルを選び、看板を設置して表示されるまでを自動で行います。",
-        "1 回の起動で、画像 (PNG)、3D モデル (GLB)、動画 (音声付きの MP4) の 3 つを順に確認し、",
-        "最後に、看板の文字をデータとして持たせた看板アイテムを渡して、手持ちの枠の中の見た目がその画像になることを確認します。",
+        "1 回の起動で、画像 (PNG)、3D モデル (GLB)、動画 (音声付きの MP4)、ガウシアンスプラット (.splat)、PDF の 5 つを順に確認し (PDF はページ送りも確かめ)、",
+        "最後に、5 つそれぞれの看板の文字をデータとして持たせた看板アイテムを渡して、手持ちの枠の中の見た目がその絵になることを確認します。",
+        "画面は自動の判定に加えて目でも確かめ、絵にすき間や縞模様がないこと (ガウシアンスプラットの重なり方) も調べています。",
         "",
-        "- **OK**: 3 つとも正しい向きで表示され、看板そのものは隠れていて、看板アイテムも画像の見た目になり、",
+        "- **OK**: 5 つとも正しい向きで、すき間なく表示され、看板そのものは隠れていて、5 つの看板アイテムもその絵の見た目になり、",
         "  Mod を入れていない状態と比べて新しい警告やエラーが出なかった",
         "- **要確認**: 動作はしたが、新しい警告が出たか、表示を確認できなかった",
         "- **失敗**: 動作しなかった",
@@ -125,7 +131,10 @@ def main():
             "",
             "- Forge 1.21.1 + OptiFine 1.21.1 HD U J1: OptiFine の読み込み中にゲームが終了する",
             "- Forge 1.14.2 + OptiFine 1.14.2 HD U F1: ゲームが起動しない",
+            "- Forge 1.14.3 + OptiFine 1.14.3 HD U F2: Forge が OptiFine を「unsupported」として読み込まず、起動時の警告の画面で止まる",
             "- OptiFine 1.8.9 + MakeUp Ultra Fast: 画面が真っ黒になる",
+            "- 対象外と書いたマスのうち Iris のもの (1.17 - 1.18 など): その版の Iris (1.1.x) が新しいシェーダーパックの"
+            "空のシェーダーを組み立てられず (MC_RENDER_STAGE_STARS が未定義)、シェーダーなしの描画に戻る",
             "",
             "| Minecraft | " + " | ".join(LOADER_NAMES[loader] for loader in LOADERS) + " |",
             "| --- | " + " | ".join("---" for _ in LOADERS) + " |",

@@ -116,7 +116,18 @@ final class PlatformImpl implements Platform {
     }
 
     @Override
+    public double[] crosshair() {
+        return Mc.crosshair();
+    }
+
+    @Override
     public void selfTestLook(float pitch) {
+        Mc.look(pitch);
+    }
+
+    @Override
+    public void selfTestLook(float yaw, float pitch) {
+        Mc.turn(yaw);
         Mc.look(pitch);
     }
 

@@ -97,8 +97,13 @@ public final class Http {
         boolean accept(byte[] head, int length);
     }
 
+    // 先頭のバイト列と、展開後の URL や Content-Disposition の名前を見て上限バイト数を決める (0 以下なら読まない)
+    public interface ContentCheck {
+        int maxBytes(byte[] head, int length, String name);
+    }
+
     public static byte[] download(String url) throws IOException {
-        return download(url, null);
+        return download(url, (HeadCheck) null);
     }
 
     /**
@@ -110,28 +115,65 @@ public final class Http {
     }
 
     // maxSize はダウンロードする大きさの上限 (バイト)
-    public static byte[] download(String url, HeadCheck check, int maxSize) throws IOException {
-        final HttpURLConnection connection = open(url);
-        try {
-            connection.setRequestMethod("GET");
-            connection.setRequestProperty("Accept", "image/png, image/gif, image/jpeg, */*;q=0.5");
-            connection.connect();
+    public static byte[] download(String url, final HeadCheck check, final int maxSize) throws IOException {
+        if (check == null) {
+            return download(url, (ContentCheck) null, maxSize);
+        }
+        return download(url, new ContentCheck() {
+            @Override
+            public int maxBytes(byte[] head, int length, String name) {
+                return check.accept(head, length) ? maxSize : 0;
+            }
+        });
+    }
 
-            final int status = connection.getResponseCode();
-            if (status / 100 != 2) throw new IOException("HTTP " + status);
+    public static byte[] download(String url, ContentCheck check) throws IOException {
+        return download(url, check, MAX_SIZE);
+    }
+
+    private static byte[] download(String url, ContentCheck check, int defaultMaxSize) throws IOException {
+        String currentUrl = url;
+        HttpURLConnection connection = null;
+        try {
+            for (int redirects = 0; ; redirects++) {
+                connection = open(currentUrl);
+                connection.setReadTimeout(30000);
+                connection.setInstanceFollowRedirects(false);
+                connection.setRequestMethod("GET");
+                connection.setRequestProperty("Accept", "image/png, image/gif, image/jpeg, */*;q=0.5");
+                connection.connect();
+
+                final int status = connection.getResponseCode();
+                if (status == 301 || status == 302 || status == 303 || status == 307 || status == 308) {
+                    if (redirects >= 5) throw new IOException("Too many redirects");
+                    final String location = connection.getHeaderField("Location");
+                    connection.disconnect();
+                    connection = null;
+                    if (location == null || location.isEmpty()) throw new IOException("HTTP " + status);
+                    currentUrl = new URL(new URL(currentUrl), location).toString();
+                    continue;
+                }
+                if (status / 100 != 2) throw new IOException("HTTP " + status);
+                break;
+            }
+
             // MJPEG の配信など、画像を送り続ける形式はファイルではないので読まない
             final String type = connection.getContentType();
             if (check != null && type != null && type.toLowerCase(Locale.ROOT).startsWith("multipart/x-mixed-replace")) {
                 return null;
             }
+            final String resolvedName = resolveName(connection, currentUrl, url);
             final InputStream input = connection.getInputStream();
             try {
                 byte[] head = new byte[0];
+                int maxSize = defaultMaxSize;
                 if (check != null) {
-                    head = readHead(input, 16);
-                    if (!check.accept(head, head.length)) return null;
+                    head = readHead(input, 512);
+                    maxSize = check.maxBytes(head, head.length, resolvedName);
+                    if (maxSize <= 0) return null;
                 }
-                if (connection.getContentLength() > maxSize) {
+                final long contentLength = connection.getContentLengthLong();
+                if (contentLength > maxSize) {
                     throw new IOException("Content size exceeds the limit of " + maxSize + " bytes.");
                 }
                 final byte[] rest = readLimited(input, maxSize - head.length);
@@ -144,8 +186,54 @@ public final class Http {
                 input.close();
             }
         } finally {
-            connection.disconnect();
+            if (connection != null) connection.disconnect();
         }
+    }
+
+    // Content-Disposition またはリダイレクト後の最終 URL からファイル名 (または URL) を得る
+    private static String resolveName(HttpURLConnection connection, String currentUrl, String originalUrl) {
+        final String disposition = connection.getHeaderField("Content-Disposition");
+        if (disposition != null) {
+            final String fromHeader = parseDispositionFilename(disposition);
+            if (fromHeader != null && fromHeader.indexOf('.') >= 0) return fromHeader;
+        }
+        final URL actual = connection.getURL();
+        final String finalUrl = actual != null ? actual.toString() : currentUrl;
+        if (finalUrl != null && finalUrl.indexOf('.') >= 0) return finalUrl;
+        return originalUrl;
+    }
+
+    private static String parseDispositionFilename(String header) {
+        final String lower = header.toLowerCase(Locale.ROOT);
+        int idx = lower.indexOf("filename*=");
+        if (idx >= 0) {
+            String value = header.substring(idx + 10).trim();
+            final int semi = value.indexOf(';');
+            if (semi >= 0) value = value.substring(0, semi).trim();
+            final int quote = value.indexOf("''");
+            if (quote >= 0) value = value.substring(quote + 2);
+            value = stripQuotes(value);
+            try {
+                return java.net.URLDecoder.decode(value, "UTF-8");
+            } catch (Exception ignored) {
+                return value;
+            }
+        }
+        idx = lower.indexOf("filename=");
+        if (idx >= 0) {
+            String value = header.substring(idx + 9).trim();
+            final int semi = value.indexOf(';');
+            if (semi >= 0) value = value.substring(0, semi).trim();
+            return stripQuotes(value);
+        }
+        return null;
+    }
+
+    private static String stripQuotes(String text) {
+        if (text.length() >= 2 && text.charAt(0) == '"' && text.charAt(text.length() - 1) == '"') {
+            return text.substring(1, text.length() - 1);
+        }
+        return text;
     }
 
     private static String readText(HttpURLConnection connection) throws IOException {

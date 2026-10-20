@@ -126,6 +126,14 @@ final class FakePlatform implements Platform {
     public void setClipboard(String text) {
     }
 
+    // 照準の視線。確認する側が決める (null ならワールドに入っていない扱い)
+    double[] crosshair;
+
+    @Override
+    public double[] crosshair() {
+        return crosshair;
+    }
+
     @Override
     public void selfTestLook(float pitch) {
     }

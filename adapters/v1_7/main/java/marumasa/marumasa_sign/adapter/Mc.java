@@ -3,11 +3,14 @@ package marumasa.marumasa_sign.adapter;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.renderer.OpenGlHelper;
 import net.minecraft.client.renderer.tileentity.TileEntityRendererDispatcher;
+import net.minecraft.entity.EntityLivingBase;
 import net.minecraft.init.Blocks;
 import net.minecraft.init.Items;
 import net.minecraft.item.ItemStack;
 import net.minecraft.tileentity.TileEntitySign;
 import net.minecraft.util.ChatComponentText;
+import net.minecraft.util.MovingObjectPosition;
+import net.minecraft.util.Vec3;
 
 import java.io.File;
 import java.util.List;
@@ -98,10 +101,28 @@ final class Mc {
         OpenGlHelper.setLightmapTextureCoords(OpenGlHelper.lightmapTexUnit, light % 65536, light / 65536);
     }
 
+    // ---------- 照準 ----------
+
+    // 照準の視線 {目の位置 x, y, z, 視線の向き x, y, z, 照準が合っているブロックまでの距離 (なければ -1)}
+    static double[] crosshair() {
+        final EntityLivingBase viewer = mc.renderViewEntity;
+        if (viewer == null || !inWorld() || mc.currentScreen != null) return null;
+        final Vec3 eye = viewer.getPosition(1f);
+        final Vec3 look = viewer.getLook(1f);
+        final MovingObjectPosition target = mc.objectMouseOver;
+        final double hit = target != null && target.typeOfHit == MovingObjectPosition.MovingObjectType.BLOCK && target.hitVec != null
+                ? target.hitVec.distanceTo(eye) : -1;
+        return new double[]{eye.xCoord, eye.yCoord, eye.zCoord, look.xCoord, look.yCoord, look.zCoord, hit};
+    }
+
     // ---------- 動作確認用 ----------
 
     static void look(float pitch) {
         if (mc.thePlayer != null) mc.thePlayer.rotationPitch = pitch;
+    }
+
+    static void turn(float yaw) {
+        if (mc.thePlayer != null) mc.thePlayer.rotationYaw = yaw;
     }
 
     // ホットバーにある看板を手に持つ

@@ -149,6 +149,17 @@ public final class MarumaSign {
         return SignSpec.isSign(text);
     }
 
+    // ---------- 使用キー (右クリック) ----------
+
+    /**
+     * 使用キーがクリックされたときに、ゲームが処理する前に呼ぶ。
+     * 照準が PDF の看板に合っていればページ送りに使い、true を返す。
+     * そのときはゲームにクリックを渡さず、キーも離されたことにする (押し続けてブロックを置いたりしないように)。
+     */
+    public static boolean useClicked() {
+        return signs != null && signs.pdfControls().click();
+    }
+
     // ---------- 看板への書き込み ----------
 
     // 次に開かれた看板の編集画面に、文字列を自動で書き込むよう予約する

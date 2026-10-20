@@ -3,7 +3,11 @@ package marumasa.marumasa_sign.adapter;
 import marumasa.marumasa_sign.core.sign.SignImage;
 import net.minecraft.client.renderer.tileentity.TileEntityRendererDispatcher;
 import net.minecraft.tileentity.TileEntitySign;
+import org.lwjgl.BufferUtils;
+import org.lwjgl.opengl.GL11;
 
+import java.nio.Buffer;
+import java.nio.FloatBuffer;
 import java.util.List;
 
 /**
@@ -13,7 +17,26 @@ import java.util.List;
  */
 public final class WorldPass {
 
+    private static final FloatBuffer MATRIX = BufferUtils.createFloatBuffer(16);
+    // staticPlayerX/Y/Z を原点としたカメラの位置
+    private static double cameraX, cameraY, cameraZ;
+
     private WorldPass() {
+    }
+
+    /**
+     * いまの変換行列から、カメラの位置を求める。
+     * staticPlayerY は 1.7.10 では目の高さだが、1.8 以降は足元なので、そのままではカメラの位置にならない。
+     * 変換行列には目の高さも三人称視点のずれも入っているので、どのバージョンでも同じ方法で求められる。
+     */
+    private static void readCamera() {
+        ((Buffer) MATRIX).clear();
+        GL11.glGetFloat(GL11.GL_MODELVIEW_MATRIX, MATRIX);
+        final float tx = MATRIX.get(12), ty = MATRIX.get(13), tz = MATRIX.get(14);
+        // 回転の逆は転置なので、カメラの位置は -R^T t
+        cameraX = -(MATRIX.get(0) * tx + MATRIX.get(1) * ty + MATRIX.get(2) * tz);
+        cameraY = -(MATRIX.get(4) * tx + MATRIX.get(5) * ty + MATRIX.get(6) * tz);
+        cameraZ = -(MATRIX.get(8) * tx + MATRIX.get(9) * ty + MATRIX.get(10) * tz);
     }
 
     public static void render() {
@@ -37,6 +60,7 @@ public final class WorldPass {
             if (x * x + y * y + z * z > distance * distance) continue;
 
             if (!lightmap) {
+                readCamera();
                 Mc.enableLightmap();
                 lightmap = true;
                 // 影 Mod が有効なら、ブロックエンティティ用のシェーダーで描く
@@ -44,7 +68,7 @@ public final class WorldPass {
             }
             // 看板の位置の明るさで描く
             Mc.applyLight(sign);
-            SignDraw.draw(image, sign, x, y, z);
+            SignDraw.draw(image, sign, x, y, z, (float) (cameraX - x), (float) (cameraY - y), (float) (cameraZ - z));
         }
         if (shaders) ShaderHooks.end();
         if (lightmap) Mc.disableLightmap();

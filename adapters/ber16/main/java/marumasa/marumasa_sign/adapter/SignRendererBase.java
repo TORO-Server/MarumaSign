@@ -8,6 +8,7 @@ import net.minecraft.client.Minecraft;
 import net.minecraft.client.renderer.MultiBufferSource;
 import net.minecraft.client.renderer.blockentity.BlockEntityRenderDispatcher;
 import net.minecraft.client.renderer.blockentity.BlockEntityRenderer;
+import net.minecraft.core.BlockPos;
 import net.minecraft.world.level.block.StandingSignBlock;
 import net.minecraft.world.level.block.WallSignBlock;
 import net.minecraft.world.level.block.entity.BlockEntityType;
@@ -75,19 +76,24 @@ final class SignRendererBase extends BlockEntityRenderer<SignBlockEntity> {
             return;
         }
 
-        for (SignImage.Batch batch : image.batches(yaw, wall, distance(sign))) {
+        final Vec3 camera = mc.gameRenderer.getMainCamera().getPosition();
+        final BlockPos pos = sign.getBlockPos();
+        final double signX = pos.getX();
+        final double signY = pos.getY();
+        final double signZ = pos.getZ();
+        final double dx = signX + 0.5 - camera.x;
+        final double dy = signY + 0.5 - camera.y;
+        final double dz = signZ + 0.5 - camera.z;
+        final double distance = Math.sqrt(dx * dx + dy * dy + dz * dz);
+        final float camX = (float) (camera.x - signX);
+        final float camY = (float) (camera.y - signY);
+        final float camZ = (float) (camera.z - signZ);
+
+        for (SignImage.Batch batch : image.batches(yaw, wall, distance, camX, camY, camZ,
+                pos.getX(), pos.getY(), pos.getZ())) {
             Mc.quads(buffers.getBuffer(((Tex) batch.texture).renderType), poseStack, batch, light);
         }
         MarumaSign.drawn(image);
-    }
-
-    // カメラから看板までの距離 (ブロック)
-    private double distance(SignBlockEntity sign) {
-        final Vec3 camera = mc.gameRenderer.getMainCamera().getPosition();
-        final double x = sign.getBlockPos().getX() + 0.5 - camera.x;
-        final double y = sign.getBlockPos().getY() + 0.5 - camera.y;
-        final double z = sign.getBlockPos().getZ() + 0.5 - camera.z;
-        return Math.sqrt(x * x + y * y + z * z);
     }
 
     @Override
