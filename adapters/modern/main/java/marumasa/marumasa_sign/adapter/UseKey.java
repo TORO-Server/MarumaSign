@@ -12,8 +12,10 @@ import net.minecraft.client.Minecraft;
  */
 final class UseKey extends KeyMapping {
 
+    // 既定のキーも元のものを使う (マウスボタンの番号は入力ライブラリによって違い、26.3 からは右クリックが 3 になった)
     private UseKey(KeyMapping original) {
-        super(original.getName(), InputConstants.Type.MOUSE, 1, original.getCategory());
+        super(original.getName(), original.getDefaultKey().getType(), original.getDefaultKey().getValue(),
+                original.getCategory());
     }
 
     @Override

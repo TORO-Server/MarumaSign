@@ -55,8 +55,9 @@ final class Mc {
         mc.gui.hud.getChat().addClientSystemMessage(Component.literal(message));
     }
 
-    static KeyMapping newKey(String name, int keyCode) {
-        return new KeyMapping(name, InputConstants.Type.KEYBOARD, keyCode, KeyMapping.Category.MISC);
+    // B キーを既定にしたキー割り当てを作る
+    static KeyMapping newKey(String name) {
+        return new KeyMapping(name, InputConstants.Type.KEYBOARD, InputConstants.KEY_B, KeyMapping.Category.MISC);
     }
 
     // 看板に書いてある文字を 1 つの文字列にする

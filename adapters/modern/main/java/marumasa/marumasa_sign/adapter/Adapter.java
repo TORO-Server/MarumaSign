@@ -19,8 +19,6 @@ public final class Adapter {
 
     // 処理を呼ぶ間隔 (ミリ秒)。ゲームの 1 tick と同じ
     private static final long INTERVAL = 50;
-    // GLFW の B キー
-    private static final int KEY_B = 66;
 
     private static final AtomicBoolean started = new AtomicBoolean();
     // メインスレッドに渡した処理がまだ実行されていないかどうか
@@ -84,7 +82,7 @@ public final class Adapter {
 
     // キーバインド登録
     private static void registerKey(Minecraft mc) {
-        openMenu = Mc.newKey("MarumaSign", KEY_B);
+        openMenu = Mc.newKey("MarumaSign");
         final KeyMapping[] current = mc.options.keyMappings;
         final KeyMapping[] extended = new KeyMapping[current.length + 1];
         System.arraycopy(current, 0, extended, 0, current.length);
