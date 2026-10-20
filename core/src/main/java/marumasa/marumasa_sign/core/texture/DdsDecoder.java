@@ -1,5 +1,7 @@
 package marumasa.marumasa_sign.core.texture;
 
+import marumasa.marumasa_sign.core.image.ArgbPixels;
+
 import java.awt.image.BufferedImage;
 import java.io.IOException;
 
@@ -119,9 +121,8 @@ public final class DdsDecoder {
             throw new IOException("Unsupported DDS pixel format (flags=" + pfFlags + ", fourCC=" + fourCC + ")");
         }
 
-        final BufferedImage image = new BufferedImage(width, height, BufferedImage.TYPE_INT_ARGB);
-        image.setRGB(0, 0, width, height, argb, 0, width);
-        return image;
+        // 配列をそのまま使う (setRGB は 1 ピクセルずつ変換するので遅い)
+        return ArgbPixels.wrap(width, height, argb);
     }
 
     private static void decodeFourCC(byte[] data, int offset, int width, int height, int fourCC, int[] out) throws IOException {

@@ -326,11 +326,14 @@ def main():
             save_summary(summary_file, summary, key, None)
             selected.discard(key)
             continue
+        first_attempt = None
         if not result.get("clean"):
-            # 他の処理と重なって時間切れになることがあるので、1 回だけやり直す
-            verify.log(f"=== retry {key} ({str(result.get('detail'))[:200]} / {result.get('image_detail')}"
-                       f" / {result.get('sign_detail')} / {result.get('item_detail')}"
-                       f" / {(result.get('new_client_findings', []) + result.get('new_server_findings', []))[:3]})")
+            # 他の処理と重なって時間切れになることがあるので、1 回だけやり直す。
+            # やり直して合格しても、たまにしか起きない不具合かもしれないので、最初の失敗の内容を結果に残す
+            first_attempt = (f"{str(result.get('detail'))[:200]} / {result.get('image_detail')}"
+                             f" / {result.get('sign_detail')} / {result.get('item_detail')}"
+                             f" / {(result.get('new_client_findings', []) + result.get('new_server_findings', []))[:3]}")
+            verify.log(f"=== retry {key} ({first_attempt})")
             keep_failed_attempt(result.get("work_dir"))
             result = run_one(root, loader, minecraft, loader_version, mod, False, args.timeout, args.media, args.shaders,
                              args.shader_pack, args.shader_mod, port=args.port)
@@ -360,6 +363,10 @@ def main():
             "shader_pack": result.get("shader_pack"),
             "new_client_findings": result.get("new_client_findings", [])[:8],
             "new_server_findings": result.get("new_server_findings", [])[:8],
+            # ファイルごとの、看板が表示されるまでの時間 (ミリ秒)
+            "load_ms": result.get("load_ms", {}),
+            # やり直す前の失敗の内容。やり直さなかったなら None
+            "first_attempt": first_attempt,
         })
 
     if pending:
@@ -376,8 +383,15 @@ def main():
         if not entry.get("clean"):
             failed += 1
         print(f"{key:<24} {'yes' if entry.get('ok') else 'NO':<6} {'yes' if entry.get('clean') else 'NO':<6} {entry.get('detail', '')}")
+        if entry.get("first_attempt"):
+            print(f"    ! the first attempt failed: {entry['first_attempt'][:300]}")
         for line in entry.get("new_client_findings", []) + entry.get("new_server_findings", []):
             print(f"    ! {line[:200]}")
+    # 表示されるまでに時間がかかったもの (遅くなったことに気づけるように)
+    slow = sorted(((millis, key, name) for key, entry in summary.items() if key in selected
+                   for name, millis in (entry.get("load_ms") or {}).items()), reverse=True)[:5]
+    if slow:
+        print("slowest loads: " + ", ".join(f"{key} {name} {millis} ms" for millis, key, name in slow))
     sys.exit(1 if failed else 0)
 
 

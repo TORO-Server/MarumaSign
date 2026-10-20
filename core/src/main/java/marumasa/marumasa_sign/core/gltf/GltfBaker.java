@@ -1,7 +1,14 @@
 package marumasa.marumasa_sign.core.gltf;
 
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.ThreadFactory;
+import java.util.concurrent.atomic.AtomicInteger;
 
 /**
  * 材質の細かい表現 (法線マップ、金属らしさと粗さのテクスチャ、発光のテクスチャなど) を、
@@ -152,21 +159,117 @@ final class GltfBaker {
         // 各点を最初に塗った面の法線。重なりの検出に使う
         final int[] owner;
         final boolean[] covered;
+        // 各点の色を決める三角形 (すべての面を通した三角形の番号 + 1)。0 ならその点は塗らない
+        final int[] writer;
 
         Layer(int size) {
             pixels = new int[size];
             owner = new int[size];
             covered = new boolean[size];
+            writer = new int[size];
         }
     }
+
+    // 各点の色を計算するスレッドの数 (呼び出したスレッドを含む)。ゲームの描画のために 1 つは空けておく
+    private static final int THREADS = Math.max(1, Math.min(8, Runtime.getRuntime().availableProcessors() - 1));
+    private static final ExecutorService POOL = THREADS <= 1 ? null : Executors.newFixedThreadPool(THREADS - 1, new ThreadFactory() {
+        @Override
+        public Thread newThread(Runnable r) {
+            final Thread thread = new Thread(r, "MarumaSign-Bake");
+            thread.setDaemon(true);
+            thread.setPriority(Thread.NORM_PRIORITY - 1);
+            return thread;
+        }
+    });
+    // 1 回にまとめて計算する点の数の目安
+    private static final int CHUNK_PIXELS = 16384;
 
     private final Input input;
     private final int width, height;
     private final List<Layer> layers = new ArrayList<Layer>();
-    private final float[] shaded = new float[3];
-    private final GltfLight.Context ctx = new GltfLight.Context();
+    // 塗る三角形を決めるときに使う、三角形の情報
+    private final Triangle scratch = new Triangle();
     // scan の結果
     private int inside, overlap;
+
+    // 三角形 1 枚の、テクスチャの上での位置と、面の向き
+    private final class Triangle {
+        Surface surface;
+        // 三角形の最初の角の番号 (三角形の番号 * 3)
+        int t;
+        int a, b, c;
+        float xa, ya, xb, yb, xc, yc, area;
+        float fx, fy, fz;
+        float faceTx, faceTy, faceTz, faceHand;
+        // 準備した三角形の、すべての面を通した番号 + 1。まだなら 0
+        int id;
+
+        // 三角形を準備する。テクスチャの上で面積がないか、面の向きが決まらなければ false
+        boolean setup(Surface surface, int triangle) {
+            id = 0;
+            this.surface = surface;
+            final GltfModel.Primitive primitive = surface.primitive;
+            final float[] positions = surface.positions;
+            final float sign = surface.sign;
+            t = triangle * 3;
+            a = primitive.indices[t];
+            b = primitive.indices[t + 1];
+            c = primitive.indices[t + 2];
+            final float[] uv = primitive.cornerUv;
+            final float ua = uv[t * 2], va = uv[t * 2 + 1];
+            final float ub = uv[t * 2 + 2], vb = uv[t * 2 + 3];
+            final float uc = uv[t * 2 + 4], vc = uv[t * 2 + 5];
+
+            // テクスチャ上での位置 (ピクセル)
+            xa = ua * width;
+            ya = va * height;
+            xb = ub * width;
+            yb = vb * height;
+            xc = uc * width;
+            yc = vc * height;
+            area = (xb - xa) * (yc - ya) - (xc - xa) * (yb - ya);
+            if (area == 0 || Float.isNaN(area)) return false;
+
+            // 面の向き
+            final float e1x = positions[b * 3] - positions[a * 3], e1y = positions[b * 3 + 1] - positions[a * 3 + 1],
+                    e1z = positions[b * 3 + 2] - positions[a * 3 + 2];
+            final float e2x = positions[c * 3] - positions[a * 3], e2y = positions[c * 3 + 1] - positions[a * 3 + 1],
+                    e2z = positions[c * 3 + 2] - positions[a * 3 + 2];
+            fx = (e1y * e2z - e1z * e2y) * sign;
+            fy = (e1z * e2x - e1x * e2z) * sign;
+            fz = (e1x * e2y - e1y * e2x) * sign;
+            final float faceLength = (float) Math.sqrt(fx * fx + fy * fy + fz * fz);
+            if (faceLength == 0) return false;
+            fx /= faceLength;
+            fy /= faceLength;
+            fz /= faceLength;
+
+            // テクスチャの横方向 (u が増える向き) を表す、面に沿ったベクトル。法線マップの貼り方で決まる
+            final float[] bumpUv = input.normal != null && input.normal.slot > 0 && surface.extraUv != null
+                    ? surface.extraUv[input.normal.slot - 1] : uv;
+            final float du1 = bumpUv[t * 2 + 2] - bumpUv[t * 2], dv1 = bumpUv[t * 2 + 3] - bumpUv[t * 2 + 1];
+            final float du2 = bumpUv[t * 2 + 4] - bumpUv[t * 2], dv2 = bumpUv[t * 2 + 5] - bumpUv[t * 2 + 1];
+            final float uvArea = du1 * dv2 - du2 * dv1;
+            faceTx = 0;
+            faceTy = 0;
+            faceTz = 0;
+            if (uvArea != 0) {
+                faceTx = (e1x * dv2 - e2x * dv1) / uvArea;
+                faceTy = (e1y * dv2 - e2y * dv1) / uvArea;
+                faceTz = (e1z * dv2 - e2z * dv1) / uvArea;
+            }
+            // テクスチャの縦は下向きに増えるので、普通の貼り方では面積が負になる。そのとき画像の上が面の「上」になる
+            faceHand = uvArea < 0 ? 1 : -1;
+            return true;
+        }
+    }
+
+    // 各点の色を計算するスレッドが、それぞれ持つ作業用の場所
+    private final class Painter {
+        final Triangle triangle = new Triangle();
+        final GltfLight.Context ctx = new GltfLight.Context();
+        final float[] shaded = new float[3];
+    }
 
     private GltfBaker(Input input, int width, int height) {
         this.input = input;
@@ -182,9 +285,16 @@ final class GltfBaker {
      */
     static Result bake(Input input, List<Surface> surfaces, int width, int height) {
         final GltfBaker baker = new GltfBaker(input, width, height);
-        for (Surface surface : surfaces) {
+        // 各面の最初の三角形の、すべての面を通した番号
+        final int[] bases = new int[surfaces.size()];
+        int base = 0;
+        for (int i = 0; i < surfaces.size(); i++) {
+            final Surface surface = surfaces.get(i);
             baker.prepare(surface);
-            if (!baker.paint(surface)) return null;
+            bases[i] = base;
+            // ここでは、各点をどの三角形が塗るかだけを決める (重なりの判定は塗る順番で変わるので、順に行う)
+            if (!baker.paint(surface, base)) return null;
+            base += surface.layers.length;
         }
         if (baker.layers.isEmpty()) return null;
 
@@ -194,6 +304,8 @@ final class GltfBaker {
         result.pixels = new int[width * count * height];
         for (int i = 0; i < count; i++) {
             final Layer layer = baker.layers.get(i);
+            // 各点の色は、塗る三角形が決まれば点ごとに独立に求まるので、まとめて並列に計算する
+            baker.fill(layer, surfaces, bases);
             dilate(layer.pixels, layer.covered, width, height);
             for (int y = 0; y < height; y++) {
                 System.arraycopy(layer.pixels, y * width, result.pixels, y * width * count + i * width, width);
@@ -251,7 +363,8 @@ final class GltfBaker {
     }
 
     // 面の三角形を、重ならない層を選んで塗る。層が足りないか、テクスチャに焼き込めない面が多ければ false
-    private boolean paint(Surface surface) {
+    // base は、この面の最初の三角形の、すべての面を通した番号
+    private boolean paint(Surface surface, int base) {
         final int triangles = surface.layers.length;
         final float[] uv = surface.primitive.cornerUv;
         int flat = 0;
@@ -272,7 +385,7 @@ final class GltfBaker {
                     chosen = index;
                     break;
                 }
-                raster(surface, triangle, layers.get(index), false);
+                raster(surface, triangle, layers.get(index), 0);
                 if (overlap <= inside * MAX_OVERLAP) {
                     chosen = index;
                     break;
@@ -281,63 +394,77 @@ final class GltfBaker {
             if (chosen < 0) return false;
             if (chosen == layers.size()) layers.add(new Layer(width * height));
             surface.layers[triangle] = chosen;
-            raster(surface, triangle, layers.get(chosen), true);
+            raster(surface, triangle, layers.get(chosen), base + triangle + 1);
         }
         return true;
     }
 
+    // 層の各点の色を、その点を塗る三角形 (Layer.writer) から計算する。点ごとに独立なので、いくつかのスレッドで分けて行う
+    private void fill(final Layer layer, final List<Surface> surfaces, final int[] bases) {
+        final int rowsPerChunk = Math.max(1, CHUNK_PIXELS / Math.max(1, width));
+        final int chunks = (height + rowsPerChunk - 1) / rowsPerChunk;
+        final AtomicInteger next = new AtomicInteger();
+        final Runnable work = new Runnable() {
+            @Override
+            public void run() {
+                final Painter painter = new Painter();
+                for (int chunk; (chunk = next.getAndIncrement()) < chunks; ) {
+                    final int end = Math.min(height, (chunk + 1) * rowsPerChunk);
+                    for (int y = chunk * rowsPerChunk; y < end; y++) {
+                        for (int x = 0; x < width; x++) {
+                            final int pixel = y * width + x;
+                            final int id = layer.writer[pixel];
+                            if (id == 0) continue;
+                            final Triangle triangle = painter.triangle;
+                            if (triangle.id != id) {
+                                // 番号から面と三角形を探す (bases は昇順)
+                                int s = Arrays.binarySearch(bases, id - 1);
+                                if (s < 0) s = -s - 2;
+                                // 空の面 (三角形がない) が続くと同じ番号が並ぶので、三角形のある最後の面にする
+                                while (s + 1 < bases.length && bases[s + 1] == bases[s] && bases[s + 1] <= id - 1) s++;
+                                triangle.setup(surfaces.get(s), id - 1 - bases[s]);
+                                triangle.id = id;
+                            }
+                            layer.pixels[pixel] = color(painter, x, y);
+                        }
+                    }
+                }
+            }
+        };
+        final int helpers = POOL == null ? 0 : Math.min(THREADS - 1, chunks - 1);
+        final List<Future<?>> futures = new ArrayList<Future<?>>();
+        for (int i = 0; i < helpers; i++) futures.add(POOL.submit(work));
+        // 呼び出したスレッドも計算に加わる
+        work.run();
+        for (Future<?> future : futures) {
+            try {
+                future.get();
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                throw new IllegalStateException("Interrupted while baking", e);
+            } catch (ExecutionException e) {
+                final Throwable cause = e.getCause();
+                if (cause instanceof RuntimeException) throw (RuntimeException) cause;
+                if (cause instanceof Error) throw (Error) cause;
+                throw new IllegalStateException(cause);
+            }
+        }
+    }
+
     /**
      * 三角形 1 枚を、テクスチャの上でたどる。
-     * paint が false なら、三角形の中の点の数 (inside) と、別の向きの面がすでに使っている点の数 (overlap) を数えるだけにする。
+     * id が 0 なら、三角形の中の点の数 (inside) と、別の向きの面がすでに使っている点の数 (overlap) を数えるだけにする。
+     * id が 0 でなければ、塗る点を覚え (Layer.writer に id を入れる)、色は fill であとから計算する。
      */
-    private void raster(Surface surface, int triangle, Layer layer, boolean paint) {
+    private void raster(Surface surface, int triangle, Layer layer, int id) {
         inside = 0;
         overlap = 0;
-        final GltfModel.Primitive primitive = surface.primitive;
-        final float[] positions = surface.positions;
+        final boolean paint = id != 0;
+        final Triangle tri = scratch;
+        if (!tri.setup(surface, triangle)) return;
         final float[] normals = surface.normals;
-        final float[] tangents = surface.tangents;
-        final float sign = surface.sign;
-        final int t = triangle * 3;
-        final int a = primitive.indices[t], b = primitive.indices[t + 1], c = primitive.indices[t + 2];
-        final float[] uv = primitive.cornerUv;
-        final float ua = uv[t * 2], va = uv[t * 2 + 1];
-        final float ub = uv[t * 2 + 2], vb = uv[t * 2 + 3];
-        final float uc = uv[t * 2 + 4], vc = uv[t * 2 + 5];
-
-        // テクスチャ上での位置 (ピクセル)
-        final float xa = ua * width, ya = va * height;
-        final float xb = ub * width, yb = vb * height;
-        final float xc = uc * width, yc = vc * height;
-        final float area = (xb - xa) * (yc - ya) - (xc - xa) * (yb - ya);
-        if (area == 0 || Float.isNaN(area)) return;
-
-        // 面の向き
-        final float e1x = positions[b * 3] - positions[a * 3], e1y = positions[b * 3 + 1] - positions[a * 3 + 1],
-                e1z = positions[b * 3 + 2] - positions[a * 3 + 2];
-        final float e2x = positions[c * 3] - positions[a * 3], e2y = positions[c * 3 + 1] - positions[a * 3 + 1],
-                e2z = positions[c * 3 + 2] - positions[a * 3 + 2];
-        float fx = (e1y * e2z - e1z * e2y) * sign, fy = (e1z * e2x - e1x * e2z) * sign, fz = (e1x * e2y - e1y * e2x) * sign;
-        final float faceLength = (float) Math.sqrt(fx * fx + fy * fy + fz * fz);
-        if (faceLength == 0) return;
-        fx /= faceLength;
-        fy /= faceLength;
-        fz /= faceLength;
-
-        // テクスチャの横方向 (u が増える向き) を表す、面に沿ったベクトル。法線マップの貼り方で決まる
-        final float[] bumpUv = input.normal != null && input.normal.slot > 0 && surface.extraUv != null
-                ? surface.extraUv[input.normal.slot - 1] : uv;
-        final float du1 = bumpUv[t * 2 + 2] - bumpUv[t * 2], dv1 = bumpUv[t * 2 + 3] - bumpUv[t * 2 + 1];
-        final float du2 = bumpUv[t * 2 + 4] - bumpUv[t * 2], dv2 = bumpUv[t * 2 + 5] - bumpUv[t * 2 + 1];
-        final float uvArea = du1 * dv2 - du2 * dv1;
-        float faceTx = 0, faceTy = 0, faceTz = 0;
-        if (uvArea != 0) {
-            faceTx = (e1x * dv2 - e2x * dv1) / uvArea;
-            faceTy = (e1y * dv2 - e2y * dv1) / uvArea;
-            faceTz = (e1z * dv2 - e2z * dv1) / uvArea;
-        }
-        // テクスチャの縦は下向きに増えるので、普通の貼り方では面積が負になる。そのとき画像の上が面の「上」になる
-        final float faceHand = uvArea < 0 ? 1 : -1;
+        final int a = tri.a, b = tri.b, c = tri.c;
+        final float xa = tri.xa, ya = tri.ya, xb = tri.xb, yb = tri.yb, xc = tri.xc, yc = tri.yc, area = tri.area;
 
         final int minX = Math.max(0, (int) Math.floor(Math.min(xa, Math.min(xb, xc)) - 0.5f));
         final int maxX = Math.min(width - 1, (int) Math.ceil(Math.max(xa, Math.max(xb, xc)) - 0.5f));
@@ -359,21 +486,20 @@ final class GltfBaker {
                 // 面の外側にはみ出した点は、まだ塗られていないときだけ塗る
                 if (!within && (!paint || layer.covered[pixel])) continue;
 
-                // 法線
-                float nx = fx, ny = fy, nz = fz;
-                if (normals != null) {
-                    final float ix = normals[a * 3] * w0 + normals[b * 3] * w1 + normals[c * 3] * w2;
-                    final float iy = normals[a * 3 + 1] * w0 + normals[b * 3 + 1] * w1 + normals[c * 3 + 1] * w2;
-                    final float iz = normals[a * 3 + 2] * w0 + normals[b * 3 + 2] * w1 + normals[c * 3 + 2] * w2;
-                    final float length = (float) Math.sqrt(ix * ix + iy * iy + iz * iz);
-                    if (length > 0) {
-                        nx = ix / length;
-                        ny = iy / length;
-                        nz = iz / length;
-                    }
-                }
-
                 if (within) {
+                    // 法線
+                    float nx = tri.fx, ny = tri.fy, nz = tri.fz;
+                    if (normals != null) {
+                        final float ix = normals[a * 3] * w0 + normals[b * 3] * w1 + normals[c * 3] * w2;
+                        final float iy = normals[a * 3 + 1] * w0 + normals[b * 3 + 1] * w1 + normals[c * 3 + 1] * w2;
+                        final float iz = normals[a * 3 + 2] * w0 + normals[b * 3 + 2] * w1 + normals[c * 3 + 2] * w2;
+                        final float length = (float) Math.sqrt(ix * ix + iy * iy + iz * iz);
+                        if (length > 0) {
+                            nx = ix / length;
+                            ny = iy / length;
+                            nz = iz / length;
+                        }
+                    }
                     inside++;
                     if (layer.covered[pixel]) {
                         final int packed = layer.owner[pixel];
@@ -387,60 +513,93 @@ final class GltfBaker {
                                 | Math.round((nz + 1) * 511f);
                     }
                 }
-                if (!paint) continue;
-
-                final float u = px / width, v = py / height;
-                // 接線。頂点に指定があればそれを、なければ面から求めたものを使う
-                float tx = 0, ty = 0, tz = 0, bx = 0, by = 0, bz = 0;
-                if (tangents != null) {
-                    tx = tangents[a * 3] * w0 + tangents[b * 3] * w1 + tangents[c * 3] * w2;
-                    ty = tangents[a * 3 + 1] * w0 + tangents[b * 3 + 1] * w1 + tangents[c * 3 + 1] * w2;
-                    tz = tangents[a * 3 + 2] * w0 + tangents[b * 3 + 2] * w1 + tangents[c * 3 + 2] * w2;
-                    final float hand = primitive.tangents[a * 4 + 3] < 0 ? -sign : sign;
-                    final float along = tx * nx + ty * ny + tz * nz;
-                    tx -= nx * along;
-                    ty -= ny * along;
-                    tz -= nz * along;
-                    final float length = (float) Math.sqrt(tx * tx + ty * ty + tz * tz);
-                    if (length > 1e-12f) {
-                        tx /= length; ty /= length; tz /= length;
-                        bx = (ny * tz - nz * ty) * hand;
-                        by = (nz * tx - nx * tz) * hand;
-                        bz = (nx * ty - ny * tx) * hand;
-                    }
-                } else if (faceTx != 0 || faceTy != 0 || faceTz != 0) {
-                    tx = faceTx; ty = faceTy; tz = faceTz;
-                    final float along = tx * nx + ty * ny + tz * nz;
-                    tx -= nx * along;
-                    ty -= ny * along;
-                    tz -= nz * along;
-                    final float length = (float) Math.sqrt(tx * tx + ty * ty + tz * tz);
-                    if (length > 1e-12f) {
-                        tx /= length; ty /= length; tz /= length;
-                        bx = (ny * tz - nz * ty) * faceHand;
-                        by = (nz * tx - nx * tz) * faceHand;
-                        bz = (nx * ty - ny * tx) * faceHand;
-                    }
-                }
-
-                if (input.normal != null && (tx != 0 || ty != 0 || tz != 0)) {
-                    final int sample = sample(input.normal, surface, t, u, v, w0, w1, w2);
-                    final float mx = (((sample >> 16) & 0xFF) / 127.5f - 1) * input.normalScale;
-                    final float my = (((sample >> 8) & 0xFF) / 127.5f - 1) * input.normalScale;
-                    final float mz = (sample & 0xFF) / 127.5f - 1;
-                    final float rx = tx * mx + bx * my + nx * mz;
-                    final float ry = ty * mx + by * my + ny * mz;
-                    final float rz = tz * mx + bz * my + nz * mz;
-                    final float bent = (float) Math.sqrt(rx * rx + ry * ry + rz * rz);
-                    if (bent > 0) {
-                        nx = rx / bent;
-                        ny = ry / bent;
-                        nz = rz / bent;
-                    }
-                }
-                layer.pixels[pixel] = texel(surface, t, u, v, w0, w1, w2, nx, ny, nz, tx, ty, tz, bx, by, bz);
+                // 後から塗った三角形の色が残る
+                if (paint) layer.writer[pixel] = id;
             }
         }
+    }
+
+    // 三角形 (painter.triangle) が塗る点 (x, y) の色を計算する
+    private int color(Painter painter, int x, int y) {
+        final Triangle tri = painter.triangle;
+        final Surface surface = tri.surface;
+        final GltfModel.Primitive primitive = surface.primitive;
+        final float[] normals = surface.normals;
+        final float[] tangents = surface.tangents;
+        final float sign = surface.sign;
+        final int t = tri.t, a = tri.a, b = tri.b, c = tri.c;
+        final float xa = tri.xa, ya = tri.ya, xb = tri.xb, yb = tri.yb, xc = tri.xc, yc = tri.yc, area = tri.area;
+
+        // raster と同じ式で求める (同じ値になるように)
+        final float px = x + 0.5f, py = y + 0.5f;
+        final float w0 = ((xb - px) * (yc - py) - (xc - px) * (yb - py)) / area;
+        final float w1 = ((xc - px) * (ya - py) - (xa - px) * (yc - py)) / area;
+        final float w2 = 1 - w0 - w1;
+
+        // 法線
+        float nx = tri.fx, ny = tri.fy, nz = tri.fz;
+        if (normals != null) {
+            final float ix = normals[a * 3] * w0 + normals[b * 3] * w1 + normals[c * 3] * w2;
+            final float iy = normals[a * 3 + 1] * w0 + normals[b * 3 + 1] * w1 + normals[c * 3 + 1] * w2;
+            final float iz = normals[a * 3 + 2] * w0 + normals[b * 3 + 2] * w1 + normals[c * 3 + 2] * w2;
+            final float length = (float) Math.sqrt(ix * ix + iy * iy + iz * iz);
+            if (length > 0) {
+                nx = ix / length;
+                ny = iy / length;
+                nz = iz / length;
+            }
+        }
+
+        final float u = px / width, v = py / height;
+        // 接線。頂点に指定があればそれを、なければ面から求めたものを使う
+        float tx = 0, ty = 0, tz = 0, bx = 0, by = 0, bz = 0;
+        if (tangents != null) {
+            tx = tangents[a * 3] * w0 + tangents[b * 3] * w1 + tangents[c * 3] * w2;
+            ty = tangents[a * 3 + 1] * w0 + tangents[b * 3 + 1] * w1 + tangents[c * 3 + 1] * w2;
+            tz = tangents[a * 3 + 2] * w0 + tangents[b * 3 + 2] * w1 + tangents[c * 3 + 2] * w2;
+            final float hand = primitive.tangents[a * 4 + 3] < 0 ? -sign : sign;
+            final float along = tx * nx + ty * ny + tz * nz;
+            tx -= nx * along;
+            ty -= ny * along;
+            tz -= nz * along;
+            final float length = (float) Math.sqrt(tx * tx + ty * ty + tz * tz);
+            if (length > 1e-12f) {
+                tx /= length; ty /= length; tz /= length;
+                bx = (ny * tz - nz * ty) * hand;
+                by = (nz * tx - nx * tz) * hand;
+                bz = (nx * ty - ny * tx) * hand;
+            }
+        } else if (tri.faceTx != 0 || tri.faceTy != 0 || tri.faceTz != 0) {
+            tx = tri.faceTx; ty = tri.faceTy; tz = tri.faceTz;
+            final float along = tx * nx + ty * ny + tz * nz;
+            tx -= nx * along;
+            ty -= ny * along;
+            tz -= nz * along;
+            final float length = (float) Math.sqrt(tx * tx + ty * ty + tz * tz);
+            if (length > 1e-12f) {
+                tx /= length; ty /= length; tz /= length;
+                bx = (ny * tz - nz * ty) * tri.faceHand;
+                by = (nz * tx - nx * tz) * tri.faceHand;
+                bz = (nx * ty - ny * tx) * tri.faceHand;
+            }
+        }
+
+        if (input.normal != null && (tx != 0 || ty != 0 || tz != 0)) {
+            final int sample = sample(input.normal, surface, t, u, v, w0, w1, w2);
+            final float mx = (((sample >> 16) & 0xFF) / 127.5f - 1) * input.normalScale;
+            final float my = (((sample >> 8) & 0xFF) / 127.5f - 1) * input.normalScale;
+            final float mz = (sample & 0xFF) / 127.5f - 1;
+            final float rx = tx * mx + bx * my + nx * mz;
+            final float ry = ty * mx + by * my + ny * mz;
+            final float rz = tz * mx + bz * my + nz * mz;
+            final float bent = (float) Math.sqrt(rx * rx + ry * ry + rz * rz);
+            if (bent > 0) {
+                nx = rx / bent;
+                ny = ry / bent;
+                nz = rz / bent;
+            }
+        }
+        return texel(painter, surface, t, u, v, w0, w1, w2, nx, ny, nz, tx, ty, tz, bx, by, bz);
     }
 
     // 画像の色を取り出す。焼き込み先と違う座標を使う画像は、三角形の中での位置から座標を求める
@@ -452,8 +611,10 @@ final class GltfBaker {
     }
 
     // テクスチャの 1 点の色を計算する
-    private int texel(Surface surface, int corner, float u, float v, float w0, float w1, float w2,
+    private int texel(Painter painter, Surface surface, int corner, float u, float v, float w0, float w1, float w2,
                       float nx, float ny, float nz, float tx, float ty, float tz, float bx, float by, float bz) {
+        final GltfLight.Context ctx = painter.ctx;
+        final float[] shaded = painter.shaded;
         float r = input.baseFactor[0], g = input.baseFactor[1], b = input.baseFactor[2], a = input.baseFactor[3];
         if (input.base != null) {
             final int sample = sample(input.base, surface, corner, u, v, w0, w1, w2);
