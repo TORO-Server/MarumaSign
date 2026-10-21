@@ -953,6 +953,48 @@ def analyze_page_two(path):
     return True, "page 2 visible"
 
 
+def analyze_page_two_shaded(path):
+    """シェーダーを使っているときの、PDF の 2 ページ目の判定。
+
+    シェーダーは絵の色を変える (黄色がくすんだ緑のような色になる) ので、色そのものではなく色合い (色相) で 4 つの区画を分け、
+    それぞれの中心の位置が、180 度回したテスト画像の並びになっているかを調べる。
+    空と地面が混ざらないように、画面の中央の、ページが写る範囲だけを見る。
+    """
+    import colorsys
+
+    from PIL import Image
+
+    image = Image.open(path).convert("RGB")
+    image.thumbnail((640, 640))
+    width, height = image.size
+    pixels = image.load()
+    sums = {name: [0, 0, 0] for name, _, _, _ in SHADED_POINTS}
+    for y in range(int(height * 0.28), int(height * 0.64)):
+        for x in range(int(width * 0.28), int(width * 0.72)):
+            r, g, b = pixels[x, y]
+            hue, saturation, value = colorsys.rgb_to_hsv(r / 255, g / 255, b / 255)
+            if saturation < 0.25 or value < 0.1:
+                continue
+            degrees = hue * 360
+            for name, _, _, ranges in SHADED_POINTS:
+                if any(low <= degrees <= high for low, high in ranges):
+                    entry = sums[name]
+                    entry[0] += 1
+                    entry[1] += x
+                    entry[2] += y
+                    break
+    counts = {name: entry[0] for name, entry in sums.items()}
+    minimum = width * height // 400
+    if any(count < minimum for count in counts.values()):
+        return False, f"page 2 colours not found (shaded, pixels: {counts})"
+    centre = {name: (entry[1] / entry[0], entry[2] / entry[0]) for name, entry in sums.items()}
+    turned = (centre["red"][0] > centre["green"][0] and centre["blue"][0] > centre["yellow"][0]
+              and centre["red"][1] > centre["blue"][1] and centre["green"][1] > centre["yellow"][1])
+    if not turned:
+        return False, f"page 2 not shown (shaded, centres: {centre})"
+    return True, "page 2 visible (shaded)"
+
+
 def analyze_screenshot_shaded(path):
     """シェーダーを使っているときの、テスト画像の判定。
 
@@ -1210,7 +1252,7 @@ def run(args):
         shader_setup = None
         if shaders:
             shader_setup = shadermods.resolve(args.loader, args.minecraft, root / "shadermods", shader_pack,
-                                             shader_mod)
+                                             shader_mod, args.loader_version or "")
             if shader_setup is None:
                 result["detail"] = "No shader mod is available for this combination"
                 return result
@@ -1280,6 +1322,9 @@ def run(args):
             # 確認用の画像はこのコンピューターの中のサーバーから配るので、手元の URL を読めるようにする
             "-Dmarumasign.allowLocalUrls=true",
         ] + ([f"-Dmarumasign.selftest.server=127.0.0.1:{args.port}"] if mod_join else [])
+            # Forge 1.20.3 (49.0.2) の起動設定は、ライブラリのフォルダを渡さない。渡さないと、作業フォルダの中の
+            # libraries を探して起動できない
+            + ([f"-DlibraryDirectory={main_dir / 'libraries'}"] if args.loader == "forge" else [])
             + asset_jvm_args(main_dir)
             + os.environ.get("MARUMASIGN_VERIFY_JVM_ARGS", "").split())
         command = base + ["start", spec, "-u", PLAYER] + ([] if mod_join else ["-s", "127.0.0.1", "-p", str(args.port)]) \
@@ -1322,6 +1367,8 @@ def run(args):
                         entry[key] = grab_screen(shot, client)
                         if key == "pdf-page" and entry[key]:
                             entry["pdf_page_two"], entry["pdf_detail"] = analyze_page_two(shot)
+                            if shaders and not entry["pdf_page_two"]:
+                                entry["pdf_page_two"], entry["pdf_detail"] = analyze_page_two_shaded(shot)
                         # 記録し終えたことを Mod に知らせる。Mod はそれを待ってから次の操作に進む
                         (result_dir / f"{key}-{current}-done.txt").write_text("done\n")
                 if stage == "view" and (result_dir / f"view-{current}.txt").is_file():

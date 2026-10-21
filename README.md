@@ -337,6 +337,8 @@ python tools/check_linkage.py
 # 構造物のファイルを、斜め上の 2 方向から見た PNG に描く (出力先, ファイルまたはフォルダ...)。
 # ブロックのテクスチャに使う Minecraft 26.3 の jar を -PassetJar で指定できる (指定しなければダウンロードする)
 ./gradlew :core:structureCheck -PstructureArgs="build/structure ../tools/verify/test-structure.nbt"
+# 見比べるために、Mod なしのゲームでゲームに入っている構造物を置いて、画面を撮る
+python tools/verify/compare_structure.py --template minecraft:village/plains/houses/plains_temple_3
 # 画像のピクセルを直接読む処理が、BufferedImage.getRGB と同じ結果になるかを確かめる (画像のファイルを足して確かめることもできる)
 ./gradlew :core:argbCheck
 # ダウンロードしたファイルを保存しておく仕組みを、手元の HTTP サーバーで確かめる
