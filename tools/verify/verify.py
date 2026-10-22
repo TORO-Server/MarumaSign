@@ -197,13 +197,14 @@ def sign_item(minecraft):
 
 # 起動と同時にサーバーへ接続すると、うまく入れない組み合わせ。キーは Minecraft のバージョンか「ローダー:バージョン」。
 # どれも、タイトル画面から普通に入る分には起きない。
-# - 1.14: リソースの読み込みが終わる前にワールドが表示されて落ちる (Mod なしでも起きる。1.14.1 で直っている)
+# - 1.14 / 1.14.1: リソースの読み込みが終わる前にワールドが表示されて落ちる (Mod なしでも起きる。
+#   1.14.1 では起きにくくなったが、ブロックのモデルがまだない状態で地形を組み立てて落ちることがある)
 # - Forge 1.14.2 / 1.14.3: 接続の手順が、Mod の読み込みと重なると途中で止まる
 # - Forge 1.15 / 1.15.1: 読み込み中の画面と接続の画面が重なると落ちる (Mod なしでも起きる)
 # - 1.17: 描画の準備が終わる前に接続の画面を描こうとして落ちる (Mod なしでも起きる。1.17.1 で直っている)
 # これらでは、起動時には接続せず、タイトル画面が出てから Mod の動作確認の機能に接続させる。
 # 基準の取得 (Mod なし) では接続できないので、タイトル画面までの警告だけを基準にする
-MOD_JOIN = {"1.14", "forge:1.14.2", "forge:1.14.3", "forge:1.15", "forge:1.15.1", "1.17"}
+MOD_JOIN = {"1.14", "1.14.1", "forge:1.14.2", "forge:1.14.3", "forge:1.15", "forge:1.15.1", "1.17"}
 
 # ランチャーだけでは Forge をインストールできないバージョン (forge_install_fix.py を参照)
 FORGE_INSTALL_FIX = {"1.14.2", "1.14.3"}
@@ -245,6 +246,10 @@ class Server:
             elif target.exists():
                 target.unlink()
         (self.directory / "eula.txt").write_text("eula=true\n")
+        # 古いサーバーは、これらの一覧のファイルがないと読み込みに失敗したと警告する。
+        # ないのは初めて起動したときだけなので、毎回空の一覧を置いて、起動ごとに出たり出なかったりしないようにする
+        for name in ("ops.json", "banned-players.json", "banned-ips.json", "whitelist.json"):
+            (self.directory / name).write_text("[]\n")
         (self.directory / "server.properties").write_text("\n".join([
             f"server-port={self.port}",
             "server-ip=127.0.0.1",
@@ -337,6 +342,9 @@ class Server:
         else:
             self.command(f"gamemode 0 {PLAYER}")
         self.command(f"give {PLAYER} {sign_item(self.minecraft)} 16")
+        # 日の傾きで影や色が変わらないよう、昼のまま止める (1.21.11 でルールの名前が変わった)
+        self.command("gamerule advance_time false" if version_key(self.minecraft) >= (1, 21, 11)
+                     else "gamerule doDaylightCycle false")
         self.command("time set 6000" if version_key(self.minecraft) < (1, 13, 0) else "time set noon")
         self.command("weather clear")
 
@@ -613,6 +621,34 @@ def process_tree(process):
         return {root.pid} | {child.pid for child in root.children(recursive=True)}
     except Exception:
         return {process.pid}
+
+
+def dump_threads(process, path):
+    """process (とその子プロセス) の Java のスレッドの状態を path に書く。止まっている原因を後から調べるため。
+
+    Java と同じフォルダの jstack を使う。jstack のない Java (Java 8 のもの) では書かない。
+    """
+    try:
+        import psutil
+        root = psutil.Process(process.pid)
+        targets = [target for target in [root] + root.children(recursive=True)
+                   if target.name().lower() in ("java.exe", "javaw.exe", "java")]
+    except Exception:
+        return
+    parts = []
+    for target in targets:
+        try:
+            jstack = Path(target.exe()).with_name("jstack.exe" if sys.platform == "win32" else "jstack")
+            if not jstack.is_file():
+                continue
+            dump = subprocess.run([str(jstack), "-l", str(target.pid)], capture_output=True, text=True,
+                                  encoding="utf-8", errors="replace", timeout=30)
+            parts.append(f"=== {target.pid} {time.strftime('%H:%M:%S')}\n{dump.stdout}{dump.stderr}")
+        except Exception as error:
+            parts.append(f"=== {target.pid}: {error}")
+    if parts:
+        with open(path, "a", encoding="utf-8") as output:
+            output.write("\n".join(parts) + "\n")
 
 
 def minecraft_windows(pids=None):
@@ -1008,23 +1044,45 @@ def analyze_screenshot_shaded(path):
 
     image = Image.open(path).convert("RGB")
     width, height = image.size
-    found = {}
-    for name, fx, fy, ranges in SHADED_POINTS:
+    patches = {}
+    for name, fx, fy, _ in SHADED_POINTS:
         # 周りを含めて平均した色で判定する
         box = (int(width * fx) - 6, int(height * fy) - 6, int(width * fx) + 7, int(height * fy) + 7)
-        patch = image.crop(box).resize((1, 1), Image.BOX).getpixel((0, 0))
-        hue, saturation, value = colorsys.rgb_to_hsv(patch[0] / 255, patch[1] / 255, patch[2] / 255)
-        degrees = hue * 360
-        found[name] = (round(degrees), round(saturation, 2), round(value, 2))
-        if saturation < 0.2 or value < 0.08 or not any(low <= degrees <= high for low, high in ranges):
-            return False, f"test image not found at the expected place (hue, saturation, value: {found})"
-    return True, "test image visible (shaded)"
+        patches[name] = image.crop(box).resize((1, 1), Image.BOX).getpixel((0, 0))
+
+    def judge(colours):
+        found = {}
+        for name, _, _, ranges in SHADED_POINTS:
+            hue, saturation, value = colorsys.rgb_to_hsv(*colours[name])
+            degrees = hue * 360
+            found[name] = (round(degrees), round(saturation, 2), round(value, 2))
+            if saturation < 0.2 or value < 0.08 or not any(low <= degrees <= high for low, high in ranges):
+                return False, found
+        return True, found
+
+    visible, found = judge({name: tuple(channel / 255 for channel in patch) for name, patch in patches.items()})
+    if visible:
+        return True, "test image visible (shaded)"
+    # シェーダーによっては画面全体に空の色が強く混ざり、暗い色 (構造物の赤いブロックなど) は灰色に近くなる。
+    # 4 か所の平均の色で割って全体の色かぶりを除いてから、もう一度調べる。絵がなければ上の 2 か所はどちらも空で
+    # 同じ色のままなので、赤と緑には分かれない
+    average = [sum(patch[channel] for patch in patches.values()) / len(patches) for channel in range(3)]
+    if min(average) > 0:
+        balanced = {}
+        for name, patch in patches.items():
+            ratios = [patch[channel] / average[channel] for channel in range(3)]
+            balanced[name] = tuple(ratio / max(ratios) * max(patch) / 255 for ratio in ratios)
+        visible, balanced_found = judge(balanced)
+        if visible:
+            return True, "test image visible (shaded, tint removed)"
+    return False, f"test image not found at the expected place (hue, saturation, value: {found})"
 
 
-def analyze_item_view(path, names=("item",)):
+def analyze_item_view(path, names=("item",), turned=()):
     """画面の下にあるホットバーに、テスト画像の見た目になった看板アイテムが、渡した数だけ写っているかを調べる。
 
     1 つ目の枠には置く用の看板があり、渡したアイテムは 2 つ目以降の空いた枠に、渡した順に入る。
+    turned にある名前のアイテムは、テスト画像を 180 度回した見た目 (PDF の 2 ページ目) になっているはず。
     枠の位置は、ウィンドウの描画領域の大きさと GUI の倍率 (自動) から求める。
     """
     from PIL import Image
@@ -1067,6 +1125,15 @@ def analyze_item_view(path, names=("item",)):
         centre = {colour: (entry[1] / entry[0], entry[2] / entry[0]) for colour, entry in sums.items()}
         ordered = (centre["red"][0] < centre["green"][0] and centre["blue"][0] < centre["yellow"][0]
                    and centre["red"][1] < centre["blue"][1] and centre["green"][1] < centre["yellow"][1])
+        # 180 度回っていれば、左右と上下が入れ替わる
+        rotated = (centre["red"][0] > centre["green"][0] and centre["blue"][0] > centre["yellow"][0]
+                   and centre["red"][1] > centre["blue"][1] and centre["green"][1] > centre["yellow"][1])
+        if name in turned:
+            if not rotated:
+                results.append((False, f"{name}: item picture is not page 2 (centres: {centre})"))
+                continue
+            results.append((True, f"{name}: item picture visible (page 2)"))
+            continue
         if not ordered:
             results.append((False, f"{name}: item picture is mirrored or rotated (centres: {centre})"))
             continue
@@ -1088,8 +1155,10 @@ def analyze_sign_view(path):
         for x in range(int(width * 0.30), int(width * 0.70)):
             r, g, b = pixels[x, y]
             total += 1
-            # 木の板の色 (赤 > 緑 > 青 で、くすんだ茶色)
-            if 90 < r < 225 and 12 <= r - g <= 65 and 25 <= g - b <= 95:
+            # 木の板の色 (赤 > 緑 > 青 で、くすんだ茶色)。
+            # 樫の看板の色は青が緑の 0.55 - 0.64 倍ある。シェーダーで暗くなった黄色のブロック (構造物の絵) は 0.3 倍以下で、
+            # 青の割合で見分けないと板と間違える
+            if 90 < r < 225 and 12 <= r - g <= 65 and 25 <= g - b <= 95 and b >= 0.4 * g:
                 wood += 1
     ratio = wood / max(1, total)
     if ratio > 0.012:
@@ -1337,6 +1406,8 @@ def run(args):
         started_at = time.time()
         joined_handled = False
         joined_at = 0.0
+        # ワールドに入れないまま止まっているときに、スレッドの状態を記録した回数
+        dumps = 0
         captured = False
         # ファイルごとの結果と、次に待つ合図
         media = [{"name": image if is_url(image) else image.name} for image in images]
@@ -1353,6 +1424,18 @@ def run(args):
                 joined_at = time.time()
                 log("player joined")
                 threading.Thread(target=server.on_join, daemon=True).start()
+            if joined_handled and dumps < 2 and time.time() - joined_at > 20 + 6 * dumps:
+                # サーバーは入ったと記録したのに、クライアントがまだワールドに入っていない (チャットが 1 行も出ていない)。
+                # クライアントはこのあと 30 秒で接続を切るので、その前に両方のスレッドの状態を記録する
+                client_log_file = find_client_log(work_dir)
+                if not (client_log_file.is_file()
+                        and "[CHAT]" in client_log_file.read_text(encoding="utf-8", errors="replace")):
+                    log("the client has not entered the world yet; recording its threads")
+                    dump_threads(client, work_dir / "threads-client.log")
+                    dump_threads(server.process, work_dir / "threads-server.log")
+                    dumps += 1
+                else:
+                    dumps = 2
             if (result_dir / "result.txt").is_file() and not captured:
                 captured = True
                 time.sleep(0.5)
@@ -1379,12 +1462,15 @@ def run(args):
                             shot, bottom=not str(entry["name"]).lower().endswith(".pdf"))
                         if shaders and not entry["visible"]:
                             entry["visible"], entry["detail"] = analyze_screenshot_shaded(shot)
+                    # 記録し終えたことを Mod に知らせる。Mod はそれを待ってから向きを変える
+                    (result_dir / f"view-{current}-done.txt").write_text("done\n")
                     stage = "sign"
                 elif stage == "sign" and (result_dir / f"sign-view-{current}.txt").is_file():
                     # 看板の位置を見下ろしている状態
                     shot = work_dir / f"screenshot-sign-{current}.png"
                     if grab_screen(shot, client):
                         entry["sign_hidden"], entry["sign_detail"] = analyze_sign_view(shot)
+                    (result_dir / f"sign-view-{current}-done.txt").write_text("done\n")
                     stage = "move"
                 elif stage == "move" and (result_dir / f"move-{current}.txt").is_file():
                     # 次のファイルは、前の看板が見えない場所で確認する
@@ -1403,23 +1489,28 @@ def run(args):
                 # 画像・3D モデル・ガウシアンスプラッティング・動画で、アイテムとしての描き方がそれぞれ違うため。
                 # 置いた看板と区別できるように、別の URL にする。アイテムはホットバーの空いた枠に順に入る
                 item_files = [image for image in images if not is_url(image)] or [REPO / "tools" / "verify" / "test-image.png"]
-                url = None
+                urls = []
                 for number, item_image in enumerate(item_files):
                     item_name = f"item{number}{item_image.suffix or '.png'}"
                     host.files[item_name] = item_image.read_bytes()
-                    url = f"http://127.0.0.1:{host.port}/i/{item_name}"
-                    text = url + "|0|0|0|1|1|0|0|0"
+                    # PDF は URL の末尾の「#page=2」で、2 ページ目 (テスト画像を 180 度回したもの) から表示させる
+                    urls.append(f"http://127.0.0.1:{host.port}/i/{item_name}"
+                                + ("#page=2" if item_image.suffix.lower() == ".pdf" else ""))
+                    text = urls[-1] + "|0|0|0|1|1|0|0|0"
                     server.give_sign_item([text[i:i + 15] for i in range(0, 60, 15)])
                     time.sleep(0.5)
                 result["item_media"] = [item_image.name for item_image in item_files]
                 time.sleep(1.0)
-                # Mod には最後に渡したものを知らせる。それが描かれるまで待ってから画面を記録してもらう
-                (result_dir / "item-given.txt").write_text(url)
+                # Mod には渡したものをすべて知らせる。どれも描かれるまで待ってから画面を記録してもらう
+                (result_dir / "item-given.txt").write_text("\n".join(urls) + "\n")
                 item_stage = "view"
             elif not args.baseline and item_stage == "view" and (result_dir / "item-view.txt").is_file():
                 shot = work_dir / "screenshot-item.png"
                 if grab_screen(shot, client):
-                    result["item_visible"], result["item_detail"] = analyze_item_view(shot, result.get("item_media", ["item"]))
+                    item_media = result.get("item_media", ["item"])
+                    result["item_visible"], result["item_detail"] = analyze_item_view(
+                        shot, item_media, turned={name for name in item_media if name.lower().endswith(".pdf")})
+                (result_dir / "item-view-done.txt").write_text("done\n")
                 item_stage = "done"
             if args.baseline and joined_handled and time.time() - joined_at > (75 if shaders else 25):
                 # 基準の取得では、ワールドに入ってしばらくしたら終了する
@@ -1471,7 +1562,9 @@ def run(args):
         # ファイルごとの、看板が初めて描かれようとしてから表示されるまでの時間 (ミリ秒)
         result["load_ms"] = {name: int(millis) for name, millis in re.findall(r"(\S+) loaded in (-?\d+) ms", result["detail"])}
     elif not result["detail"]:
-        result["detail"] = "The client exited without a self test result"
+        # 終了コードは、落ちた原因の手がかりになる (Java の外で落ちると、ログを残さずに終わる)
+        result["detail"] = ("The client exited without a self test result"
+                            + (f" (exit code {client.returncode})" if client is not None else ""))
     result["joined"] = server.joined.is_set()
     result["uploads"] = len(host.files)
     result["http_requests"] = host.requests
@@ -1507,12 +1600,21 @@ def run(args):
         baseline = {side: {normalize(line) for line in lines} for side, lines in baseline.items()}
         noise = load_known_noise()
 
-        def is_new(line, side):
-            return normalize(line) not in baseline[side] and not any(pattern.search(line) for pattern in noise[side])
+        def new_lines(lines, side):
+            found = []
+            in_noise = False
+            for line in lines:
+                # Mod 由来でない例外の原因 (「Caused by:」の行) も、その例外と一緒に除く
+                if in_noise and re.match(r"\s*Caused by: ", line):
+                    continue
+                in_noise = any(pattern.search(line) for pattern in noise[side])
+                if not in_noise and normalize(line) not in baseline[side]:
+                    found.append(line)
+            return found
 
         result["baseline"] = True
-        result["new_client_findings"] = [line for line in client_findings if is_new(line, "client")]
-        result["new_server_findings"] = [line for line in server_findings if is_new(line, "server")]
+        result["new_client_findings"] = new_lines(client_findings, "client")
+        result["new_server_findings"] = new_lines(server_findings, "server")
         result["clean"] = (result["ok"] and bool(result.get("image_visible")) and bool(result.get("sign_hidden"))
                            and bool(result.get("pdf_ok", True))
                            and bool(result.get("item_visible"))
