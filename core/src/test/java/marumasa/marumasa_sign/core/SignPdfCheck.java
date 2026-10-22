@@ -1,6 +1,7 @@
 package marumasa.marumasa_sign.core;
 
 import com.sun.net.httpserver.HttpServer;
+import marumasa.marumasa_sign.core.pdf.PdfFile;
 import marumasa.marumasa_sign.core.sign.PdfControls;
 import marumasa.marumasa_sign.core.sign.SignImage;
 
@@ -10,6 +11,9 @@ import java.io.File;
 import java.io.OutputStream;
 import java.net.InetSocketAddress;
 import java.nio.file.Files;
+import java.util.Arrays;
+import java.util.List;
+import java.util.concurrent.CopyOnWriteArrayList;
 
 /**
  * Minecraft を起動せずに、PDF の看板の表示とページ送りを確かめる道具。
@@ -24,6 +28,8 @@ public final class SignPdfCheck {
 
     private static FakePlatform platform;
     private static String text;
+    // サーバーが受けたリクエストの URI
+    private static final List<String> requests = new CopyOnWriteArrayList<String>();
 
     public static void main(String[] args) throws Exception {
         // 手元に立てたサーバーから読む
@@ -34,6 +40,7 @@ public final class SignPdfCheck {
 
         final HttpServer server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
         server.createContext("/test.pdf", exchange -> {
+            requests.add(exchange.getRequestURI().toString());
             exchange.sendResponseHeaders(200, pdf.length);
             try (OutputStream body = exchange.getResponseBody()) {
                 body.write(pdf);
@@ -62,6 +69,7 @@ public final class SignPdfCheck {
         }
         check(image != null && image.isLoaded(), "PDF loaded");
         save(output, "page1.png");
+        final int[] page1 = shown(text);
 
         // 絵の正面の、3 ブロック離れた位置から、進めるボタンを見る。
         // 向き 0 の立て看板は南 (+z) を向いていて、文字や絵はその側から読める
@@ -95,6 +103,8 @@ public final class SignPdfCheck {
         }
         check(page != null && page[0] == 1 && page[2] == 0, "turned to page 2");
         save(output, "page2.png");
+        final int[] page2 = shown(text);
+        check(!Arrays.equals(page1, page2), "page 2 looks different from page 1");
         aim(eye, next);
         saveBar(output, image, "bar-page2.png");
 
@@ -123,6 +133,35 @@ public final class SignPdfCheck {
         platform.crosshair[6] = 0.5;
         check(image.batches(0f, false, 3.0, 0.5f, 0.5f, 4.5f, BX, BY, BZ).length == 1, "no page controls through a wall");
 
+        // URL の末尾の「#page=ページ番号」で、最初に表示するページを指定できる (ブラウザの PDF ビューアと同じ書き方)
+        checkRequestedPages();
+        final String[][] starts = {
+                {"#page=2", "2"}, {"#page=1", "1"}, {"#zoom=50&page=2", "2"}, {"#PAGE=2", "2"}, {"#page=002", "2"},
+                // 多すぎるページは最後のページ、正しくない値は最初のページ
+                {"#page=99", "2"}, {"#page=99999999999999", "2"}, {"#page=0", "1"}, {"#page=-1", "1"}, {"#page=two", "1"},
+                {"#page=", "1"}, {"#nameddest=intro", "1"}, {"#", "1"},
+        };
+        for (String[] start : starts) {
+            final String pageText = url + start[0] + "|0|0|0|1|1|0|0|0";
+            SignImage paged = null;
+            for (int i = 0; i < 40000 && (paged == null || !paged.isLoaded()); i++) {
+                MarumaSign.tick();
+                platform.runTasks();
+                paged = MarumaSign.sign(pageText);
+                paged.batches(0f, false, 3.0);
+                Thread.sleep(5);
+            }
+            check(paged != null && paged.isLoaded(), url + start[0] + " loaded");
+            check(Arrays.equals(shown(pageText), start[1].equals("2") ? page2 : page1),
+                    url + start[0] + " starts on page " + start[1]);
+        }
+        // 「#」から後ろはサーバーに送らない (HTTP の決まり。送るとサーバーによってはファイルが見つからない)
+        check(requests.stream().noneMatch(uri -> uri.contains("#") || uri.contains("page=")),
+                "the page is not sent to the server (" + requests + ")");
+        // 指定だけが違う看板は、それぞれのページを表示したまま、ほかの看板のページ送りに影響されない
+        check(Arrays.equals(shown(url + "#page=2|0|0|0|1|1|0|0|0"), page2), "a sign with #page=2 still shows page 2");
+        check(Arrays.equals(shown(text), page1), "the sign without #page still shows page 1");
+
         System.out.println("ALL OK");
         MarumaSign.signs().clearCache();
     }
@@ -135,6 +174,31 @@ public final class SignPdfCheck {
         image.batches(0f, false, 3.0, 0.5f, 0.5f, 4.5f, BX, BY, BZ);
         Thread.sleep(25);
         return image;
+    }
+
+    // 看板に表示しているページの画素
+    private static int[] shown(String signText) {
+        return ((FakePlatform.Texture) MarumaSign.sign(signText).batches(0f, false, 3.0)[0].texture).pixels.clone();
+    }
+
+    // 「#page=」の読み取り。ページの数はまだ見ない (多すぎる値は、表示するときに最後のページに収める)
+    private static void checkRequestedPages() {
+        final Object[][] cases = {
+                {"https://example.com/a.pdf", 0}, {"https://example.com/a.pdf#page=3", 2},
+                {"https://example.com/a.pdf#page=1", 0}, {"https://example.com/a.pdf#zoom=50&page=4", 3},
+                {"https://example.com/a.pdf#page=4&zoom=50", 3}, {"https://example.com/a.pdf#Page=5", 4},
+                {"https://example.com/a.pdf#page= 6 ", 5}, {"https://example.com/a.pdf#page=0007", 6},
+                {"https://example.com/a.pdf#page=0", 0}, {"https://example.com/a.pdf#page=-2", 0},
+                {"https://example.com/a.pdf#page=2.5", 0}, {"https://example.com/a.pdf#page=", 0},
+                {"https://example.com/a.pdf#page", 0}, {"https://example.com/a.pdf#pages=3", 0},
+                {"https://example.com/a.pdf#page=99999999999999999999", Integer.MAX_VALUE},
+                {"https://example.com/a.pdf?page=3", 0}, {"https://example.com/a.pdf?x=1#page=3", 2},
+                {"https://example.com/a.pdf#", 0}, {null, 0},
+        };
+        for (Object[] item : cases) {
+            final int actual = PdfFile.requestedPage((String) item[0]);
+            check(actual == (Integer) item[1], "requestedPage(" + item[0] + ") = " + actual + " (expected " + item[1] + ")");
+        }
     }
 
     private static void aim(double[] eye, double[] target) {

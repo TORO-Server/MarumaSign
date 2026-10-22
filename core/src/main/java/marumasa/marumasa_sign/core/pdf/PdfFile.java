@@ -80,6 +80,41 @@ public final class PdfFile {
         return pageCount;
     }
 
+    /**
+     * URL やファイルの名前の末尾の「#page=ページ番号」から、最初に表示するページ (0 から始まる) を求める。
+     * ブラウザの PDF ビューアと同じ書き方 (RFC 8118) で、「#page=3&zoom=50」のようにほかの指定と並んでいてもよい。
+     * 指定がないか、正しくない値なら 0 (最初のページ)。ページの数は見ないので、範囲に収めるのは {@link #clampPage} で行う
+     */
+    public static int requestedPage(String url) {
+        if (url == null) return 0;
+        final int hash = url.indexOf('#');
+        if (hash < 0) return 0;
+        for (String parameter : url.substring(hash + 1).split("&")) {
+            final int equals = parameter.indexOf('=');
+            if (equals < 0 || !parameter.substring(0, equals).trim().equalsIgnoreCase("page")) continue;
+            // 「007」のような先頭の 0 は数の大きさに関係しないので除く
+            final String value = parameter.substring(equals + 1).trim().replaceFirst("^0+(?=\\d)", "");
+            if (value.isEmpty() || !isDigits(value)) return 0;
+            // int に収まらないほど大きな値は、最後のページを指したものとして扱う
+            if (value.length() > 9) return Integer.MAX_VALUE;
+            final int number = Integer.parseInt(value);
+            return number >= 1 ? number - 1 : 0;
+        }
+        return 0;
+    }
+
+    private static boolean isDigits(String text) {
+        for (int i = 0; i < text.length(); i++) {
+            if (text.charAt(i) < '0' || text.charAt(i) > '9') return false;
+        }
+        return true;
+    }
+
+    // ページ番号 (0 から始まる) を、このファイルにあるページの範囲に収める。ブラウザと同じく、多すぎれば最後のページ
+    public int clampPage(int index) {
+        return Math.max(0, Math.min(pageCount - 1, index));
+    }
+
     public long size() {
         return size;
     }

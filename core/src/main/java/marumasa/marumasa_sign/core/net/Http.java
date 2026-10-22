@@ -58,6 +58,18 @@ public final class Http {
         return text != null && (text.startsWith("http://") || text.startsWith("https://"));
     }
 
+    // URL の「#」から後ろ (フラグメント) を除く
+    public static String withoutFragment(String url) {
+        final int hash = url.indexOf('#');
+        return hash < 0 ? url : url.substring(0, hash);
+    }
+
+    // URL の「#」から後ろ (フラグメント)。なければ空の文字列
+    public static String fragment(String url) {
+        final int hash = url.indexOf('#');
+        return hash < 0 ? "" : url.substring(hash);
+    }
+
     private static HttpURLConnection open(String url) throws IOException {
         if (!isHttpUrl(url)) throw new IOException("Unsupported protocol scheme in URL: " + url);
         final String encoded;
@@ -250,6 +262,9 @@ public final class Http {
      * 手元や家の中のネットワークを指す URL は読まない (UrlPolicy)。リダイレクトの行き先も、つなぐ前に確かめる。
      */
     private static byte[] download(String url, ContentCheck check, int defaultMaxSize, long deadline) throws IOException {
+        // 「#」から後ろ (PDF の「#page=3」など) は、読み込んだ後の表示のための指定で、サーバーには送られない。
+        // 除いておき、指定だけが違う URL でも同じものとしてダウンロードし、残しておく (DownloadCache)
+        url = withoutFragment(url);
         final Guard guard = new Guard();
         final long now = System.nanoTime();
         guard.until = deadline != 0 && deadline - now < RESPONSE_NANOS ? deadline : now + RESPONSE_NANOS;

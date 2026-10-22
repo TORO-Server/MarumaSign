@@ -45,8 +45,8 @@ public final class ImageLoader {
         // ガウシアンスプラッティングだったとき
         void onSplat(SplatScene scene);
 
-        // PDF だったとき。firstPage は最初のページを画像にしたもの
-        void onPdf(PdfFile file, DecodedImage firstPage);
+        // PDF だったとき。page は最初に表示するページ (0 から始まる)、firstPage はそのページを画像にしたもの
+        void onPdf(PdfFile file, int page, DecodedImage firstPage);
 
         // 画像でも 3D モデルでもガウシアンスプラッティングでも PDF でもなかったとき。動画や音声として再生できるかもしれない
         void onMedia();
@@ -104,6 +104,11 @@ public final class ImageLoader {
 
     public boolean isBusy() {
         return !queue.isEmpty() || activeDownloads.get() > 0;
+    }
+
+    // 読み込みの待ちと実行中の数 (動作確認で、読み込みが始まらないときの手がかりにする)
+    public String status() {
+        return "queued " + queue.size() + ", active " + activeDownloads.get() + " of " + maxThreads;
     }
 
     // 同時ロード数の上限まで、待っている画像の読み込みを始める。どのスレッドから呼んでもよい
@@ -197,7 +202,9 @@ public final class ImageLoader {
             if (kind[0] == KIND_PDF) {
                 final PdfFile file = PdfFile.open(content);
                 try {
-                    request.callback.onPdf(file, file.render(0, PdfFile.PAGE_SIZE));
+                    // URL の末尾に「#page=ページ番号」があれば、そのページから表示する
+                    final int page = file.clampPage(PdfFile.requestedPage(url));
+                    request.callback.onPdf(file, page, file.render(page, PdfFile.PAGE_SIZE));
                 } catch (IOException | RuntimeException e) {
                     file.close();
                     throw e;
