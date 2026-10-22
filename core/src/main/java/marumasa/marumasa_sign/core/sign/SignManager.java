@@ -213,11 +213,11 @@ public final class SignManager {
             }
 
             @Override
-            public void onPdf(final PdfFile file, final DecodedImage firstPage) {
+            public void onPdf(final PdfFile file, final int page, final DecodedImage firstPage) {
                 platform.execute(new Runnable() {
                     @Override
                     public void run() {
-                        registerPdf(url, created, file, firstPage);
+                        registerPdf(url, created, file, page, firstPage);
                     }
                 });
             }
@@ -322,7 +322,7 @@ public final class SignManager {
         }
     }
 
-    private void registerPdf(String url, TextureEntry entry, PdfFile file, DecodedImage firstPage) {
+    private void registerPdf(String url, TextureEntry entry, PdfFile file, int page, DecodedImage firstPage) {
         // ページの絵 (この中と GPU の 2 つ分) と、読み込んだ PDF
         final long bytes = 8L * firstPage.width * firstPage.height + file.size();
         if (textures.get(url) != entry || !makeRoom(entry, bytes)) {
@@ -334,7 +334,7 @@ public final class SignManager {
         entry.setPdf(session);
         entry.setBytes(bytes);
         pdfs.add(session);
-        session.start(firstPage);
+        session.start(page, firstPage);
         MarumaSign.LOGGER.info("Load: " + url + " (PDF, " + file.pageCount() + " pages, " + entry.loadMillis() + " ms)");
     }
 

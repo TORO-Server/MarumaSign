@@ -141,7 +141,8 @@ final class NestedSigns {
             case 2: {
                 final PdfFile file = PdfFile.open(content);
                 try {
-                    return sprite(url, file.render(0, PdfFile.PAGE_SIZE));
+                    // 置いた看板と同じく、URL の「#page=」で指定したページを描く
+                    return sprite(url, file.render(file.clampPage(PdfFile.requestedPage(url)), PdfFile.PAGE_SIZE));
                 } finally {
                     file.close();
                 }
