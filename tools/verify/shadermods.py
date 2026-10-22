@@ -306,12 +306,38 @@ def newest_working(project, loader, minecraft, cache_dir, tries=8, loader_versio
         if (files and project == "iris" and mod_numbers(version.get("version_number", "")) >= (1, 6)
                 and not includes_sodium(files, cache_dir)):
             # Iris は 1.6 から Sodium がないと動かないが、そのことが jar にも Modrinth にも書かれていない版がある
-            # (Iris 1.7.0+1.20.6 は 1.20.5 向けとされているが、どちらにも Sodium の指定がない)。
-            # Sodium が揃わない版は使わない (1.6 より前の Iris は、Sodium がなくても動く)
-            continue
+            # (Iris 1.7.0+1.20.6 は 1.20.5 向けとされているが、どちらにも Sodium の指定がない。
+            # NeoForge 1.21 向けの Iris 1.8.0-beta.2 / beta.3 も書かれていない)。
+            # その Iris が、名前の上でもこのバージョン向け (版の名前に "+1.21-" のように含む) なら、
+            # その Iris が出た時点の最新の Sodium を合わせる。そうでなければ、その版は使わない
+            # (1.6 より前の Iris は、Sodium がなくても動く)
+            if not re.search(rf"(?<![\d.]){re.escape(minecraft)}(?![\d.])", version.get("version_number", "")):
+                continue
+            sodium = sodium_of_the_time(loader, version.get("game_versions") or [minecraft],
+                                        version.get("date_published", ""))
+            extra = sodium and modrinth_files("sodium", loader, minecraft, {project, "sodium"}, cache_dir, sodium,
+                                              loader_version)
+            if not extra:
+                continue
+            files = files + extra
         if files:
             return files
     return None
+
+
+def sodium_of_the_time(loader, game_versions, published):
+    """このローダーと、game_versions のどれか向けの Sodium のうち、published (Modrinth の公開日時) までに出た最新の版。
+    なければ None。
+
+    Iris と同じ範囲のバージョンで探す (NeoForge 1.21 で動く Sodium 0.6.0-beta.1 は、Modrinth では 1.21.1 向けとだけ
+    書かれている)。実際にこのバージョンで読み込まれるかは、呼び出し側が jar の中の指定で確かめる
+    """
+    if not published:
+        return None
+    query = urllib.parse.urlencode({"loaders": json.dumps([loader]), "game_versions": json.dumps(game_versions)})
+    versions = [version for version in fetch_json(f"{MODRINTH}/project/sodium/version?{query}")
+                if version.get("date_published", "") <= published]
+    return max(versions, key=lambda version: version["date_published"], default=None)
 
 
 def mod_numbers(text):

@@ -125,3 +125,5 @@ decompiled/
 # Generated per-target Gradle project directories
 /targets/
 
+# Python のキャッシュ
+__pycache__/

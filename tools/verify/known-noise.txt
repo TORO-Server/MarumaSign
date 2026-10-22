@@ -10,6 +10,8 @@ client: Author: Paul Lamb, www\.paulscode\.com
 
 # 検証ではクライアントを一方的に終了させるため、サーバー側に切断の例外が記録される (INFO)
 server: lost connection: .*Internal Exception: java\.io\.IOException
+# 同じ切断の後始末が 2 回呼ばれたときにサーバー自身が出す (クライアントを閉じる時点によって出たり出なかったりする)
+server: handleDisconnection\(\) called twice
 # 確認の途中で、スクリプトがプレイヤーを離れた場所へ移動させるために出る
 server: moved too quickly
 
@@ -18,8 +20,14 @@ client: Removing unused function \w+ and omitting further such messages
 
 # サーバーの処理が遅れたときに、サーバー自身が出す知らせ (確認用の PC が他の処理で忙しいと出る)
 server: Can't keep up! Is the server overloaded\?
+# 同じ知らせの、古いバージョン (1.7.10 など) での書き方
+server: Can't keep up! Did the system time change, or is the server overloaded\?
 # Forge 1.14 - 1.15 が、初回の起動で設定ファイルを書き直したことを自分で検知して出す (出る時点が起動ごとに違う)
 client: Forge config just got changed on the file system!
+# Forge が初回の起動で自分の設定ファイル (fml.toml) を作るとき、無かった項目に既定の値を入れたことを知らせる。
+# ふつうは defaultConfigPath だけ (基準にも入る) だが、Forge 1.20 では、作ったファイルを読み直す時点によって
+# ほかの項目も無かったことになる (約 150 回の起動で 1 回)。Mod はこのファイルに触れない
+client: Incorrect key \[\w+\] was corrected from null to
 
 # 古いバージョンのサーバーが、終了の途中でログのファイルを閉じたあとに書こうとして出す (Mod はサーバーに入っていない)
 server: An exception occurred processing Appender File
@@ -30,6 +38,8 @@ server: Exception in thread "Server Shutdown Thread"
 # 確認用のアカウントは実在しないので、Minecraft 自体がスキンの情報を取りに行って失敗することがある (通信の状況によって出たり出なかったりする)
 client: Couldn't look up profile properties for
 client: MinecraftClientHttpException
+# 同じ問い合わせが Mojang のサーバーから時間内に返ってこなかったとき (原因の「Caused by:」の行も一緒に除かれる)
+client: MinecraftClientException: Failed to read from https://sessionserver\.mojang\.com/
 # Minecraft 自体が Realms (Mojang のサーバー) の状態を問い合わせて、相手のサーバーの一時的な障害 (502 など) で失敗したときに出す
 client: Realms Notification Availability checker
 # 同じ失敗の例外に付く、呼び出し元の行 (Forge 26.3 ではこの行だけが警告として拾われる)
@@ -39,13 +49,20 @@ client: at \S*com\.mojang\.authlib\.minecraft\.client\.MinecraftClient\.
 # ワールドに入ったときに出るので、ワールドに入れない基準の取得 (起動が済んでから接続するバージョン) では基準に入らない
 client: \] Unsupported uniform:
 client: Failed to resolve uniform
+# 同じ知らせのあとに出る、原因の例外の行 (MakeUp Ultra Fast の、パックが自分で定義した uniform を Iris が解釈できなかったとき)
+client: java\.lang\.RuntimeException: Couldn't resolve:
 client: The following uniforms won't work
 client: Error while parsing the block ID map entry
+# Iris 1.1.x (1.17) が、古い書き方のシェーダーパック (BSL 8.1) を組み立てるときに出す。
+# 名前はシェーダーパックの中の描画の段階 (gbuffers_* など) で、Mod のものではない
+client: \[Triforce Patcher\] gl_FragColor is not supported yet
+client: Shader (gbuffers|shadow|composite|deferred|final|prepare|begin)\w* could not find (sampler|uniform) named
 
 # バニラが、アイテムの内容がまだ届いていない落ちたアイテムを描こうとしたときに出す (サーバーとの通信のタイミングによる)
 client: Item entity \d+ has no item\?!
 
 # Minecraft 自体が起動時にパソコンの情報 (SystemReport) を集めるとき、Windows のパフォーマンスカウンターが壊れていると
-# プロセスの情報が取れずに出す (OSHI というライブラリを通して読んでいる。パソコンの状態によって出たり出なかったりする)
-client: Failed to get system info for Process
-client: Cannot invoke "oshi\.software\.os\.OSProcess\.
+# プロセスの情報が取れずに出す (OSHI というライブラリを通して読んでいる。パソコンの状態によって出たり出なかったりする)。
+# サーバーも同じ情報を集めるので、両方に当てはめる
+Failed to get system info for Process
+Cannot invoke "oshi\.software\.os\.OSProcess\.

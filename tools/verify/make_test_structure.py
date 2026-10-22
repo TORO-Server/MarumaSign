@@ -12,9 +12,11 @@ from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 
-# (x, y, ブロック)。正面から見て右が +X、上が +Y
+# (x, y, ブロック)。正面から見て右が +X、上が +Y。
+# 赤は、赤のコンクリートだと暗く、影 Mod のシェーダーで空の色が混ざると灰色に近くなって判定がぎりぎりになるので、
+# 明るく鮮やかなレッドストーンブロックにする
 BLOCKS = [
-    (0, 1, "minecraft:red_concrete"),
+    (0, 1, "minecraft:redstone_block"),
     (1, 1, "minecraft:emerald_block"),
     (0, 0, "minecraft:lapis_block"),
     (1, 0, "minecraft:yellow_concrete"),

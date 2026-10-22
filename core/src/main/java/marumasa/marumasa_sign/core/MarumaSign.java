@@ -65,6 +65,10 @@ public final class MarumaSign {
         return ui;
     }
 
+    public static ImageLoader loader() {
+        return loader;
+    }
+
     // クライアントの tick ごとに呼ぶ
     // 消すのを待っているテクスチャ ({実装, テクスチャ, 残りの tick 数})
     private static final java.util.List<Object[]> pendingReleases = new java.util.ArrayList<Object[]>();
