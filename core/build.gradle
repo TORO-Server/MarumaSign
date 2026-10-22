@@ -108,6 +108,21 @@ tasks.register('downloadCacheCheck', JavaExec) {
     javaLauncher = javaToolchains.launcherFor(java.toolchain)
 }
 
+// 看板の URL で、見た人のパソコンの中や家の中のネットワークにアクセスさせられないことを確かめる
+tasks.register('securityCheck', JavaExec) {
+    classpath = sourceSets.test.runtimeClasspath
+    mainClass = 'marumasa.marumasa_sign.core.net.SecurityCheck'
+    javaLauncher = javaToolchains.launcherFor(java.toolchain)
+}
+
+// 違う URL の看板や動画をたくさん並べられても、メモリと再生の数が上限を超えないことを確かめる
+tasks.register('signLimitsCheck', JavaExec) {
+    classpath = sourceSets.test.runtimeClasspath
+    mainClass = 'marumasa.marumasa_sign.core.SignLimitsCheck'
+    javaLauncher = javaToolchains.launcherFor(java.toolchain)
+    maxHeapSize = '3g'
+}
+
 // 看板に表示するファイルの、ダウンロードと読み込みの時間を測る。引数は -PloadBenchArgs="回数 ファイル..." で渡す
 tasks.register('loadBenchmark', JavaExec) {
     classpath = sourceSets.test.runtimeClasspath
@@ -115,6 +130,41 @@ tasks.register('loadBenchmark', JavaExec) {
     javaLauncher = javaToolchains.launcherFor(java.toolchain)
     maxHeapSize = '4g'
     args = providers.gradleProperty('loadBenchArgs').getOrElse('').tokenize(' ')
+}
+
+// 構造物のファイルを読み込んで PNG に描く。引数は -PstructureArgs="出力先 ファイルまたはフォルダ..." で渡す。
+// ブロックのテクスチャに使う Minecraft の jar は -PassetJar=jar の場所 で指定できる (指定しなければダウンロードする)
+tasks.register('structureCheck', JavaExec) {
+    classpath = sourceSets.test.runtimeClasspath
+    mainClass = 'marumasa.marumasa_sign.core.structure.StructureCheck'
+    javaLauncher = javaToolchains.launcherFor(java.toolchain)
+    maxHeapSize = '4g'
+    args = providers.gradleProperty('structureArgs').getOrElse('').tokenize(' ')
+    if (providers.gradleProperty('assetJar').isPresent()) systemProperty 'marumasign.assetJar', providers.gradleProperty('assetJar').get()
+    systemProperty 'marumasign.gameDir', layout.buildDirectory.dir('structure-game').get().asFile.path
+}
+
+// 壊した構造物のファイルを読ませて、想定外の例外や長い時間にならないかを確かめる。
+// 引数は -PfuzzArgs="回数 ファイルまたはフォルダ..." で渡す。-PfuzzMesh を付けると、3D モデルにするところまで確かめる
+tasks.register('structureFuzz', JavaExec) {
+    classpath = sourceSets.test.runtimeClasspath
+    mainClass = 'marumasa.marumasa_sign.core.structure.StructureFuzz'
+    javaLauncher = javaToolchains.launcherFor(java.toolchain)
+    maxHeapSize = '4g'
+    args = providers.gradleProperty('fuzzArgs').getOrElse('').tokenize(' ')
+    if (providers.gradleProperty('fuzzMesh').isPresent()) systemProperty 'fuzz.mesh', 'true'
+    if (providers.gradleProperty('assetJar').isPresent()) systemProperty 'marumasign.assetJar', providers.gradleProperty('assetJar').get()
+    systemProperty 'marumasign.gameDir', layout.buildDirectory.dir('structure-game').get().asFile.path
+}
+
+// 構造物の中にある MarumaSign の看板を、悪用を含めて確かめる。-PassetJar は structureCheck と同じ
+tasks.register('nestedSignCheck', JavaExec) {
+    classpath = sourceSets.test.runtimeClasspath
+    mainClass = 'marumasa.marumasa_sign.core.structure.NestedSignCheck'
+    javaLauncher = javaToolchains.launcherFor(java.toolchain)
+    maxHeapSize = '4g'
+    if (providers.gradleProperty('assetJar').isPresent()) systemProperty 'marumasign.assetJar', providers.gradleProperty('assetJar').get()
+    systemProperty 'marumasign.gameDir', layout.buildDirectory.dir('structure-game').get().asFile.path
 }
 
 // ガウシアンスプラッティングのデコーダの動作と安全性を確認する。
@@ -125,6 +175,16 @@ tasks.register('splatCheck', JavaExec) {
     javaLauncher = javaToolchains.launcherFor(java.toolchain)
     maxHeapSize = '2g'
     args = providers.gradleProperty('splatArgs').getOrElse('').tokenize(' ')
+}
+
+// 動画や音声の看板が読み込まれて表示されるまでを、Minecraft を起動せずに確かめる。
+// 引数は -PmediaArgs="URL 秒数 最後の絵の出力先" で渡す (手元のサーバーの URL も読めるようにしてある)
+tasks.register('mediaCheck', JavaExec) {
+    classpath = sourceSets.test.runtimeClasspath
+    mainClass = 'marumasa.marumasa_sign.core.SignMediaCheck'
+    javaLauncher = javaToolchains.launcherFor(java.toolchain)
+    args = providers.gradleProperty('mediaArgs').getOrElse('').tokenize(' ')
+    systemProperty 'marumasign.allowLocalUrls', 'true'
 }
 
 // PDF の看板の表示とページ送りを、Minecraft を起動せずに確かめる。引数は -PpdfArgs="PDF のファイル 出力先" で渡す

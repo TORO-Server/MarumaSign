@@ -135,6 +135,8 @@ MEDIA = {
     "video": "test-video.mp4",
     # 2 ページの PDF。ページ送りの操作も確かめる
     "pdf": "test-pdf.pdf",
+    # 4 色のブロックの壁 (ストラクチャーブロックの形式)。ブロックのテクスチャと形の読み込みを確かめる
+    "structure": "test-structure.nbt",
 }
 
 
@@ -146,7 +148,7 @@ def keep_failed_attempt(work_dir):
     shutil.rmtree(target, ignore_errors=True)
     target.mkdir(parents=True)
     source = Path(work_dir)
-    for pattern in ("*.png", "*.log", "logs/*.log", "selftest/*"):
+    for pattern in ("*.png", "*.log", "logs/*.log", "selftest/*", "crash-reports/*"):
         for path in source.glob(pattern):
             if path.is_file():
                 destination = target / path.relative_to(source)
@@ -281,7 +283,9 @@ def main():
         # 確認済みかどうかは、ファイルの内容で判断する (ビルドし直すと名前は同じでも中身が変わる)
         digest = combination_digest(mod, loader, minecraft)
         previous = summary.get(key, {})
-        if (args.skip_passed and previous.get("clean") and previous.get("mod_sha256") == digest
+        # 1 回目に失敗してやり直しで合格したものは、合格として飛ばさずに確かめ直す
+        if (args.skip_passed and previous.get("clean") and not previous.get("first_attempt")
+                and previous.get("mod_sha256") == digest
                 and set(args.media) <= set(previous.get("media", []))
                 and {MEDIA[kind] for kind in args.media} <= set(previous.get("item_media", []))):
             continue
@@ -331,8 +335,9 @@ def main():
             # 他の処理と重なって時間切れになることがあるので、1 回だけやり直す。
             # やり直して合格しても、たまにしか起きない不具合かもしれないので、最初の失敗の内容を結果に残す
             first_attempt = (f"{str(result.get('detail'))[:200]} / {result.get('image_detail')}"
-                             f" / {result.get('sign_detail')} / {result.get('item_detail')}"
-                             f" / {(result.get('new_client_findings', []) + result.get('new_server_findings', []))[:3]}")
+                             f" / {result.get('sign_detail')} / {result.get('item_detail')} / {result.get('pdf_detail')}"
+                             + (f" / shaders {'active' if result.get('shaders_active') else 'not active'}" if args.shaders else "")
+                             + f" / {(result.get('new_client_findings', []) + result.get('new_server_findings', []))[:3]}")
             verify.log(f"=== retry {key} ({first_attempt})")
             keep_failed_attempt(result.get("work_dir"))
             result = run_one(root, loader, minecraft, loader_version, mod, False, args.timeout, args.media, args.shaders,

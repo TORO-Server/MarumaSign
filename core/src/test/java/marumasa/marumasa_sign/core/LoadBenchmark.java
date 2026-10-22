@@ -23,6 +23,8 @@ import java.util.Locale;
 public final class LoadBenchmark {
 
     public static void main(String[] args) throws Exception {
+        // 手元に立てたサーバーから読む
+        System.setProperty("marumasign.allowLocalUrls", "true");
         int runs = 5;
         int first = 0;
         if (args.length > 0 && args[0].matches("\\d+")) {

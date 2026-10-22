@@ -38,6 +38,10 @@ public final class TextureEntry {
     private GltfScene model;
     // ガウシアンスプラッティング。画像や 3D モデルなら null
     private SplatScene splat;
+    // 最後に看板として引かれた時刻 (System.currentTimeMillis)。使われていないものを消すのに使う
+    private volatile long lastUsed = System.currentTimeMillis();
+    // 使っているメモリのおおよその量 (バイト)
+    private long bytes;
 
     TextureEntry(int state, int width, int height, Object texture) {
         set(state, width, height, new Object[]{texture}, new int[]{1}, 0, false);
@@ -140,6 +144,22 @@ public final class TextureEntry {
 
     int revision() {
         return revision;
+    }
+
+    void touch() {
+        lastUsed = System.currentTimeMillis();
+    }
+
+    long lastUsed() {
+        return lastUsed;
+    }
+
+    long bytes() {
+        return bytes;
+    }
+
+    void setBytes(long bytes) {
+        this.bytes = bytes;
     }
 
     // このエントリが所有していて、破棄するときに解放するべきテクスチャ

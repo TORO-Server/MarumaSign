@@ -114,8 +114,18 @@ def in_range(version, spec):
 
 
 def declared_requirements(jar):
-    """Mod の jar が、必要とする Mod について指定しているバージョンの条件。{Mod の ID: 判定する関数}"""
+    """Mod の jar が、必要とする Mod について指定しているバージョンの条件。{Mod の ID: 判定する関数}
+
+    1 つの jar に Fabric 用と NeoForge 用の指定が両方あるときは、両方に合うものだけを受け付ける
+    (NeoForge 26.1 向けの Iris 1.11.3 は、mods.toml では Sodium 0.6 以上としているが、fabric.mod.json の 0.9.x が正しく、
+    Sodium 0.8.9 と組み合わせると起動中に落ちる)。
+    """
     found = {}
+
+    def add(mod, accepts):
+        previous = found.get(mod)
+        found[mod] = accepts if previous is None else (lambda version: previous(version) and accepts(version))
+
     try:
         with zipfile.ZipFile(jar) as archive:
             names = set(archive.namelist())
@@ -123,15 +133,67 @@ def declared_requirements(jar):
                 depends = json.loads(archive.read("fabric.mod.json").decode("utf-8")).get("depends", {})
                 for mod, value in depends.items():
                     specs = [str(item) for item in (value if isinstance(value, list) else [value])]
-                    found[mod] = lambda version, specs=specs: any(satisfies(version, spec) for spec in specs)
+                    add(mod, lambda version, specs=specs: any(satisfies(version, spec) for spec in specs))
             for name in ("META-INF/neoforge.mods.toml", "META-INF/mods.toml"):
                 if name in names:
                     text = archive.read(name).decode("utf-8", errors="replace")
                     for mod, spec in re.findall(r'modId\s*=\s*"([^"]+)"[^\[]*?versionRange\s*=\s*"([^"]*)"', text):
-                        found[mod] = lambda version, spec=spec: in_range(version, spec)
+                        add(mod, lambda version, spec=spec: in_range(version, spec))
     except (OSError, ValueError, zipfile.BadZipFile):
         pass
     return found
+
+
+def declared_ranges(jar):
+    """jar (と、その中に入っている jar) の mods.toml に書かれた、Minecraft と Forge / NeoForge の版の範囲。[(ID, 範囲)]
+
+    Minecraft の範囲は、中に入っている jar のものだけを返す。外側の jar の Minecraft の範囲は、
+    NeoForge が実際には確かめないことがある (NeoForge 1.21.1 向けの Iris 1.8.12 は「[1.21,1.21.1)」と書いているが、
+    1.21.1 で読み込まれて動く) ので、Modrinth の対象バージョンの情報に任せる。
+    """
+    import io
+
+    found = []
+
+    def scan(archive, nested):
+        names = archive.namelist()
+        for name in ("META-INF/neoforge.mods.toml", "META-INF/mods.toml"):
+            if name in names:
+                text = archive.read(name).decode("utf-8", errors="replace")
+                for mod_id, spec in re.findall(r'modId\s*=\s*"(minecraft|neoforge|forge)"[^\[]*?versionRange\s*=\s*"([^"]*)"',
+                                               text):
+                    if mod_id != "minecraft" or nested:
+                        found.append((mod_id, spec))
+        for name in names:
+            if name.startswith("META-INF/jarjar/") and name.endswith(".jar"):
+                with zipfile.ZipFile(io.BytesIO(archive.read(name))) as inner:
+                    scan(inner, True)
+
+    try:
+        with zipfile.ZipFile(jar) as archive:
+            scan(archive, False)
+    except (OSError, zipfile.BadZipFile):
+        pass
+    return found
+
+
+def fits(jar, minecraft, loader_version):
+    """jar (と中の jar) が、この Minecraft と Forge / NeoForge の版で読み込まれるかどうか。
+
+    Modrinth では対象のバージョン向けとされていても、jar の中の指定では動かないことがある
+    (NeoForge 1.21 向けの Iris が必要とする Sodium は、中に入っている Fabric API の部品が 1.21.1 以上を指定している。
+    26.1 向けとされている Sodium 0.9.2 は、NeoForge 26.1.2.10 以上を指定している)。
+    """
+    # 1.20.1 の NeoForge は「1.20.1-47.1.106」のように、先頭に Minecraft のバージョンが付く
+    version = loader_version[len(minecraft) + 1:] if loader_version.startswith(minecraft + "-") else loader_version
+    for mod_id, spec in declared_ranges(jar):
+        if not spec.strip().startswith(("[", "(")):
+            # 括弧のない版 ("1.21.4") は、Maven の書き方では「勧める版」で、範囲を限らない
+            continue
+        target = minecraft if mod_id == "minecraft" else version
+        if not in_range(numbers(target), spec):
+            return False
+    return True
 
 
 def matching_version(project, loader, minecraft, requirements):
@@ -161,8 +223,11 @@ def matching_version(project, loader, minecraft, requirements):
     releases = [version for version in matching if version.get("version_type") == "release"]
     return (releases or matching or [None])[0]
 
-def modrinth_files(project, loader, minecraft, seen, cache_dir, version=None):
-    """Mod と、それが必要とする Mod のファイル (名前, URL) を集める。"""
+def modrinth_files(project, loader, minecraft, seen, cache_dir, version=None, loader_version=""):
+    """Mod と、それが必要とする Mod のファイル (名前, URL) を集める。
+
+    loader_version (起動に使う Forge / NeoForge の版) を渡すと、jar の中の指定でその版では読み込まれない Mod は使わない。
+    """
     if version is None:
         version = modrinth_version(project, loader, minecraft)
     if version is None:
@@ -172,6 +237,8 @@ def modrinth_files(project, loader, minecraft, seen, cache_dir, version=None):
     files.append((primary["filename"], primary["url"]))
     # 必要とする Mod の版は、jar の中の指定に合わせる (最新版同士だと合わないことがある)
     download(primary["url"], cache_dir / primary["filename"])
+    if loader_version and not fits(cache_dir / primary["filename"], minecraft, loader_version):
+        return None
     requirements = declared_requirements(cache_dir / primary["filename"])
     # fabric.mod.json の depends だけを見る (mods.toml には、必須でない指定や、相性の悪い版の指定も同じ形で並ぶため)
     game = fabric_requirement(cache_dir / primary["filename"], "minecraft")
@@ -199,7 +266,7 @@ def modrinth_files(project, loader, minecraft, seen, cache_dir, version=None):
                 chosen = matching_version(target, loader, minecraft, requirements) or chosen
         else:
             chosen = matching_version(target, loader, minecraft, requirements)
-        required = modrinth_files(target, loader, minecraft, seen, cache_dir, chosen)
+        required = modrinth_files(target, loader, minecraft, seen, cache_dir, chosen, loader_version)
         if required is None:
             return None
         files += required
@@ -218,13 +285,13 @@ def modrinth_files(project, loader, minecraft, seen, cache_dir, version=None):
         chosen = matching_version(mod_id, loader, minecraft, requirements)
         if chosen is None:
             continue
-        required = modrinth_files(mod_id, loader, minecraft, seen, cache_dir, chosen)
+        required = modrinth_files(mod_id, loader, minecraft, seen, cache_dir, chosen, loader_version)
         if required:
             files += required
     return files
 
 
-def newest_working(project, loader, minecraft, cache_dir, tries=8):
+def newest_working(project, loader, minecraft, cache_dir, tries=8, loader_version=""):
     """必要な Mod も含めてこのバージョンで動く組み合わせが揃う、最も新しい版のファイル。なければ None。
 
     最新版が必要とする Mod が、このバージョン向けにはまだないことがある
@@ -235,10 +302,60 @@ def newest_working(project, loader, minecraft, cache_dir, tries=8):
     releases = [version for version in versions if version.get("version_type") == "release"]
     others = [version for version in versions if version.get("version_type") != "release"]
     for version in (releases + others)[:tries]:
-        files = modrinth_files(project, loader, minecraft, {project}, cache_dir, version)
+        files = modrinth_files(project, loader, minecraft, {project}, cache_dir, version, loader_version)
+        if (files and project == "iris" and mod_numbers(version.get("version_number", "")) >= (1, 6)
+                and not includes_sodium(files, cache_dir)):
+            # Iris は 1.6 から Sodium がないと動かないが、そのことが jar にも Modrinth にも書かれていない版がある
+            # (Iris 1.7.0+1.20.6 は 1.20.5 向けとされているが、どちらにも Sodium の指定がない。
+            # NeoForge 1.21 向けの Iris 1.8.0-beta.2 / beta.3 も書かれていない)。
+            # その Iris が、名前の上でもこのバージョン向け (版の名前に "+1.21-" のように含む) なら、
+            # その Iris が出た時点の最新の Sodium を合わせる。そうでなければ、その版は使わない
+            # (1.6 より前の Iris は、Sodium がなくても動く)
+            if not re.search(rf"(?<![\d.]){re.escape(minecraft)}(?![\d.])", version.get("version_number", "")):
+                continue
+            sodium = sodium_of_the_time(loader, version.get("game_versions") or [minecraft],
+                                        version.get("date_published", ""))
+            extra = sodium and modrinth_files("sodium", loader, minecraft, {project, "sodium"}, cache_dir, sodium,
+                                              loader_version)
+            if not extra:
+                continue
+            files = files + extra
         if files:
             return files
     return None
+
+
+def sodium_of_the_time(loader, game_versions, published):
+    """このローダーと、game_versions のどれか向けの Sodium のうち、published (Modrinth の公開日時) までに出た最新の版。
+    なければ None。
+
+    Iris と同じ範囲のバージョンで探す (NeoForge 1.21 で動く Sodium 0.6.0-beta.1 は、Modrinth では 1.21.1 向けとだけ
+    書かれている)。実際にこのバージョンで読み込まれるかは、呼び出し側が jar の中の指定で確かめる
+    """
+    if not published:
+        return None
+    query = urllib.parse.urlencode({"loaders": json.dumps([loader]), "game_versions": json.dumps(game_versions)})
+    versions = [version for version in fetch_json(f"{MODRINTH}/project/sodium/version?{query}")
+                if version.get("date_published", "") <= published]
+    return max(versions, key=lambda version: version["date_published"], default=None)
+
+
+def mod_numbers(text):
+    """Mod の版の数字の並び。先頭に付いている Minecraft のバージョン ("mc1.18.1-"、"1.17.x-") は除く。"""
+    return numbers(re.sub(r"^(?:mc[\d.]+|[\d.]+\.x)-", "", text.strip()))
+
+
+def includes_sodium(files, cache_dir):
+    """Mod のファイルの中に Sodium があるか (別の jar として、または Iris の jar の中に jar かクラスとして入っているか)。"""
+    if any("sodium" in name.lower() for name, _ in files):
+        return True
+    try:
+        with zipfile.ZipFile(cache_dir / files[0][0]) as archive:
+            return any(("sodium" in name.lower() and name.endswith(".jar"))
+                       or name.startswith(("me/jellysquid/mods/sodium/", "net/caffeinemc/mods/sodium/"))
+                       for name in archive.namelist())
+    except (OSError, zipfile.BadZipFile):
+        return False
 
 
 # ローダーやゲーム本体など、Mod として入れるものではない ID
@@ -271,14 +388,18 @@ def fabric_hard_dependencies(jar):
         return []
 
 
-def optifine_file(minecraft):
-    """Forge と一緒に使える OptiFine。なければ None。"""
+def optifine_file(minecraft, forge=False):
+    """OptiFine。forge なら Forge と一緒に使えるもの。なければ None。"""
     try:
         entries = fetch_json(f"{OPTIFINE}/{minecraft}")
     except OSError:
         return None
     # 試験版でないもののうち、最も新しいもの
     stable = [entry for entry in entries if not entry.get("filename", "").startswith("preview")]
+    if forge:
+        # 配布元の情報で、対応する Forge が「N/A」の版は Forge では動かない
+        # (1.14.2 / 1.14.3 の OptiFine はどれもそうで、Forge と一緒には起動しないか、Forge に読み込まれない)
+        stable = [entry for entry in stable if entry.get("forge") and "N/A" not in entry["forge"]]
     if not stable:
         return None
     entry = stable[-1]
@@ -297,21 +418,81 @@ def pack_version(pack, loader, minecraft):
     return version
 
 
+RENDER_STAGE = b"MC_RENDER_STAGE"
+
+
+def jar_contains(jar, text):
+    """jar (と、その中の jar) のクラスファイルに、text が含まれるかどうか。"""
+    import io
+
+    def search(archive):
+        for name in archive.namelist():
+            if name.endswith(".class") and text in archive.read(name):
+                return True
+            if name.endswith(".jar"):
+                with zipfile.ZipFile(io.BytesIO(archive.read(name))) as inner:
+                    if search(inner):
+                        return True
+        return False
+
+    try:
+        with zipfile.ZipFile(jar) as archive:
+            return search(archive)
+    except (OSError, zipfile.BadZipFile):
+        return True
+
+
+def pack_uses(path, text):
+    """シェーダーパックのシェーダーのコードに、text が含まれるかどうか。"""
+    with zipfile.ZipFile(path) as archive:
+        return any(text in archive.read(name) for name in archive.namelist()
+                   if name.endswith((".glsl", ".fsh", ".vsh", ".gsh", ".csh")))
+
+
+def pack_without(pack, loader, text, cache_dir):
+    """シェーダーパックの版のうち、シェーダーのコードに text を使っていない最も新しいもの。なければ None。"""
+    query = urllib.parse.urlencode({"loaders": json.dumps([loader])})
+    versions = fetch_json(f"{MODRINTH}/project/{pack}/version?{query}")
+    for version in versions:
+        filename, url = version["files"][0]["filename"], version["files"][0]["url"]
+        download(url, cache_dir / filename)
+        if not pack_uses(cache_dir / filename, text):
+            return version
+    return None
+
+
 def variant(pack_slug=None, shader_mod=None):
     """既定と違う構成で確認するときに、結果の名前に付ける文字列。既定どおりなら空。"""
     parts = [shader_mod or "", "" if (pack_slug or SHADER_PACK) == SHADER_PACK else pack_slug]
     return "-".join(part for part in parts if part)
 
 
-# OptiFine を Mod として読み込まない Forge のバージョン。
-# Forge 1.14.3 (27.0.60) は OptiFine 1.14.3 HD U F2 を「unsupported」として無視し、起動時に警告の画面で止まる
-FORGE_REJECTS_OPTIFINE = {"1.14.3"}
+# 選ばれる版では動かないことを実際に起動して確かめ、代わりに使う版。{(ローダー, Minecraft のバージョン): {プロジェクト: 版}}
+# jar の中の指定からは分からない (起動してから、Mod の書き換えの対象が見つからずに落ちる) ので、ここに書く
+REPLACEMENTS = {
+    # Sodium 0.9.2 は NeoForge 26.3.0.76 の LevelExtractor の書き換えに失敗して、起動中に落ちる。0.9.3-beta.1 は動く
+    ("neoforge", "26.3"): {"sodium": "mc26.3-0.9.3-beta.1-neoforge"},
+}
 
 
-def resolve(loader, minecraft, cache_dir, pack_slug=SHADER_PACK, shader_mod=None):
+def replace_versions(mods, loader, minecraft):
+    """REPLACEMENTS にある Mod のファイルを、指定した版のものに差し替える。"""
+    for project, wanted in REPLACEMENTS.get((loader, minecraft), {}).items():
+        version = next((item for item in fetch_json(f"{MODRINTH}/project/{project}/version")
+                        if item.get("version_number") == wanted), None)
+        if version is None:
+            continue
+        primary = next((file for file in version["files"] if file.get("primary")), version["files"][0])
+        mods = [(primary["filename"], primary["url"]) if name.lower().startswith(project) else (name, url)
+                for name, url in mods]
+    return mods
+
+
+def resolve(loader, minecraft, cache_dir, pack_slug=SHADER_PACK, shader_mod=None, loader_version=""):
     """影 Mod の構成を返す。この組み合わせで使える影 Mod がなければ None。
 
     shader_mod に "optifine" を指定すると、Forge 1.16.5 以降でも OptiFine を使う。
+    loader_version は起動に使う Forge / NeoForge の版。渡すと、その版で読み込まれない Mod は選ばない。
 
     戻り値: {"name": 影 Mod の名前, "mods": [(ファイル名, URL)], "config": 設定ファイルの名前, "pack": (ファイル名, URL)}
     """
@@ -320,15 +501,13 @@ def resolve(loader, minecraft, cache_dir, pack_slug=SHADER_PACK, shader_mod=None
         if shader_mod == "optifine" and loader not in ("forge", "liteloader"):
             return None
         if loader in ("fabric", "neoforge"):
-            mods = newest_working("iris", loader, minecraft, cache_dir)
+            mods = newest_working("iris", loader, minecraft, cache_dir, loader_version=loader_version)
             name, config = "Iris", "config/iris.properties"
         elif loader == "forge" and version_key(minecraft) >= (1, 16, 5) and shader_mod != "optifine":
-            mods = modrinth_files("oculus", loader, minecraft, {"oculus"}, cache_dir)
+            mods = newest_working("oculus", loader, minecraft, cache_dir, loader_version=loader_version)
             name, config = "Oculus", "config/oculus.properties"
-        elif loader == "forge" and minecraft in FORGE_REJECTS_OPTIFINE:
-            return None
         elif loader == "forge":
-            optifine = optifine_file(minecraft)
+            optifine = optifine_file(minecraft, forge=True)
             mods = [optifine] if optifine else None
             name, config = "OptiFine", "optionsshaders.txt"
         elif loader == "liteloader":
@@ -343,7 +522,18 @@ def resolve(loader, minecraft, cache_dir, pack_slug=SHADER_PACK, shader_mod=None
             return None
         if not mods and library is None:
             return None
-        pack = pack_version(pack_slug, "optifine" if name == "OptiFine" else "iris", minecraft)
+        if mods:
+            mods = replace_versions(mods, loader, minecraft)
+        pack_loader = "optifine" if name == "OptiFine" else "iris"
+        pack = pack_version(pack_slug, pack_loader, minecraft)
+        if mods and name in ("Iris", "Oculus"):
+            # 古い Iris (1.17 / 1.18 向けの 1.1.x) は、描画の段階を表す定義 (MC_RENDER_STAGE_*) を持たない。
+            # 新しいシェーダーパックはそれを使うので組み立てられず、シェーダーなしの描画に戻ってしまう。
+            # そのときは、それを使っていない版のシェーダーパックにする
+            shader_jar = cache_dir / mods[0][0]
+            download(mods[0][1], shader_jar)
+            if not jar_contains(shader_jar, RENDER_STAGE):
+                pack = pack_without(pack_slug, pack_loader, RENDER_STAGE, cache_dir) or pack
         if pack is None:
             return None
         return {"name": name, "mods": mods, "config": config, "pack_slug": pack_slug, "library": library,

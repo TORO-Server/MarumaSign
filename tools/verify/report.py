@@ -20,7 +20,8 @@ def version_key(version):
     return tuple(int(part) for part in re.findall(r"\d+", version))
 
 
-MEDIA_NAMES = {"image": "画像", "model": "3D モデル", "video": "動画", "splat": "ガウシアンスプラット", "pdf": "PDF"}
+MEDIA_NAMES = {"image": "画像", "model": "3D モデル", "video": "動画", "splat": "ガウシアンスプラット", "pdf": "PDF",
+               "structure": "構造物"}
 # シェーダーパックの、表に書く名前
 PACK_NAMES = {
     "bsl-shaders": "BSL",
@@ -30,6 +31,13 @@ PACK_NAMES = {
     "makeup-ultra-fast-shaders": "MakeUp Ultra Fast",
     "photon-shader": "Photon",
 }
+
+
+# 1 回目の失敗のうち、Mod の外 (ローダー) の不具合だと分かっているもの: (失敗の記録に含まれる文字, 表に書く原因)
+LOADER_FAILURES = [
+    # NeoForge が、バニラのサーバーにつなぐときの準備を 2 つのスレッドで同時に行い、通信の処理を二重に登録しようとして切断する
+    ("Duplicate handler name: neoforge:vanilla_filter", "NeoForge の接続の不具合"),
+]
 
 
 def cell(entry, digest):
@@ -51,8 +59,9 @@ def cell(entry, digest):
             if no_item:
                 notes.append("・".join(no_item) + "のアイテムは未確認")
         if entry.get("first_attempt"):
-            # 1 回目は失敗して、やり直して合格した
-            notes.append("1 回目は失敗")
+            # 1 回目は失敗して、やり直して合格した。原因が Mod の外にあると分かっているものは、その原因を書く
+            cause = next((name for pattern, name in LOADER_FAILURES if pattern in entry["first_attempt"]), None)
+            notes.append(f"1 回目は{cause}で失敗" if cause else "1 回目は失敗")
         return "OK" + (" (" + "、".join(notes) + ")" if notes else "")
     if entry.get("ok"):
         # 動作はしたが、基準にない警告が出たか、表示を確認できなかった
@@ -77,13 +86,17 @@ def main():
         "",
         "確認の内容: バニラのサーバーを起動し、各ローダーを入れた実際のクライアントで接続して、",
         "サバイバルモードのまま、ゲーム内のウィンドウでファイルを選び、看板を設置して表示されるまでを自動で行います。",
-        "1 回の起動で、画像 (PNG)、3D モデル (GLB)、動画 (音声付きの MP4)、ガウシアンスプラット (.splat)、PDF の 5 つを順に確認し (PDF はページ送りも確かめ)、",
-        "最後に、5 つそれぞれの看板の文字をデータとして持たせた看板アイテムを渡して、手持ちの枠の中の見た目がその絵になることを確認します。",
+        "1 回の起動で、画像 (PNG)、3D モデル (GLB)、動画 (音声付きの MP4)、ガウシアンスプラット (.splat)、PDF、構造物 (.nbt) の 6 つを順に確認し (PDF はページ送りも確かめ)、",
+        "最後に、6 つそれぞれの看板の文字をデータとして持たせた看板アイテムを渡して、手持ちの枠の中の見た目がその絵になることを確認します",
+        "(PDF のアイテムは URL の末尾に `#page=2` を付けて、2 ページ目から表示されることも確かめます)。",
         "画面は自動の判定に加えて目でも確かめ、絵にすき間や縞模様がないこと (ガウシアンスプラットの重なり方) も調べています。",
         "",
-        "- **OK**: 5 つとも正しい向きで、すき間なく表示され、看板そのものは隠れていて、5 つの看板アイテムもその絵の見た目になり、",
+        "- **OK**: 6 つとも正しい向きで、すき間なく表示され、看板そのものは隠れていて、6 つの看板アイテムもその絵の見た目になり、",
         "  Mod を入れていない状態と比べて新しい警告やエラーが出なかった。どのファイルも、看板が描かれようとしてから 15 秒以内に表示された",
         "- **OK (1 回目は失敗)**: 1 回目の確認で失敗し、やり直して合格した (たまにしか起きない不具合かもしれないので、1 回目の内容を結果に残している)",
+        "- **OK (1 回目は NeoForge の接続の不具合で失敗)**: NeoForge が、バニラのサーバーにつなぐときの準備を 2 つのスレッドで同時に行って",
+        "  切断し (「Duplicate handler name: neoforge:vanilla_filter」)、やり直して合格した。NeoForge 自体の処理どうしがぶつかって起きるもので、",
+        "  この Mod は通信の処理に関わっていない",
         "- **要確認**: 動作はしたが、新しい警告が出たか、表示を確認できなかった",
         "- **失敗**: 動作しなかった",
         "- **対象外**: Mod を入れていない状態でもゲームが起動しないか、サーバーに入れなかった (ローダーや影 Mod 側の問題)",
@@ -135,14 +148,17 @@ def main():
             "Iris は Sodium と、Oculus は Rubidium または Embeddium と一緒に入れています。空欄は、確認していない組み合わせです。",
             "シェーダーは絵にも影や空の色を付けるので、色そのものではなく、絵が正しい場所に正しい向きで写っていることを確認しています。",
             "",
+            "影 Mod とそれが必要とする Mod は、そのバージョン向けの版のうち、jar の中の指定 (Minecraft、Forge / NeoForge、"
+            "必要とする Mod の版) に合うものを選んでいます。",
+            "1.17 / 1.18 の Iris (1.1.x) は、描画の段階を表す定義 (MC_RENDER_STAGE_*) を持たず新しいシェーダーパックを組み立てられないので、"
+            "それを使っていない BSL 8.1 で確認しています。",
+            "",
             "次の組み合わせは、この Mod を入れなくても影 Mod が動かないため、確認の対象から外しています。",
             "",
+            "- Forge 1.14.2 / 1.14.3: その版の OptiFine はどれも Forge に対応していない (配布元の情報で Forge が「N/A」)。"
+            "Oculus は 1.16.5 から",
             "- Forge 1.21.1 + OptiFine 1.21.1 HD U J1: OptiFine の読み込み中にゲームが終了する",
-            "- Forge 1.14.2 + OptiFine 1.14.2 HD U F1: ゲームが起動しない",
-            "- Forge 1.14.3 + OptiFine 1.14.3 HD U F2: Forge が OptiFine を「unsupported」として読み込まず、起動時の警告の画面で止まる",
             "- OptiFine 1.8.9 + MakeUp Ultra Fast: 画面が真っ黒になる",
-            "- 対象外と書いたマスのうち Iris のもの (1.17 - 1.18 など): その版の Iris (1.1.x) が新しいシェーダーパックの"
-            "空のシェーダーを組み立てられず (MC_RENDER_STAGE_STARS が未定義)、シェーダーなしの描画に戻る",
             "",
             "| Minecraft | " + " | ".join(LOADER_NAMES[loader] for loader in LOADERS) + " |",
             "| --- | " + " | ".join("---" for _ in LOADERS) + " |",
