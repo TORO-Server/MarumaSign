@@ -11,6 +11,7 @@ import marumasa.marumasa_sign.core.media.Ffmpeg;
 import marumasa.marumasa_sign.core.net.Http;
 import marumasa.marumasa_sign.core.splat.SplatLoader;
 import marumasa.marumasa_sign.core.splat.SplatScene;
+import marumasa.marumasa_sign.core.structure.StructureLoader;
 import marumasa.marumasa_sign.core.pdf.PdfFile;
 
 import javax.imageio.ImageIO;
@@ -44,8 +45,8 @@ public final class ImageLoader {
         // ガウシアンスプラッティングだったとき
         void onSplat(SplatScene scene);
 
-        // PDF だったとき。firstPage は最初のページを画像にしたもの
-        void onPdf(PdfFile file, DecodedImage firstPage);
+        // PDF だったとき。page は最初に表示するページ (0 から始まる)、firstPage はそのページを画像にしたもの
+        void onPdf(PdfFile file, int page, DecodedImage firstPage);
 
         // 画像でも 3D モデルでもガウシアンスプラッティングでも PDF でもなかったとき。動画や音声として再生できるかもしれない
         void onMedia();
@@ -103,6 +104,11 @@ public final class ImageLoader {
 
     public boolean isBusy() {
         return !queue.isEmpty() || activeDownloads.get() > 0;
+    }
+
+    // 読み込みの待ちと実行中の数 (動作確認で、読み込みが始まらないときの手がかりにする)
+    public String status() {
+        return "queued " + queue.size() + ", active " + activeDownloads.get() + " of " + maxThreads;
     }
 
     // 同時ロード数の上限まで、待っている画像の読み込みを始める。どのスレッドから呼んでもよい
@@ -164,6 +170,10 @@ public final class ImageLoader {
                         kind[0] = KIND_MODEL;
                         return MAX_MODEL_SIZE;
                     }
+                    if (StructureLoader.isStructure(head, length)) {
+                        kind[0] = KIND_MODEL;
+                        return StructureLoader.MAX_SIZE;
+                    }
                     if (SplatLoader.isSplat(head, length, name)) {
                         kind[0] = KIND_SPLAT;
                         return MAX_SPLAT_SIZE;
@@ -192,7 +202,9 @@ public final class ImageLoader {
             if (kind[0] == KIND_PDF) {
                 final PdfFile file = PdfFile.open(content);
                 try {
-                    request.callback.onPdf(file, file.render(0, PdfFile.PAGE_SIZE));
+                    // URL の末尾に「#page=ページ番号」があれば、そのページから表示する
+                    final int page = file.clampPage(PdfFile.requestedPage(url));
+                    request.callback.onPdf(file, page, file.render(page, PdfFile.PAGE_SIZE));
                 } catch (IOException | RuntimeException e) {
                     file.close();
                     throw e;
@@ -210,9 +222,14 @@ public final class ImageLoader {
         }
     }
 
-    // 先頭のバイト列が 3D モデル (.glb / .gltf) らしいかどうか
+    // 先頭のバイト列が 3D モデル (.glb / .gltf) か構造物のファイル (.schem / .litematic / .nbt / .mcstructure / .schematic) らしいかどうか
     public static boolean isModel(byte[] head, int length) {
-        return GltfLoader.isGlb(head, length) || GltfLoader.looksLikeJson(head, length);
+        return GltfLoader.isGlb(head, length) || StructureLoader.isStructure(head, length) || GltfLoader.looksLikeJson(head, length);
+    }
+
+    // 先頭のバイト列が構造物のファイルらしいかどうか
+    public static boolean isStructure(byte[] head, int length) {
+        return StructureLoader.isStructure(head, length);
     }
 
     // 先頭のバイト列と名前がガウシアンスプラッティングのファイルらしいかどうか
@@ -233,13 +250,22 @@ public final class ImageLoader {
 
     // URL からダウンロードした内容を 3D モデルとして読み込む
     public static GltfScene model(String url, byte[] content) throws IOException {
-        return scene(content, new ModelResources(url, content.length));
+        return model(url, content, 0L);
+    }
+
+    // deadline (System.nanoTime の値。0 なら期限なし) までに、外部ファイルも読み終える
+    public static GltfScene model(String url, byte[] content, long deadline) throws IOException {
+        if (StructureLoader.isStructure(content, Math.min(content.length, 512))) return StructureLoader.load(content);
+        return scene(content, new ModelResources(url, content.length, deadline));
     }
 
     // ファイルを 3D モデルとして読み込む
     public static GltfScene model(File file) throws IOException {
-        if (file.length() > MAX_MODEL_SIZE) throw new IOException("Content size exceeds the limit of " + MAX_MODEL_SIZE + " bytes.");
-        return scene(Files.readAllBytes(file.toPath()), fileResources(file));
+        final long limit = Math.max(MAX_MODEL_SIZE, StructureLoader.MAX_SIZE);
+        if (file.length() > limit) throw new IOException("Content size exceeds the limit of " + limit + " bytes.");
+        final byte[] content = Files.readAllBytes(file.toPath());
+        if (StructureLoader.isStructure(content, Math.min(content.length, 512))) return StructureLoader.load(content);
+        return scene(content, fileResources(file));
     }
 
     private static GltfScene scene(byte[] content, GltfLoader.Resources resources) throws IOException {
@@ -267,11 +293,13 @@ public final class ImageLoader {
     // 3D モデルが参照している外部ファイル (バッファや画像) を、モデルの URL からの相対位置で読み込む
     private static final class ModelResources implements GltfLoader.Resources {
         private final URL base;
+        private final long deadline;
         private long total;
 
-        ModelResources(String url, long loaded) throws IOException {
+        ModelResources(String url, long loaded, long deadline) throws IOException {
             this.base = new URL(url);
             this.total = loaded;
+            this.deadline = deadline;
         }
 
         @Override
@@ -284,7 +312,14 @@ public final class ImageLoader {
             // 全体の大きさを、モデル 1 つ分の上限に収める
             final long remaining = MAX_MODEL_SIZE - total;
             if (remaining <= 0) throw new IOException("Content size exceeds the limit of " + MAX_MODEL_SIZE + " bytes.");
-            final byte[] content = Http.download(resolved.toString(), null, (int) remaining);
+            final byte[] content = Http.downloadBefore(resolved.toString(), new Http.ContentCheck() {
+                @Override
+                public int maxBytes(byte[] head, int length, String name) {
+                    return (int) remaining;
+                }
+            }, deadline);
+            // 画像を送り続ける配信などは、ファイルとして読めない
+            if (content == null) throw new IOException("Not a file: " + uri);
             total += content.length;
             return content;
         }

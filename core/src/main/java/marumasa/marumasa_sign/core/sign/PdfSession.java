@@ -15,7 +15,8 @@ import java.util.concurrent.ThreadFactory;
 
 /**
  * 看板に表示している PDF 1 つ分。表示中のページと、そのページを映すテクスチャを持つ。
- * ページは見る人ごと (このクライアントだけ) に切り替わり、同じ URL の看板はすべて同じページを表示する。
+ * ページは見る人ごと (このクライアントだけ) に切り替わり、同じ URL の看板はすべて同じページを表示する
+ * (「#page=」の指定が違えば別の URL として扱うので、看板ごとに違うページから始められる)。
  * メインスレッドからのみ使う (ページを画像にする処理だけは別のスレッドで行う)。
  */
 final class PdfSession {
@@ -60,10 +61,11 @@ final class PdfSession {
         this.pageCount = file.pageCount();
     }
 
-    // 最初のページを表示する。first はそのページを画像にしたもの
-    void start(DecodedImage first) {
-        cache.put(0, first);
-        show(0, first);
+    // 最初に表示するページ (0 から始まる。URL の「#page=」で指定できる) を表示する。first はそのページを画像にしたもの
+    void start(int first, DecodedImage image) {
+        page = first;
+        cache.put(first, image);
+        show(first, image);
         renderNext();
     }
 

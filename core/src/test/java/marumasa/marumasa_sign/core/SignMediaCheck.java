@@ -25,6 +25,8 @@ public final class SignMediaCheck {
         // ゲームと同じように、1 秒に 20 回の tick と 60 回の描画を行う
         boolean loaded = false;
         double loadedAt = 0;
+        // 表示が始まったときに貼られていた絵のうち、透けている (アルファが 0 の) ピクセルの数
+        int clearAtLoad = -1;
         final long begin = System.nanoTime();
         long nextTick = 0;
         while (System.nanoTime() - begin < seconds * 1_000_000_000L) {
@@ -36,17 +38,22 @@ public final class SignMediaCheck {
             platform.runTasks();
             final SignImage image = MarumaSign.sign(text);
             if (image == null) throw new IllegalStateException("not a sign text");
-            image.texture(4.0);
+            final Object texture = image.texture(4.0);
             if (image.isLoaded() && !loaded) {
                 loaded = true;
                 loadedAt = elapsed / 1000.0;
+                clearAtLoad = 0;
+                for (int argb : ((FakePlatform.Texture) texture).pixels) {
+                    if (argb >>> 24 == 0) clearAtLoad++;
+                }
             }
             Thread.sleep(16);
         }
         final SignImage image = MarumaSign.sign(text);
-        System.out.println(String.format("loaded=%s after %.2fs, size=%dx%d, textures=%d, updates=%d (%.1f per second)",
+        System.out.println(String.format("loaded=%s after %.2fs, size=%dx%d, textures=%d, updates=%d (%.1f per second),"
+                        + " transparent pixels when shown=%d",
                 image.isLoaded(), loadedAt, image.textureEntry().width(), image.textureEntry().height(),
-                platform.textureCount, platform.updateCount, platform.updateCount / Math.max(0.1, seconds - loadedAt)));
+                platform.textureCount, platform.updateCount, platform.updateCount / Math.max(0.1, seconds - loadedAt), clearAtLoad));
         if (output != null && platform.pixels != null) {
             final BufferedImage picture = new BufferedImage(platform.width, platform.height, BufferedImage.TYPE_INT_ARGB);
             picture.setRGB(0, 0, platform.width, platform.height, platform.pixels, 0, platform.width);

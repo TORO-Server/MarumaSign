@@ -12,6 +12,7 @@ import marumasa.marumasa_sign.core.image.ImageLoader;
 import marumasa.marumasa_sign.core.media.MediaTools;
 import marumasa.marumasa_sign.core.net.Http;
 import marumasa.marumasa_sign.core.pdf.PdfFile;
+import marumasa.marumasa_sign.core.structure.StructureLoader;
 import marumasa.marumasa_sign.core.sign.SignSpec;
 import marumasa.marumasa_sign.core.splat.SplatLoader;
 import marumasa.marumasa_sign.core.splat.SplatScene;
@@ -228,6 +229,12 @@ public final class MainPage extends Page {
         return ImageLoader.isModel(head, head.length);
     }
 
+    // 構造物のファイルかどうか
+    private static boolean isStructureFile(File file) throws IOException {
+        final byte[] head = readHead(file);
+        return ImageLoader.isStructure(head, head.length);
+    }
+
     // Gaussian Splatting のファイルかどうか
     private static boolean isSplatFile(File file) throws IOException {
         final byte[] head = readHead(file);
@@ -240,10 +247,22 @@ public final class MainPage extends Page {
         return PdfFile.isPdf(head, head.length);
     }
 
-    // PDF の最初のページを、プレビューの大きさの画像にする
-    private static BufferedImage pdfPreview(PdfFile pdf) throws IOException {
+    // 入力欄の内容の「#」から後ろ (PDF の「#page=3」など、表示のための指定)。なければ空の文字列。
+    // ファイルの名前そのものに「#」が入っていることもあるので、そのままの名前のファイルがあれば、指定とはみなさない
+    private static String fragment(String text) {
+        if (!Http.isHttpUrl(text) && new File(text).exists()) return "";
+        return Http.fragment(text);
+    }
+
+    // 入力欄の内容のうち、ファイルや URL を指す部分 (fragment の前まで)
+    private static String withoutFragment(String text) {
+        return text.substring(0, text.length() - fragment(text).length());
+    }
+
+    // PDF のページ (0 から始まる。看板に表示したときに最初に出るページ) を、プレビューの大きさの画像にする
+    private static BufferedImage pdfPreview(PdfFile pdf, int page) throws IOException {
         try {
-            return toBufferedImage(pdf.render(0, PDF_PREVIEW_SIZE));
+            return toBufferedImage(pdf.render(pdf.clampPage(page), PDF_PREVIEW_SIZE));
         } finally {
             pdf.close();
         }
@@ -309,7 +328,7 @@ public final class MainPage extends Page {
                     else if (bytes != null && isModel[0]) model = ImageLoader.model(resolvedName[0], bytes);
                     else if (bytes != null && isSplat[0]) splat = ImageLoader.splat(resolvedName[0], bytes);
                 } else {
-                    final File file = new File(text);
+                    final File file = new File(withoutFragment(text));
                     bytes = readImageFile(file);
                     if (bytes == null) {
                         if (isPdfFile(file)) pdf = PdfFile.open(file);
@@ -319,7 +338,7 @@ public final class MainPage extends Page {
                 }
                 if (pdf != null) {
                     final int pages = pdf.pageCount();
-                    image = pdfPreview(pdf);
+                    image = pdfPreview(pdf, PdfFile.requestedPage(fragment(text)));
                     info = Lang.get("ui.preview.pdf", pages);
                 } else if (model != null) {
                     image = GltfPreview.render(model, 0f, MODEL_PREVIEW_SIZE);
@@ -387,12 +406,14 @@ public final class MainPage extends Page {
             String error = null;
             String signText = null;
             try {
-                String url = Http.isHttpUrl(text) ? text : upload(new File(text));
+                // ファイルなら、「#page=3」などの後ろの指定はアップロードした URL に付け直す
+                String url = Http.isHttpUrl(text) ? text : upload(new File(withoutFragment(text))) + fragment(text);
                 signText = spec.withUrl(url).toText();
                 if (signText.length() > capacity) {
-                    // 看板に入りきらない場合は URL を短縮する
+                    // 看板に入りきらない場合は URL を短縮する。「#」から後ろはサーバーに送られないので、
+                    // 短縮した URL では失われる。短縮するのは前の部分だけにして、後ろの指定は付け直す
                     progress(Lang.get("ui.status.shortening"));
-                    url = Http.shorten(url);
+                    url = Http.shorten(Http.withoutFragment(url)) + Http.fragment(url);
                     signText = spec.withUrl(url).toText();
                 }
                 if (signText.length() > capacity) {
@@ -458,6 +479,15 @@ public final class MainPage extends Page {
                 PdfFile.open(file).close();
             } catch (IOException e) {
                 MarumaSign.LOGGER.info("Could not load the PDF: " + e.getMessage());
+                throw new IOException(Lang.get("ui.status.not_image"));
+            }
+        } else if (isStructureFile(file)) {
+            if (file.length() > StructureLoader.MAX_SIZE) throw new IOException(Lang.get("ui.status.file_too_large", 64));
+            try {
+                // 表示できる構造物かどうかを確かめる
+                ImageLoader.model(file);
+            } catch (IOException e) {
+                MarumaSign.LOGGER.info("Could not load the structure: " + e.getMessage());
                 throw new IOException(Lang.get("ui.status.not_image"));
             }
         } else if (isModelFile(file)) {

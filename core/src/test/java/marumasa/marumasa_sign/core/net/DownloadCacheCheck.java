@@ -31,6 +31,8 @@ public final class DownloadCacheCheck {
     private static final List<String> requests = new ArrayList<String>();
 
     public static void main(String[] args) throws Exception {
+        // 手元に立てたサーバーから読む
+        System.setProperty("marumasign.allowLocalUrls", "true");
         final File directory = Files.createTempDirectory("marumasign-cache-check").toFile();
         DownloadCache.directoryOverride = directory;
         HttpServer server = start(0);

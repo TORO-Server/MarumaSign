@@ -11,6 +11,10 @@ import java.io.File;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
+import java.util.Collections;
+import java.util.LinkedHashSet;
+import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 
 /**
  * 実機での動作確認を自動で行うための仕組み。
@@ -42,6 +46,9 @@ final class SelfTest {
     private static final int PDF_TURN_TIMEOUT = 200;
     // 外部のスクリプトが画面を記録し終えるのを待つ上限 (tick)。スクリプトなしで動かしたときは、これだけ待って進む
     private static final int SHOT_WAIT = 200;
+
+    // 確認のあいだ向いている方角 (度。南が 0)
+    private static final float LOOK_YAW = 0f;
 
     // 看板アイテムを受け取ってから、描かれるのを待つ時間の上限 (tick)
     private static final int ITEM_TIMEOUT = 20 * 15;
@@ -112,7 +119,16 @@ final class SelfTest {
             drawnCount++;
             drawnImage = image;
         }
+        final Set<String> items = itemUrls;
+        if (items != null && items.contains(image.spec.url)) {
+            drawnCount++;
+            drawnItems.add(image.spec.url);
+        }
     }
+
+    // 渡された看板アイテムの URL と、そのうち表示されたもの。アイテムを待っていなければ null
+    private volatile Set<String> itemUrls;
+    private final Set<String> drawnItems = Collections.newSetFromMap(new ConcurrentHashMap<String, Boolean>());
 
     // 確認中の看板として最後に描画されたもの
     private volatile SignImage drawnImage;
@@ -123,7 +139,13 @@ final class SelfTest {
     private void next(int nextStep) {
         step = nextStep;
         ticksInStep = 0;
+        lookTick = 0;
+        shotWait = 0;
     }
+
+    // LOOK_AT_SIGN の中の時間 (画面の記録を待つ間は進めない) と、記録を待っている時間 (tick)
+    private int lookTick;
+    private int shotWait;
 
     void tick() {
         if (quitCountdown >= 0) {
@@ -134,7 +156,8 @@ final class SelfTest {
         // ワールドに入るまでは、影 Mod のシェーダーの準備などで時間がかかることがあるので、長めに待つ
         if (++ticksInStep > (step == WAIT_WORLD ? STEP_TIMEOUT * 3 : STEP_TIMEOUT)) {
             finish(false, "Timed out at step " + STEP_NAMES[step]
-                    + (step == WAIT_RENDER ? " (signs looked up " + lookups + " times, recognised " + recognised + " times)" : ""));
+                    + (step == WAIT_RENDER ? " (signs looked up " + lookups + " times, recognised " + recognised + " times; "
+                    + loadState(expectedUrl) + ")" : ""));
             return;
         }
         try {
@@ -165,6 +188,8 @@ final class SelfTest {
                     }
                 }
                 worldTicks = platform.isInWorld() ? worldTicks + 1 : 0;
+                // 看板を置くまでに、向きがサーバーに届いているようにする (USE_ITEM を参照)
+                if (worldTicks > 0) look(0f);
                 if (worldTicks > 20 * 8) {
                     worldTicks = 0;
                     next(OPEN_UI);
@@ -172,11 +197,13 @@ final class SelfTest {
                 break;
 
             case OPEN_UI:
+                look(0f);
                 if (ticksInStep == 1) MarumaSign.openMenu();
                 if (ui.isOpen() && ticksInStep > 10) next(FILL);
                 break;
 
             case FILL:
+                look(0f);
                 if (ticksInStep == 1) {
                     // キー入力の経路も通すため、1 文字入力してから消す
                     ui.charTyped('x');
@@ -191,6 +218,7 @@ final class SelfTest {
                 break;
 
             case WAIT_WRITE_MODE:
+                look(0f);
                 if (MarumaSign.hasPendingWrite()) {
                     final SignSpec spec = SignSpec.parse(MarumaSign.pendingWriteText());
                     drawnCount = 0;
@@ -203,15 +231,19 @@ final class SelfTest {
                 break;
 
             case USE_ITEM:
+                // 少し先の地面を見て看板を置く。
+                // 看板の向きはサーバーが知っているプレイヤーの向きで決まるので、向きを変えたのと同じ tick に置くと、
+                // 前の向きで置かれてしまう。前の手順から毎 tick 向きをそろえておき、それがサーバーに届いてから置く。
+                // 古いサーバー (1.7.10 など) は、移動させたあと、プレイヤーの位置が届くまで向きを受け取らない。
+                // 止まっているプレイヤーの位置は 20 tick ごとにしか送られないので、置くのは 60 tick 待ってからにする
+                look(50f);
                 if (!MarumaSign.hasPendingWrite()) {
                     next(WAIT_RENDER);
-                } else if (ticksInStep % 40 == 20) {
+                } else if (ticksInStep >= 60 && ticksInStep % 40 == 20) {
                     if (++useAttempts > 20) {
                         finish(false, "The sign edit screen did not open");
                         return;
                     }
-                    // 少し先の地面を見て看板を置く
-                    platform.selfTestLook(50f);
                     platform.selfTestUseItem();
                 }
                 break;
@@ -219,7 +251,7 @@ final class SelfTest {
             case WAIT_RENDER:
                 // 画像の全体が見えるように正面を向く。
                 // サーバーからの位置の補正で向きが戻されることがあるので、毎 tick 向き直す
-                platform.selfTestLook(0f);
+                look(0f);
                 if (loadFailed(expectedUrl, new File(images[index]).getName())) return;
                 if (drawnCount > 0 && ticksInStep > 40) {
                     if (!loadedInTime(expectedUrl, new File(images[index]).getName())) return;
@@ -227,20 +259,29 @@ final class SelfTest {
                 }
                 break;
 
-            case LOOK_AT_SIGN:
+            case LOOK_AT_SIGN: {
                 // 外部のスクリプトが画面を記録できるように、合図のファイルを書きながら進める。
+                // 合図のあとは、スクリプトが記録し終えるまで向きを変えずに待つ (パソコンが一時的に重くなって記録が遅れると、
+                // 次の向きの画面を記録してしまうため)。待っている間は、この手順の時間 (t) を進めない
+                final int t = lookTick;
+                final boolean waiting = (t == 21 && !shotTaken("view") || t == 91 && !shotTaken("sign-view"))
+                        && shotWait++ < SHOT_WAIT;
+                if (!waiting) {
+                    lookTick++;
+                    shotWait = 0;
+                }
                 // まず、画像の全体が写っている状態
-                if (ticksInStep < 60) platform.selfTestLook(0f);
-                if (ticksInStep == 20) writeFile("view-" + index + ".txt", "ready\n");
+                if (t < 60) look(0f);
+                if (t == 20) writeFile("view-" + index + ".txt", "ready\n");
                 // 次に、看板そのものが消えていることを確認できるように、看板の位置を見下ろす
-                if (ticksInStep >= 60 && ticksInStep < 140) platform.selfTestLook(50f);
-                if (ticksInStep == 90) writeFile("sign-view-" + index + ".txt", "ready\n");
-                if (ticksInStep >= 140 && ticksInStep < 150) platform.selfTestLook(0f);
+                if (t >= 60 && t < 140) look(50f);
+                if (t == 90) writeFile("sign-view-" + index + ".txt", "ready\n");
+                if (t >= 140 && t < 150) look(0f);
                 // 動画や音声の看板では、真上を向いて看板が視界から外れても、音が大きくならないことを確かめる。
                 // 確認では音量を 0 にして音を出さないので、設定の音量を 100 としたときの大きさ (距離による変化) で比べる
                 final SignImage image = drawnImage;
                 final float gain = image == null ? -1f : image.textureEntry().mediaFalloff();
-                if (ticksInStep == 150 && gain >= 0) {
+                if (t == 150 && gain >= 0) {
                     // 看板のすぐ前にいるので、聞こえるはず。0 なら、看板までの距離が求められていない
                     if (gain <= 0f) {
                         finish(false, summary + ", " + new File(images[index]).getName() + " is silent even when facing the sign");
@@ -250,9 +291,9 @@ final class SelfTest {
                     facingDrawn = drawnCount;
                 }
                 final boolean checkGain = facingDrawn > 0;
-                if (checkGain && ticksInStep >= 150 && ticksInStep < 190) platform.selfTestLook(-90f);
-                if (checkGain && ticksInStep >= 190) platform.selfTestLook(0f);
-                if (checkGain && ticksInStep == 190) {
+                if (checkGain && t >= 150 && t < 190) look(-90f);
+                if (checkGain && t >= 190) look(0f);
+                if (checkGain && t == 190) {
                     if (summary.length() > 0) summary.append(", ");
                     summary.append(String.format(java.util.Locale.ROOT, "%s loudness at full volume facing %.3f, looking away %.3f (drawn %d times while away)",
                             new File(images[index]).getName(), facingGain, gain, drawnCount - facingDrawn));
@@ -261,7 +302,7 @@ final class SelfTest {
                         return;
                     }
                 }
-                if (ticksInStep == (checkGain ? 200 : 150)) {
+                if (t == (checkGain ? 200 : 150)) {
                     facingDrawn = 0;
                     if (summary.length() > 0) summary.append(", ");
                     summary.append(new File(images[index]).getName()).append(" rendered ").append(drawnCount).append(" times");
@@ -277,6 +318,7 @@ final class SelfTest {
                     }
                 }
                 break;
+            }
 
             case PDF_CONTROLS:
                 checkPdfControls();
@@ -284,6 +326,7 @@ final class SelfTest {
 
             case WAIT_MOVE:
                 // 外部のスクリプトがプレイヤーを移動させるのを待つ
+                look(0f);
                 if (new File(directory, "moved-" + index + ".txt").isFile()) {
                     if (worldTicks == 0) worldTicks = ticksInStep;
                     // 移動先の地形が届くまで少し待つ
@@ -298,25 +341,37 @@ final class SelfTest {
 
             case WAIT_ITEM:
                 if (itemGivenAt < 0) {
-                    // 渡したアイテムの URL が書かれたファイルを待つ
-                    final String url = readFile("item-given.txt");
-                    if (url != null) {
+                    // 渡したアイテムの URL (1 行に 1 つ) が書かれたファイルを待つ
+                    final String text = readFile("item-given.txt");
+                    if (text != null) {
+                        final Set<String> urls = new LinkedHashSet<String>();
+                        for (String line : text.split("\n")) {
+                            if (!line.trim().isEmpty()) urls.add(line.trim());
+                        }
                         drawnCount = 0;
-                        expectedUrl = url.trim();
+                        drawnItems.clear();
+                        itemUrls = urls;
                         itemGivenAt = ticksInStep;
                     }
                 } else if (itemViewAt < 0) {
-                    // アイテムは手持ちの枠 (ホットバー) に入るので、画面の下に描かれる
-                    if (loadFailed(expectedUrl, "item")) return;
-                    if (drawnCount > 0 && ticksInStep - itemGivenAt > 40) {
-                        if (!loadedInTime(expectedUrl, "item")) return;
+                    // アイテムは手持ちの枠 (ホットバー) に入るので、画面の下に描かれる。
+                    // 渡したものがすべて表示されてから、画面を記録してもらう
+                    for (String url : itemUrls) {
+                        if (loadFailed(url, "item")) return;
+                    }
+                    if (drawnItems.size() == itemUrls.size() && ticksInStep - itemGivenAt > 40) {
+                        for (String url : itemUrls) {
+                            if (!loadedInTime(url, "item")) return;
+                        }
                         writeFile("item-view.txt", "ready\n");
                         itemViewAt = ticksInStep;
                     } else if (ticksInStep - itemGivenAt > ITEM_TIMEOUT) {
-                        finish(false, summary + ", item not rendered (signs looked up " + lookups + " times, recognised "
-                                + recognised + " times)");
+                        finish(false, summary + ", " + (itemUrls.size() - drawnItems.size()) + " of " + itemUrls.size()
+                                + " items not rendered (signs looked up " + lookups + " times, recognised " + recognised + " times; "
+                                + "loader " + MarumaSign.loader().status() + ")");
                     }
-                } else if (ticksInStep - itemViewAt > 60) {
+                } else if (new File(directory, "item-view-done.txt").isFile() || ticksInStep - itemViewAt > SHOT_WAIT) {
+                    // 外部のスクリプトが画面を記録し終えてから終える
                     finish(true, summary + ", item rendered " + drawnCount + " times");
                 }
                 break;
@@ -324,6 +379,20 @@ final class SelfTest {
             default:
                 break;
         }
+    }
+
+    // 決まった方角 (南) を向いて、視線の上下の向きを変える。
+    // 移動のあとにサーバーが位置を直すと、左右の向きも前の値に戻されることがあるので、上下だけでなく左右もそろえる
+    // (そろえないと、看板を置く場所と絵を見る角度が起動ごとに変わる)
+    private void look(float pitch) {
+        platform.selfTestLook(LOOK_YAW, pitch);
+    }
+
+    // 表示されないときの手がかり: URL の読み込みの状態と、読み込みの待ちの数
+    private String loadState(String url) {
+        final TextureEntry entry = MarumaSign.signs().entry(url);
+        return "entry " + (entry == null ? "missing" : "state " + entry.state()) + ", in world " + platform.isInWorld()
+                + ", loader " + MarumaSign.loader().status();
     }
 
     // 看板の URL が読み込めなかったなら、時間切れを待たずに失敗として終える
