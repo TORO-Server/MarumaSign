@@ -177,6 +177,16 @@ tasks.register('splatCheck', JavaExec) {
     args = providers.gradleProperty('splatArgs').getOrElse('').tokenize(' ')
 }
 
+// 動画や音声の看板が読み込まれて表示されるまでを、Minecraft を起動せずに確かめる。
+// 引数は -PmediaArgs="URL 秒数 最後の絵の出力先" で渡す (手元のサーバーの URL も読めるようにしてある)
+tasks.register('mediaCheck', JavaExec) {
+    classpath = sourceSets.test.runtimeClasspath
+    mainClass = 'marumasa.marumasa_sign.core.SignMediaCheck'
+    javaLauncher = javaToolchains.launcherFor(java.toolchain)
+    args = providers.gradleProperty('mediaArgs').getOrElse('').tokenize(' ')
+    systemProperty 'marumasign.allowLocalUrls', 'true'
+}
+
 // PDF の看板の表示とページ送りを、Minecraft を起動せずに確かめる。引数は -PpdfArgs="PDF のファイル 出力先" で渡す
 tasks.register('pdfCheck', JavaExec) {
     classpath = sourceSets.test.runtimeClasspath

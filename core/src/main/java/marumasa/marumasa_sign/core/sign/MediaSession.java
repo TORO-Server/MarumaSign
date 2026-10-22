@@ -39,6 +39,10 @@ final class MediaSession {
     private int width;
     private int height;
     private int[] pixels;
+    // 大きさが分かり、最初のフレームを待っている映像の大きさと、それを受け取る配列。待っていなければ null
+    private int nextWidth;
+    private int nextHeight;
+    private int[] nextPixels;
 
     // この tick の間に描画された看板のうち、最も近いものまでの距離
     private double nearestDistance = Double.MAX_VALUE;
@@ -86,15 +90,33 @@ final class MediaSession {
     private void ready(int videoWidth, int videoHeight) {
         // 再開したときは、前と同じ大きさならテクスチャをそのまま使う
         if (ready && videoWidth == width && videoHeight == height) return;
-        width = videoWidth;
-        height = videoHeight;
         if (videoWidth > 0) {
-            MarumaSign.releaseTexture(platform, texture);
-            pixels = new int[videoWidth * videoHeight];
-            texture = platform.createTexture(videoWidth, videoHeight, pixels);
+            // 最初のフレームが届くまでは、読み込み中の絵 (再開したときは前のフレーム) のまま表示する。
+            // 中身のないテクスチャを貼ると、その間は看板が透けて何も見えなくなる
+            nextWidth = videoWidth;
+            nextHeight = videoHeight;
+            nextPixels = new int[videoWidth * videoHeight];
+            return;
         }
+        width = 0;
+        height = 0;
         ready = true;
-        listener.onReady(videoWidth, videoHeight);
+        listener.onReady(0, 0);
+    }
+
+    // 最初のフレームが届いていれば、それを貼ったテクスチャで表示を始める
+    private void showFirstFrame() {
+        if (!player.pollFrame(nextPixels)) return;
+        final Object previous = texture;
+        width = nextWidth;
+        height = nextHeight;
+        pixels = nextPixels;
+        nextPixels = null;
+        texture = platform.createTexture(width, height, pixels);
+        ready = true;
+        listener.onReady(width, height);
+        // 看板が新しいテクスチャを使うようになってから、前のものを消す
+        MarumaSign.releaseTexture(platform, previous);
     }
 
     // 映像を貼るテクスチャ。映像がなければ null
@@ -112,7 +134,9 @@ final class MediaSession {
             if (allowed) start();
             return;
         }
-        if (texture != null && player.pollFrame(pixels)) {
+        if (nextPixels != null) {
+            showFirstFrame();
+        } else if (texture != null && player.pollFrame(pixels)) {
             platform.updateTexture(texture, width, height, pixels);
         }
     }
