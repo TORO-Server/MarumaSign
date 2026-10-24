@@ -42,20 +42,26 @@ LiteLoader だけファイルが分かれているのは、LiteLoader が Mod �
 
 ### 対応している形式
 
-ファイルの種類は、拡張子ではなく内容で判別します。
+ファイルの種類は、拡張子ではなく内容で判別します (内容に目印のない TGA・WBMP・XBM だけは、拡張子も使います)。
 
 #### 画像
 
-- `.png` (アニメーション PNG を含む)
-- `.gif`
-- `.jpg` / `.jpeg`
-- `.bmp`
+次の形式は、MarumaSign だけで読めます (FFmpeg は要りません)。
+
+- 一般的な形式: `.png` (アニメーション PNG を含む) `.gif` (アニメーション) `.jpg` / `.jpeg` (CMYK と、写真の向き (Exif) に対応) `.bmp` `.webp` (アニメーションを含む) `.tif` / `.tiff` (BigTIFF、タイル、LZW・Deflate・PackBits・JPEG・Zstandard 圧縮、16 ビットと浮動小数点、CMYK に対応。RAW 写真は中の絵を使う) `.svg` / `.svgz`
+- アイコン: `.ico` `.cur` `.ani` (アニメーション) `.icns`
+- 画像編集・ゲームの形式: `.psd` / `.psb` (統合した画像) `.tga` `.qoi` `.dds` `.ktx2`
+- 古い形式・研究用の形式: `.pcx` `.pbm` `.pgm` `.ppm` `.pnm` `.pam` `.pfm` `.sgi` / `.rgb` `.ras` `.xbm` `.xpm` `.wbmp` `.ff` (farbfeld) `.hdr` (Radiance) `.fits`
+
+次の形式は、FFmpeg があれば読めます: `.avif` `.heic` / `.heif` (透明度つきを含む) `.jxl` (JPEG XL) `.jp2` (JPEG 2000) `.exr` `.dpx` `.iff` (ILBM) `.xwd` `.pgx`。
+MarumaSign が自分で読めないファイル (CCITT 圧縮の TIFF など) も、FFmpeg があればやり直します。
+
+画像の一辺は 4096 ピクセルまでです (アニメーションは 2048 ピクセルまで)。
 
 #### 動画・音声
 
 [FFmpeg](https://ffmpeg.org/) が読める形式 (`.mp4` `.webm` `.mkv` `.mov` `.avi` `.mp3` `.ogg` `.wav` `.flac` など) を再生できます。
 動画に含まれる音声も再生され、看板から離れるほど小さく聞こえます。音量はウィンドウの「動画と音声の音量」で変えられます。
-WebP や AVIF、TIFF など、上の「画像」にない形式の画像も、FFmpeg を通して表示します。
 
 再生には FFmpeg が必要です。次のどちらかの方法で用意してください。
 
@@ -352,6 +358,10 @@ python tools/check_linkage.py
 python tools/verify/compare_structure.py --template minecraft:village/plains/houses/plains_temple_3
 # 画像のピクセルを直接読む処理が、BufferedImage.getRGB と同じ結果になるかを確かめる (画像のファイルを足して確かめることもできる)
 ./gradlew :core:argbCheck
+# 画像の各形式のデコーダを、ImageMagick や Pillow で作ったファイルと比べて確かめる (出力先, 元の画像の入ったフォルダ, ファイルまたはフォルダ...)
+./gradlew :core:formatCheck -PformatArgs="build/format samples samples/pil"
+# 壊した画像のファイルを読ませて、想定外の例外や長い時間が出ないかを確かめる (回数, ファイルまたはフォルダ...)
+./gradlew :core:formatFuzz -PimageFuzzArgs="100 samples/pil"
 # ダウンロードしたファイルを保存しておく仕組みを、手元の HTTP サーバーで確かめる
 ./gradlew :core:downloadCacheCheck
 # 看板の URL で、手元や家の中のネットワークにアクセスさせられないこと (動画の再生、リダイレクト、ゆっくり送るサーバーも) を確かめる

@@ -1,5 +1,7 @@
 package marumasa.marumasa_sign.core.texture;
 
+import marumasa.marumasa_sign.core.image.ArgbPixels;
+import marumasa.marumasa_sign.core.image.DecodedImage;
 import marumasa.marumasa_sign.core.texture.webp.lossless.VP8LDecoder;
 import marumasa.marumasa_sign.core.texture.webp.vp8.VP8Frame;
 
@@ -12,6 +14,9 @@ import java.awt.image.WritableRaster;
 import java.io.ByteArrayInputStream;
 import java.io.IOException;
 import java.nio.ByteOrder;
+import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
+import java.util.List;
 
 /**
  * WebP (EXT_texture_webp) の画像を読む。
@@ -27,9 +32,14 @@ public final class WebpDecoder {
     private static final int VP8X = fourCC("VP8X");
     private static final int ALPH = fourCC("ALPH");
     private static final int ANMF = fourCC("ANMF");
+    private static final int ANIM = fourCC("ANIM");
 
     // 画像の一辺の上限
     private static final int MAX_SIZE = 8192;
+    // アニメーションのフレーム数と、全フレームのピクセル数の上限
+    private static final int MAX_ANIMATION_FRAMES = 512;
+    private static final int MAX_ANIMATION_SIZE = 2048;
+    private static final long MAX_ANIMATION_PIXELS = 64L * 1000 * 1000;
 
     private WebpDecoder() {
     }
@@ -56,6 +66,111 @@ public final class WebpDecoder {
         } finally {
             input.close();
         }
+    }
+
+    /**
+     * アニメーションの WebP を、全フレームを重ねた絵のコマにして返す。
+     *
+     * @return アニメーションでなければ null
+     */
+    public static DecodedImage decodeAnimated(byte[] data) throws IOException {
+        if (!isWebp(data) || data.length < 30 || fourCC(new String(data, 12, 4, StandardCharsets.ISO_8859_1)) != VP8X
+                || (data[20] & 0x02) == 0) {
+            return null;
+        }
+        final ImageInputStream input = new MemoryCacheImageInputStream(new ByteArrayInputStream(data));
+        try {
+            input.setByteOrder(ByteOrder.LITTLE_ENDIAN);
+            return readAnimation(input, data.length);
+        } catch (RuntimeException e) {
+            // 壊れたデータによる範囲外の参照など
+            throw new IOException("Invalid WebP image: " + e, e);
+        } finally {
+            input.close();
+        }
+    }
+
+    private static DecodedImage readAnimation(ImageInputStream input, long length) throws IOException {
+        input.seek(4);
+        final long end = Math.min(length, 8 + input.readUnsignedInt());
+        input.seek(24);
+        final int width = 1 + readUInt24(input);
+        final int height = 1 + readUInt24(input);
+        if (width > MAX_ANIMATION_SIZE || height > MAX_ANIMATION_SIZE || (long) width * height > MAX_ANIMATION_PIXELS) {
+            throw new IOException("WebP image exceeds safety limits: " + width + "x" + height);
+        }
+
+        final List<int[]> frames = new ArrayList<int[]>();
+        final List<Integer> delays = new ArrayList<Integer>();
+        int repetitions = 0;
+        int[] canvas = new int[width * height];
+        // 直前のフレームの範囲と、描いたあとに背景 (透明) に戻すかどうか
+        int[] previous = null;
+        long position = 12 + 8 + 10;
+        while (position + 8 <= end) {
+            input.seek(position);
+            final int chunk = input.readInt();
+            final long chunkLength = input.readUnsignedInt();
+            final long chunkStart = input.getStreamPosition();
+            if (chunk == ANIM) {
+                input.skipBytes(4);
+                repetitions = input.readUnsignedShort();
+            } else if (chunk == ANMF) {
+                final int x = 2 * readUInt24(input);
+                final int y = 2 * readUInt24(input);
+                final int frameWidth = 1 + readUInt24(input);
+                final int frameHeight = 1 + readUInt24(input);
+                final int duration = readUInt24(input);
+                final int flags = input.readUnsignedByte();
+                if (x + frameWidth > width || y + frameHeight > height) throw new IOException("WebP frame is outside the canvas");
+                if (frames.size() >= MAX_ANIMATION_FRAMES
+                        || (long) (frames.size() + 1) * width * height > MAX_ANIMATION_PIXELS) {
+                    throw new IOException("WebP animation exceeds safety limits");
+                }
+                final BufferedImage frame = readFrame(input, chunkStart + 16, Math.min(end, chunkStart + chunkLength), frameWidth, frameHeight);
+                final int[] pixels = ArgbPixels.read(frame);
+
+                // 前のフレームを背景に戻す指示があれば、その範囲を消す
+                if (previous != null) {
+                    for (int row = 0; row < previous[3]; row++) {
+                        java.util.Arrays.fill(canvas, (previous[1] + row) * width + previous[0], (previous[1] + row) * width + previous[0] + previous[2], 0);
+                    }
+                }
+                final boolean blend = (flags & 0x02) == 0;
+                for (int row = 0; row < frameHeight; row++) {
+                    for (int column = 0; column < frameWidth; column++) {
+                        final int source = pixels[row * frameWidth + column];
+                        final int index = (y + row) * width + x + column;
+                        canvas[index] = blend ? over(source, canvas[index]) : source;
+                    }
+                }
+                frames.add(canvas.clone());
+                delays.add(duration == 0 ? 100 : Math.max(duration, 20));
+                previous = (flags & 0x01) != 0 ? new int[]{x, y, frameWidth, frameHeight} : null;
+            }
+            position = chunkStart + chunkLength + (chunkLength & 1);
+        }
+        if (frames.isEmpty()) throw new IOException("WebP image has no frame");
+        final int[] times = new int[delays.size()];
+        for (int i = 0; i < times.length; i++) times[i] = delays.get(i);
+        return new DecodedImage(width, height, frames.toArray(new int[0][]), times, repetitions);
+    }
+
+    // 透明度つきの色 source を、色 destination の上に重ねる
+    private static int over(int source, int destination) {
+        final int sa = source >>> 24;
+        if (sa == 255) return source;
+        if (sa == 0) return destination;
+        final int da = destination >>> 24;
+        final int total = sa * 255 + da * (255 - sa);
+        if (total == 0) return 0;
+        final int alpha = (total + 127) / 255;
+        int result = alpha << 24;
+        for (int shift = 16; shift >= 0; shift -= 8) {
+            final int s = (source >> shift) & 0xFF, dd = (destination >> shift) & 0xFF;
+            result |= ((s * sa * 255 + dd * da * (255 - sa)) / total) << shift;
+        }
+        return result;
     }
 
     private static BufferedImage read(ImageInputStream input, long length) throws IOException {

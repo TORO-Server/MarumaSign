@@ -93,6 +93,24 @@ tasks.register('argbCheck', JavaExec) {
     args = providers.gradleProperty('imageArgs').getOrElse('').tokenize(' ')
 }
 
+// 画像の各形式のデコーダを、別のツールで作ったファイルで確かめる。引数は -PformatArgs="出力先 元の画像 ファイルまたはフォルダ..."
+tasks.register('formatCheck', JavaExec) {
+    classpath = sourceSets.test.runtimeClasspath
+    mainClass = 'marumasa.marumasa_sign.core.image.ImageFormatsCheck'
+    javaLauncher = javaToolchains.launcherFor(java.toolchain)
+    maxHeapSize = '2g'
+    args = providers.gradleProperty('formatArgs').getOrElse('').tokenize(' ')
+}
+
+// 壊した画像のファイルを読ませて、想定外の例外や長い時間にならないかを確かめる。引数は -PimageFuzzArgs="回数 ファイルまたはフォルダ..."
+tasks.register('formatFuzz', JavaExec) {
+    classpath = sourceSets.test.runtimeClasspath
+    mainClass = 'marumasa.marumasa_sign.core.image.ImageFormatsFuzz'
+    javaLauncher = javaToolchains.launcherFor(java.toolchain)
+    maxHeapSize = '1g'
+    args = providers.gradleProperty('imageFuzzArgs').getOrElse('').tokenize(' ')
+}
+
 // PDF の代わりのフォントを探す一覧 (SystemFonts) が、PDFBox の標準の一覧と同じになるかを確かめる (フォントが多いと 1 分ほどかかる)
 tasks.register('fontListCheck', JavaExec) {
     classpath = sourceSets.test.runtimeClasspath

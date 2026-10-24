@@ -1,7 +1,9 @@
 package marumasa.marumasa_sign.core.image;
 
+import java.awt.color.ColorSpace;
 import java.awt.image.BufferedImage;
 import java.awt.image.ColorModel;
+import java.awt.image.ComponentColorModel;
 import java.awt.image.ComponentSampleModel;
 import java.awt.image.DataBuffer;
 import java.awt.image.DataBufferByte;
@@ -28,6 +30,42 @@ public final class ArgbPixels {
         final int width = image.getWidth(), height = image.getHeight();
         final int[] fast = readDirect(image, width, height);
         return fast != null ? fast : image.getRGB(0, 0, width, height, null, 0, width);
+    }
+
+    /**
+     * 画像ファイルを読んだ画像のピクセルを、他の画像ビューアと同じ色で読む。read と同じだが、灰色の画像だけ違う。
+     * ImageIO は灰色の画像に、明るさが線形な灰色の色空間をつける。getRGB はそれを sRGB に変換するので、
+     * 他のビューアで見るより白っぽくなってしまう。ここでは、灰色の値をそのまま sRGB の明るさとして読む。
+     */
+    public static int[] readDisplay(BufferedImage image) {
+        final ColorModel model = image.getColorModel();
+        final WritableRaster raster = image.getRaster();
+        final int bands = raster.getNumBands();
+        if (model instanceof ComponentColorModel && model.getColorSpace().getType() == ColorSpace.TYPE_GRAY && (bands == 1 || bands == 2)
+                && (raster.getDataBuffer().getDataType() == DataBuffer.TYPE_BYTE || raster.getDataBuffer().getDataType() == DataBuffer.TYPE_USHORT)) {
+            final int width = image.getWidth(), height = image.getHeight();
+            final long max = (1L << model.getComponentSize(0)) - 1;
+            final long alphaMax = bands == 2 ? (1L << model.getComponentSize(1)) - 1 : 1;
+            final boolean premultiplied = model.isAlphaPremultiplied();
+            final int[] result = new int[width * height];
+            final int[] row = new int[width * bands];
+            for (int y = 0; y < height; y++) {
+                raster.getPixels(raster.getMinX(), raster.getMinY() + y, width, 1, row);
+                for (int x = 0; x < width; x++) {
+                    long gray = row[x * bands];
+                    int alpha = 255;
+                    if (bands == 2) {
+                        final long a = row[x * bands + 1];
+                        alpha = (int) ((a * 255 + alphaMax / 2) / alphaMax);
+                        if (premultiplied && a > 0) gray = Math.min(max, gray * alphaMax / a);
+                    }
+                    final int g = (int) ((gray * 255 + max / 2) / max);
+                    result[y * width + x] = alpha << 24 | g << 16 | g << 8 | g;
+                }
+            }
+            return result;
+        }
+        return read(image);
     }
 
     /**
