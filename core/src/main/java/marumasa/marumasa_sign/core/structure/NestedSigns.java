@@ -112,7 +112,7 @@ final class NestedSigns {
             @Override
             public int maxBytes(byte[] head, int length, String resolved) {
                 name[0] = resolved;
-                if (ImageLoader.isSupportedImage(head, length)) {
+                if (ImageLoader.isSupportedImage(head, length, resolved)) {
                     kind[0] = 1;
                     return Http.MAX_SIZE;
                 }
@@ -137,7 +137,7 @@ final class NestedSigns {
         USED.get()[1] += content.length;
         switch (kind[0]) {
             case 1:
-                return sprite(url, ImageLoader.decode(content));
+                return sprite(url, ImageLoader.decode(content, name[0]));
             case 2: {
                 final PdfFile file = PdfFile.open(content);
                 try {
