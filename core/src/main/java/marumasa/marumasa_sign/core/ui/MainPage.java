@@ -218,7 +218,7 @@ public final class MainPage extends Page {
     // 画像ファイルなら内容を返す。画像でなければ null
     private static byte[] readImageFile(File file) throws IOException {
         final byte[] head = readHead(file);
-        if (!ImageLoader.isSupportedImage(head, head.length)) return null;
+        if (!ImageLoader.isSupportedImage(head, head.length, file.getName())) return null;
         if (file.length() > Http.MAX_SIZE) throw new IOException(Lang.get("ui.status.file_too_large", 10));
         return Files.readAllBytes(file.toPath());
     }
@@ -299,13 +299,14 @@ public final class MainPage extends Page {
                 SplatScene splat = null;
                 PdfFile pdf = null;
                 final byte[] bytes;
+                // 署名のない形式 (TGA など) は名前の拡張子で見分けるので、読み込んだ名前を覚えておく
+                final String[] resolvedName = new String[]{text};
                 if (Http.isHttpUrl(text)) {
-                    final String[] resolvedName = new String[]{text};
                     bytes = Http.download(text, new Http.ContentCheck() {
                         @Override
                         public int maxBytes(byte[] head, int length, String name) {
                             resolvedName[0] = name;
-                            if (ImageLoader.isSupportedImage(head, length)) {
+                            if (ImageLoader.isSupportedImage(head, length, name)) {
                                 isImage[0] = true;
                                 return Http.MAX_SIZE;
                             }
@@ -348,7 +349,7 @@ public final class MainPage extends Page {
                     info = Lang.get("ui.preview.splat", splat.cloud().count);
                 } else {
                     if (bytes != null) {
-                        final DecodedImage decoded = ImageLoader.decode(bytes);
+                        final DecodedImage decoded = ImageLoader.decode(bytes, resolvedName[0]);
                         image = toBufferedImage(decoded);
                     } else {
                         // 画像でなければ、動画などから 1 枚取り出す
@@ -468,7 +469,7 @@ public final class MainPage extends Page {
         File packed = null;
         if (bytes != null) {
             try {
-                ImageLoader.decode(bytes);
+                ImageLoader.decode(bytes, file.getName());
             } catch (IOException e) {
                 throw new IOException(Lang.get("ui.status.not_image"));
             }
