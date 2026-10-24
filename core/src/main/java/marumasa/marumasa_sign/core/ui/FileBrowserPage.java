@@ -17,7 +17,11 @@ import java.util.Locale;
 final class FileBrowserPage extends Page {
 
     private static final String[] EXTENSIONS = {
-            ".png", ".jpg", ".jpeg", ".gif", ".apng",
+            ".png", ".jpg", ".jpeg", ".gif", ".apng", ".jfif", ".jpe", ".jif", ".mpo", ".bmp", ".dib", ".webp", ".tif", ".tiff",
+            ".ico", ".cur", ".ani", ".tga", ".icb", ".vda", ".vst", ".targa", ".pcx", ".pbm", ".pgm", ".ppm", ".pnm", ".pam", ".pfm",
+            ".qoi", ".psd", ".psb", ".hdr", ".exr", ".sgi", ".rgb", ".rgba", ".bw", ".ras", ".sun", ".ff", ".icns", ".fits", ".fit",
+            ".fts", ".xpm", ".xbm", ".wbmp", ".dds", ".ktx2", ".avif", ".heic", ".heif", ".jxl", ".jp2", ".j2k", ".j2c", ".jpc",
+            ".jpf", ".jpx", ".dpx", ".iff", ".lbm", ".ilbm", ".xwd", ".pgx", ".svg", ".svgz",
             ".glb", ".gltf",
             ".ply", ".spz", ".sog", ".splat", ".ksplat",
             ".pdf",

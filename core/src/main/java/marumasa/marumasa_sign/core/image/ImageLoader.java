@@ -55,7 +55,7 @@ public final class ImageLoader {
     }
 
     // 静止画の大きさの上限
-    private static final int MAX_STATIC_SIZE = 4096;
+    public static final int MAX_STATIC_SIZE = 4096;
     // アニメーションの大きさとフレーム数の上限
     private static final int MAX_ANIMATION_SIZE = 2048;
     private static final int MAX_ANIMATION_FRAMES = 512;
@@ -158,7 +158,7 @@ public final class ImageLoader {
                 @Override
                 public int maxBytes(byte[] head, int length, String name) {
                     resolvedName[0] = name;
-                    if (isSupportedImage(head, length)) {
+                    if (isSupportedImage(head, length, name)) {
                         kind[0] = KIND_IMAGE;
                         return Http.MAX_SIZE;
                     }
@@ -192,7 +192,7 @@ public final class ImageLoader {
                 return;
             }
             if (kind[0] == KIND_IMAGE) {
-                request.callback.onLoaded(decode(content));
+                request.callback.onLoaded(decode(content, resolvedName[0]));
                 return;
             }
             if (kind[0] == KIND_SPLAT) {
@@ -326,14 +326,27 @@ public final class ImageLoader {
     }
 
     public static DecodedImage decode(byte[] content) throws IOException {
+        return decode(content, null);
+    }
+
+    /**
+     * @param name ファイル名や URL。署名のない形式 (TGA など) の判定に使う。なければ null
+     */
+    public static DecodedImage decode(byte[] content, String name) throws IOException {
         if (content == null) throw new IOException("No content");
 
         final DecodedAnimation animation;
-        if (isGif(content)) {
-            animation = GifDecoder.read(content);
-        } else if (isApng(content)) {
-            animation = ApngDecoder.read(content);
+        if (isGif(content) || isApng(content)) {
+            try {
+                animation = isGif(content) ? GifDecoder.read(content) : ApngDecoder.read(content);
+            } catch (RuntimeException e) {
+                // 壊れたアニメーションによる範囲外の参照など
+                throw new IOException("Invalid animation: " + e, e);
+            }
         } else {
+            // PNG と GIF 以外 (JPEG、WebP、TIFF、TGA、…) は ImageFormats に任せる
+            final DecodedImage other = ImageFormats.decode(content, name);
+            if (other != null) return withinLimits(other);
             return decodeStatic(content);
         }
 
@@ -357,7 +370,26 @@ public final class ImageLoader {
         return new DecodedImage(width, height, pixels, delays, animation.getRepetitions());
     }
 
+    // 大きさやフレーム数が上限を超えていたら断る
+    private static DecodedImage withinLimits(DecodedImage image) throws IOException {
+        final boolean animated = image.frames.length > 1;
+        final int max = animated ? MAX_ANIMATION_SIZE : MAX_STATIC_SIZE;
+        if (image.frames.length == 0 || image.width <= 0 || image.height <= 0 || image.width > max || image.height > max
+                || image.frames.length > MAX_ANIMATION_FRAMES) {
+            throw new IOException("Image exceeds safety limits (max " + max + "x" + max + ", " + MAX_ANIMATION_FRAMES + " frames)");
+        }
+        return image;
+    }
+
     private static DecodedImage decodeStatic(byte[] content) throws IOException {
+        // PNG は、ImageIO に渡す前に見出しの大きさを確かめる (大きさを偽ったファイルでメモリ不足にならないように)
+        if (content.length >= 24 && (content[0] & 0xFF) == 0x89 && content[1] == 'P') {
+            final long width = ((content[16] & 0xFFL) << 24) | ((content[17] & 0xFF) << 16) | ((content[18] & 0xFF) << 8) | (content[19] & 0xFF);
+            final long height = ((content[20] & 0xFFL) << 24) | ((content[21] & 0xFF) << 16) | ((content[22] & 0xFF) << 8) | (content[23] & 0xFF);
+            if (width <= 0 || height <= 0 || width > MAX_STATIC_SIZE || height > MAX_STATIC_SIZE) {
+                throw new IOException("Image exceeds safety limits (max " + MAX_STATIC_SIZE + "x" + MAX_STATIC_SIZE + ")");
+            }
+        }
         final BufferedImage image;
         try {
             image = ImageBytes.read(content);
@@ -374,7 +406,7 @@ public final class ImageLoader {
         if (width <= 0 || height <= 0 || width > MAX_STATIC_SIZE || height > MAX_STATIC_SIZE) {
             throw new IOException("Image exceeds safety limits (max " + MAX_STATIC_SIZE + "x" + MAX_STATIC_SIZE + ")");
         }
-        return new DecodedImage(width, height, new int[][]{ArgbPixels.read(image)}, new int[]{1}, 0);
+        return new DecodedImage(width, height, new int[][]{ArgbPixels.readDisplay(image)}, new int[]{1}, 0);
     }
 
     // jar に同梱されている画像を読み込む
@@ -394,12 +426,16 @@ public final class ImageLoader {
         }
     }
 
-    // このクラスで読める形式 (PNG, GIF, JPEG, BMP) かどうかを、先頭のバイト列から判定する
+    // 読める静止画の形式かどうかを、先頭のバイト列から判定する
     public static boolean isSupportedImage(byte[] head, int length) {
-        if (length >= 8 && (head[0] & 0xFF) == 0x89 && head[1] == 'P' && head[2] == 'N' && head[3] == 'G') return true;
-        if (length >= 6 && head[0] == 'G' && head[1] == 'I' && head[2] == 'F' && head[3] == '8') return true;
-        if (length >= 3 && (head[0] & 0xFF) == 0xFF && (head[1] & 0xFF) == 0xD8 && (head[2] & 0xFF) == 0xFF) return true;
-        return length >= 2 && head[0] == 'B' && head[1] == 'M';
+        return isSupportedImage(head, length, null);
+    }
+
+    /**
+     * @param name ファイル名や URL。署名のない形式 (TGA、WBMP、XBM) の判定に使う。なければ null
+     */
+    public static boolean isSupportedImage(byte[] head, int length, String name) {
+        return ImageFormats.isSupported(head, length, name);
     }
 
     public static boolean isGif(byte[] bytes) {
