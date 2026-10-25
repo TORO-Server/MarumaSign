@@ -43,6 +43,19 @@ public final class Ffmpeg {
         return ffprobe;
     }
 
+    /**
+     * ファイルの中身が、ほかのファイルや URL を読ませる再生リスト (HLS、DASH、ffconcat、IMF) かどうか。
+     * 看板からダウンロードした画像は、一時ファイルにして FFmpeg に「ファイルだけを読む」設定で読ませる。
+     * 中身が再生リストだと、そこに書かれたこのパソコンの中のファイル (動画など) まで読まれて看板に映るので、FFmpeg には渡さない。
+     * FFmpeg が形式を見分けるときは、最初の 0 のバイトまでを文字として見るので、ここでもそこまでを (大文字と小文字を区別せずに) 探す。
+     */
+    public static boolean isPlaylist(byte[] data) {
+        int end = 0;
+        while (end < data.length && data[end] != 0) end++;
+        final String text = new String(data, 0, end, java.nio.charset.StandardCharsets.ISO_8859_1).toLowerCase(Locale.ROOT);
+        return text.contains("#extm3u") || text.contains("<mpd") || text.contains("ffconcat") || text.contains("<compositionplaylist");
+    }
+
     private static String executable(String name) {
         return WINDOWS ? name + ".exe" : name;
     }

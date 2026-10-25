@@ -56,6 +56,18 @@ public final class FilteringProxy {
     }
 
     static synchronized String address() throws IOException {
+        return "http://127.0.0.1:" + port();
+    }
+
+    /**
+     * MarumaSign 自身のダウンロード (Http) にも使うプロキシ。
+     * 確かめたアドレスにそのままつなぐので、確かめた後に名前の行き先を手元のアドレスにすり替えられても、そこにはつながらない。
+     */
+    static java.net.Proxy proxy() throws IOException {
+        return new java.net.Proxy(java.net.Proxy.Type.HTTP, new InetSocketAddress(InetAddress.getByName("127.0.0.1"), port()));
+    }
+
+    private static synchronized int port() throws IOException {
         if (server == null || server.isClosed()) {
             final ServerSocket socket = new ServerSocket(0, 50, InetAddress.getByName("127.0.0.1"));
             final Thread thread = new Thread(new Runnable() {
@@ -68,7 +80,7 @@ public final class FilteringProxy {
             thread.start();
             server = socket;
         }
-        return "http://127.0.0.1:" + server.getLocalPort();
+        return server.getLocalPort();
     }
 
     private static void accept(ServerSocket socket) {
@@ -138,6 +150,12 @@ public final class FilteringProxy {
                 reply(output, "400 Bad Request");
                 return;
             }
+            // メールなど、ウェブではないサービスの番号にはつながせない (UrlPolicy.isBlockedPort)
+            if (UrlPolicy.isBlockedPort(port) && !UrlPolicy.allowLocal()) {
+                MarumaSign.LOGGER.info("Blocked a media connection to port " + port);
+                reply(output, "403 Forbidden");
+                return;
+            }
             final InetAddress[] addresses = UrlPolicy.resolve(host);
             if (addresses == null) {
                 MarumaSign.LOGGER.info("Blocked a media connection to " + host);
@@ -158,10 +176,12 @@ public final class FilteringProxy {
                 final StringBuilder rewritten = new StringBuilder();
                 rewritten.append(method).append(' ').append(path).append(' ').append(request[2]).append("\r\n");
                 for (String header : text.substring(lineEnd + 2, end - 2).split("\r\n")) {
-                    if (header.isEmpty() || header.toLowerCase(Locale.ROOT).startsWith("proxy-")) continue;
+                    final String lower = header.toLowerCase(Locale.ROOT);
+                    if (header.isEmpty() || lower.startsWith("proxy-") || lower.startsWith("connection:")) continue;
                     rewritten.append(header).append("\r\n");
                 }
-                rewritten.append("\r\n");
+                // 1 つの接続では 1 回だけ送る。次の要求は新しい接続になり、行き先をもう一度確かめる
+                rewritten.append("Connection: close\r\n\r\n");
                 forward.write(rewritten.toString().getBytes(StandardCharsets.ISO_8859_1));
             }
             // 要求の先頭と一緒に届いていた続き

@@ -2,6 +2,7 @@ package marumasa.marumasa_sign.core.pdf;
 
 import marumasa.marumasa_sign.core.image.ArgbPixels;
 import marumasa.marumasa_sign.core.image.DecodedImage;
+import org.apache.pdfbox.io.MemoryUsageSetting;
 import org.apache.pdfbox.pdmodel.PDDocument;
 import org.apache.pdfbox.pdmodel.PDPage;
 import org.apache.pdfbox.pdmodel.common.PDRectangle;
@@ -56,10 +57,18 @@ public final class PdfFile {
         return false;
     }
 
+    // PDF の中の圧縮されたデータを展開するのに使ってよいメモリの上限。
+    // 小さなファイルが展開すると何 GB にもなる (圧縮爆弾) PDF で、ゲームのメモリを使い切らないようにする
+    private static final long MAX_SCRATCH = 256L * 1024 * 1024;
+
+    private static MemoryUsageSetting memory() {
+        return MemoryUsageSetting.setupMainMemoryOnly(MAX_SCRATCH);
+    }
+
     public static PdfFile open(byte[] content) throws IOException {
         SystemFonts.install();
         try {
-            return new PdfFile(PDDocument.load(content), content.length);
+            return new PdfFile(PDDocument.load(content, "", null, null, memory()), content.length);
         } catch (RuntimeException e) {
             // 壊れたファイルでは、読み込みの途中で想定外の例外が出ることがある
             throw new IOException("Not a readable PDF", e);
@@ -70,7 +79,7 @@ public final class PdfFile {
         if (file.length() > MAX_SIZE) throw new IOException("Content size exceeds the limit of " + MAX_SIZE + " bytes.");
         SystemFonts.install();
         try {
-            return new PdfFile(PDDocument.load(file), file.length());
+            return new PdfFile(PDDocument.load(file, memory()), file.length());
         } catch (RuntimeException e) {
             throw new IOException("Not a readable PDF", e);
         }
