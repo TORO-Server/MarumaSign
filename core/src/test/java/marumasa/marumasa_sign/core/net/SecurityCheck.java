@@ -5,6 +5,9 @@ import com.sun.net.httpserver.HttpHandler;
 import com.sun.net.httpserver.HttpServer;
 import com.sun.net.httpserver.HttpsConfigurator;
 import com.sun.net.httpserver.HttpsServer;
+import marumasa.marumasa_sign.core.SafeLog;
+import marumasa.marumasa_sign.core.gltf.GltfLoader;
+import marumasa.marumasa_sign.core.image.ImageLoader;
 import marumasa.marumasa_sign.core.media.Ffmpeg;
 import marumasa.marumasa_sign.core.sign.SignSpec;
 
@@ -58,6 +61,9 @@ public final class SecurityCheck {
         try {
             checkPolicy();
             checkSignValues();
+            checkLogText();
+            checkModelResources(directory);
+            checkPlaylists();
             checkDownloads(port);
             checkPublicRedirect(port);
             checkProxy(port);
@@ -72,11 +78,18 @@ public final class SecurityCheck {
         } finally {
             server.stop(0);
             if (secure != null) secure.stop(0);
-            for (File file : directory.listFiles()) file.delete();
-            directory.delete();
+            delete(directory);
         }
         System.out.println(failures == 0 ? "All security checks passed" : failures + " failures");
         System.exit(failures > 0 ? 1 : 0);
+    }
+
+    private static void delete(File file) {
+        final File[] children = file.listFiles();
+        if (children != null) {
+            for (File child : children) delete(child);
+        }
+        file.delete();
     }
 
     private static void checkPolicy() {
@@ -89,6 +102,13 @@ public final class SecurityCheck {
                 "jar:http://example.com/a.jar!/a.png", "gopher://example.com/", "", "http:///a.png",
         };
         for (String url : blocked) check("blocked: " + url, !UrlPolicy.isAllowed(url));
+        // IPv4 を埋め込んだ IPv6 の書き方と、ウェブではないサービスの番号
+        final String[] alsoBlocked = {
+                "http://[::127.0.0.1]/", "http://[64:ff9b::c0a8:1]/", "http://[2002:c0a8:0101::1]/", "http://[2002:7f00:1::1]/",
+                "http://example.com:25/", "https://example.com:22/a.png", "http://93.184.215.14:6667/",
+        };
+        for (String url : alsoBlocked) check("blocked: " + url, !UrlPolicy.isAllowed(url));
+        check("allowed: a usual port", UrlPolicy.isAllowed("https://example.com:8443/a.png"));
         final String[] allowed = {"https://example.com/a.png", "http://93.184.215.14/a.png", "https://[2606:4700::6810:84e5]/"};
         for (String url : allowed) check("allowed: " + url, UrlPolicy.isAllowed(url));
         check("172.32.0.1 is on the internet", UrlPolicy.isAllowed("http://172.32.0.1/"));
@@ -103,6 +123,59 @@ public final class SecurityCheck {
                 1000f, -1000f, 1000f, 1000f, -1000f, 1000f, 0f, 0f));
         check("too few values", SignSpec.parse("https://a/b.png|0|0|0|1|1|0|0") == null);
         check("written text is limited too", SignSpec.parse(SignSpec.parse("u|1e30|0|0|1|1|0|0|0").toText()).x == 1000f);
+    }
+
+    // 記録に書く文字に、Log4j に解釈させる書き方や、行を偽る文字が残らないこと
+    private static void checkLogText() {
+        final String cleaned = SafeLog.clean("https://a/${jndi:ldap://x/a}|${${lower:j}ndi:x}\nFAKE LINE\r\u001b[31m\u202e");
+        check("log text has no lookups", !cleaned.contains("${"));
+        check("log text has no line breaks or control characters", cleaned.indexOf('\n') < 0 && cleaned.indexOf('\r') < 0
+                && cleaned.indexOf('\u001b') < 0 && cleaned.indexOf('\u202e') < 0);
+        check("ordinary log text is unchanged", SafeLog.clean("Load: https://a/b.png?x=$1 (12 ms)").equals("Load: https://a/b.png?x=$1 (12 ms)"));
+    }
+
+    // 選んだ 3D モデルが参照する外部ファイルは、モデルのフォルダの中のバッファと画像だけを読む (一緒にアップロードされるため)
+    private static void checkModelResources(File directory) throws IOException {
+        final File folder = new File(directory, "model");
+        final File textures = new File(folder, "textures");
+        textures.mkdirs();
+        final File model = new File(folder, "scene.gltf");
+        Files.write(model.toPath(), "{}".getBytes(StandardCharsets.UTF_8));
+        Files.write(new File(folder, "scene.bin").toPath(), new byte[]{1, 2, 3});
+        Files.write(new File(textures, "a b+c.png").toPath(), png());
+        final File secret = new File(directory, "secret.bin");
+        Files.write(secret.toPath(), new byte[]{9});
+        Files.write(new File(folder, "notes.txt").toPath(), new byte[]{9});
+        final GltfLoader.Resources resources = ImageLoader.fileResources(model);
+        check("model buffer in the same folder is read", readable(resources, "scene.bin"));
+        check("model texture in a sub folder is read", readable(resources, "textures/a%20b+c.png"));
+        final String[] refused = {
+                "../secret.bin", "..%2Fsecret.bin", "textures/../../secret.bin", secret.getAbsolutePath(), "/etc/passwd.bin",
+                "file:///" + secret.getAbsolutePath().replace('\\', '/'), "notes.txt", "missing.bin", "\\\\server\\share\\a.bin",
+                "C:/Windows/win.ini",
+        };
+        for (String uri : refused) check("model resource is refused: " + uri, !readable(resources, uri));
+    }
+
+    private static boolean readable(GltfLoader.Resources resources, String uri) {
+        try {
+            return resources.load(uri) != null;
+        } catch (IOException e) {
+            return false;
+        }
+    }
+
+    // 画像として FFmpeg に渡すものが再生リストなら、渡さない
+    private static void checkPlaylists() {
+        final String[] playlists = {
+                "#EXTM3U\n#EXTINF:1,\nfile:///a.mp4\n", "ffconcat version 1.0\nfile a.mp4\n",
+                "<?xml version=\"1.0\"?><MPD xmlns=\"urn:mpeg:dash:schema:mpd:2011\" profiles=\"urn:mpeg:dash:profile:isoff-live:2011\">",
+                "<CompositionPlaylist><ContentTitle>a</ContentTitle>",
+        };
+        for (String text : playlists) {
+            check("playlist is refused: " + text.substring(0, 12).trim(), Ffmpeg.isPlaylist(text.getBytes(StandardCharsets.UTF_8)));
+        }
+        check("binary data is not a playlist", !Ffmpeg.isPlaylist(new byte[]{0, 0, 0, 12, 'j', 'P', ' ', ' ', '#', 'E', 'X', 'T', 'M', '3', 'U'}));
     }
 
     private static boolean same(SignSpec spec, float... values) {

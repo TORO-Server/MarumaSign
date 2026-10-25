@@ -71,6 +71,14 @@ public final class Http {
     }
 
     private static HttpURLConnection open(String url) throws IOException {
+        return open(url, false);
+    }
+
+    /**
+     * @param filtered 看板などに書かれた、誰でも書ける URL なら true。FilteringProxy を通し、
+     *                 つなぐ直前に引いたアドレスを確かめて、そのアドレスにつなぐ (確かめた後に名前の行き先をすり替えられないように)
+     */
+    private static HttpURLConnection open(String url, boolean filtered) throws IOException {
         if (!isHttpUrl(url)) throw new IOException("Unsupported protocol scheme in URL: " + url);
         final String encoded;
         try {
@@ -78,7 +86,9 @@ public final class Http {
         } catch (URISyntaxException e) {
             throw new IOException("Invalid URL: " + url);
         }
-        final HttpURLConnection connection = (HttpURLConnection) new URL(encoded).openConnection();
+        final URL target = new URL(encoded);
+        final HttpURLConnection connection = (HttpURLConnection) (filtered
+                ? target.openConnection(FilteringProxy.proxy()) : target.openConnection());
         connection.setConnectTimeout(5000);
         connection.setReadTimeout(10000);
         connection.setRequestProperty("User-Agent", USER_AGENT);
@@ -293,7 +303,7 @@ public final class Http {
                 final int status;
                 if (redirects > 0 && !UrlPolicy.isAllowed(currentUrl)) throw new IOException("Blocked URL: " + currentUrl);
                 try {
-                    connection = open(currentUrl);
+                    connection = open(currentUrl, true);
                     guard.connection = connection;
                     connection.setReadTimeout(30000);
                     connection.setInstanceFollowRedirects(false);

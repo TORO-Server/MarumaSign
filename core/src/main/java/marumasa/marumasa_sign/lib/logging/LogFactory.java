@@ -1,7 +1,7 @@
 package marumasa.marumasa_sign.lib.logging;
 
 import marumasa.marumasa_sign.core.MarumaSign;
-import org.apache.logging.log4j.Logger;
+import marumasa.marumasa_sign.core.SafeLog;
 
 /**
  * PDFBox が使う Apache Commons Logging の LogFactory の代わり。MarumaSign のロガーに書く。
@@ -23,7 +23,7 @@ public final class LogFactory {
             this.prefix = prefix;
         }
 
-        private static Logger logger() {
+        private static SafeLog logger() {
             return MarumaSign.LOGGER;
         }
 
