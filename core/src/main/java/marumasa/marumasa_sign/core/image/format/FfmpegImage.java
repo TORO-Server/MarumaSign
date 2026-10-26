@@ -73,6 +73,8 @@ final class FfmpegImage {
      */
     static DecodedImage decode(byte[] data, String extension) throws IOException {
         if (!Ffmpeg.isAvailable()) throw new IOException("FFmpeg was not found");
+        // 画像の代わりに再生リストを渡されて、このパソコンの中のファイルを読まされないように (Ffmpeg.isPlaylist)
+        if (Ffmpeg.isPlaylist(data)) throw new IOException("Not an image (a playlist)");
         final File directory = Files.createTempDirectory("marumasign_image_").toFile();
         final File input = new File(directory, "input" + (extension == null ? "" : extension));
         try {

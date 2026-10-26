@@ -50,13 +50,15 @@ public final class AvifDecoder {
      * @return デコード結果。FFmpeg 不在または失敗時は null
      */
     public static BufferedImage decode(byte[] data) {
-        if (!Ffmpeg.isAvailable() || data == null || data.length == 0) {
+        // 画像の種類はモデルの中に書かれた mimeType だけで決まることもあるので、再生リストではないかも確かめる (Ffmpeg.isPlaylist)
+        if (!Ffmpeg.isAvailable() || data == null || data.length == 0 || Ffmpeg.isPlaylist(data)) {
             return null;
         }
 
         File tempFile = null;
         try {
-            tempFile = File.createTempFile("ms_avif_", ".avif");
+            // 本人だけが読める一時ファイルにする (同じパソコンのほかの利用者に中身を読まれないように)
+            tempFile = java.nio.file.Files.createTempFile("ms_avif_", ".avif").toFile();
             try (FileOutputStream fos = new FileOutputStream(tempFile)) {
                 fos.write(data);
             }

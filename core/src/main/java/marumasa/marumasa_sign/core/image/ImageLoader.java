@@ -275,19 +275,63 @@ public final class ImageLoader {
         return scene;
     }
 
-    // 3D モデルが参照している外部ファイルを、モデルのファイルと同じフォルダから読み込む
+    // 3D モデルの外部ファイルとして読んでよい拡張子 (バッファと画像)
+    private static final String[] RESOURCE_EXTENSIONS = {
+            ".bin", ".glbin", ".glbuf", ".png", ".jpg", ".jpeg", ".webp", ".ktx2", ".ktx", ".dds", ".basis", ".avif", ".gif",
+            ".bmp", ".tga", ".tif", ".tiff", ".hdr", ".exr",
+    };
+
+    /**
+     * 3D モデルが参照している外部ファイルを、モデルのファイルと同じフォルダ (とその中のフォルダ) から読み込む。
+     * 選んだモデルは、外部ファイルを取り込んだうえで誰でも見られる場所にアップロードする (GltfPacker)。
+     * 人から受け取ったモデルが「../../」や絶対パスで別の場所のファイル (ランチャーのログイン情報など) を指していても
+     * 一緒にアップロードしてしまわないように、フォルダの外のファイルと、バッファや画像ではない種類のファイルは読まない。
+     */
     public static GltfLoader.Resources fileResources(final File file) {
         return new GltfLoader.Resources() {
             private long total = file.length();
 
             @Override
             public byte[] load(String uri) throws IOException {
-                final File target = new File(file.getAbsoluteFile().getParentFile(), URLDecoder.decode(uri, "UTF-8"));
+                final File target = localResource(file, uri);
                 total += target.length();
                 if (total > MAX_MODEL_SIZE) throw new IOException("Content size exceeds the limit of " + MAX_MODEL_SIZE + " bytes.");
                 return Files.readAllBytes(target.toPath());
             }
         };
+    }
+
+    // モデルのファイル model から見た uri の場所。読んではいけない場所なら IOException
+    static File localResource(File model, String uri) throws IOException {
+        // URL の書き方 (file: や http: など) やドライブ名、区切りから始まる場所は、フォルダの外を指しうる
+        if (uri.isEmpty() || uri.indexOf(':') >= 0 || uri.startsWith("/") || uri.startsWith("\\")) {
+            throw new IOException("Unsupported resource location: " + uri);
+        }
+        final String decoded;
+        try {
+            // 「+」は空白ではなく、そのままの文字 (URL の % の書き方だけを戻す)
+            decoded = URLDecoder.decode(uri.replace("+", "%2B"), "UTF-8");
+        } catch (IllegalArgumentException e) {
+            throw new IOException("Invalid resource location: " + uri, e);
+        }
+        if (decoded.indexOf(':') >= 0 || decoded.indexOf('\0') >= 0 || decoded.startsWith("/") || decoded.startsWith("\\")) {
+            throw new IOException("Unsupported resource location: " + uri);
+        }
+        final String lower = decoded.toLowerCase(java.util.Locale.ROOT);
+        boolean known = false;
+        for (String extension : RESOURCE_EXTENSIONS) {
+            if (lower.endsWith(extension)) known = true;
+        }
+        if (!known) throw new IOException("Unsupported resource type: " + uri);
+        final File folder = model.getAbsoluteFile().getParentFile().getCanonicalFile();
+        final File target = new File(folder, decoded).getCanonicalFile();
+        // ドライブの一番上 (C:\) のフォルダは、名前が区切りで終わっている
+        final String prefix = folder.getPath().endsWith(File.separator) ? folder.getPath() : folder.getPath() + File.separator;
+        // シンボリックリンクなどもたどった後の、本当の場所で確かめる
+        if (!target.getPath().startsWith(prefix) || !target.isFile()) {
+            throw new IOException("Resource is outside the model's folder: " + uri);
+        }
+        return target;
     }
 
     // 3D モデルが参照している外部ファイル (バッファや画像) を、モデルの URL からの相対位置で読み込む
@@ -451,16 +495,18 @@ public final class ImageLoader {
         for (int i = 0; i < 8; i++) {
             if (bytes[i] != PNG_SIGNATURE[i]) return false;
         }
-        int pos = 8;
+        // 大きな長さを書かれても桁あふれしないよう、位置は long で数える
+        long pos = 8;
         while (pos + 8 <= bytes.length) {
-            final int length = ((bytes[pos] & 0xFF) << 24) | ((bytes[pos + 1] & 0xFF) << 16)
-                    | ((bytes[pos + 2] & 0xFF) << 8) | (bytes[pos + 3] & 0xFF);
+            final int at = (int) pos;
+            final int length = ((bytes[at] & 0xFF) << 24) | ((bytes[at + 1] & 0xFF) << 16)
+                    | ((bytes[at + 2] & 0xFF) << 8) | (bytes[at + 3] & 0xFF);
             if (length < 0) break;
-            final String type = new String(bytes, pos + 4, 4, StandardCharsets.US_ASCII);
+            final String type = new String(bytes, at + 4, 4, StandardCharsets.US_ASCII);
             if (type.equals("acTL")) return true;
             // 画像データより後ろに acTL が来ることはない
             if (type.equals("IDAT")) return false;
-            pos += 8 + length + 4;
+            pos += 8L + length + 4;
         }
         return false;
     }
