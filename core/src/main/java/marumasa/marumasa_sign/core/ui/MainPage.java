@@ -500,7 +500,8 @@ public final class MainPage extends Page {
                 if (!GltfLoader.isGlb(content, content.length)) {
                     // 外部ファイルを参照していても 1 つのファイルで済むように、.glb にまとめる
                     final byte[] glb = GltfPacker.pack(content, ImageLoader.fileResources(file));
-                    packed = File.createTempFile("marumasign", ".glb");
+                    // 本人だけが読める一時ファイルにする
+                    packed = Files.createTempFile("marumasign", ".glb").toFile();
                     Files.write(packed.toPath(), glb);
                 }
             } catch (IOException e) {

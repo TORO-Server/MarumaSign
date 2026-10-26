@@ -47,10 +47,12 @@ public final class MediaTools {
      */
     public static BufferedImage thumbnail(String source) throws IOException {
         if (!Ffmpeg.isAvailable()) return null;
+        final boolean remote = source.startsWith("http://") || source.startsWith("https://");
         final ProcessBuilder builder = new ProcessBuilder(new ArrayList<String>(Arrays.asList(
                 Ffmpeg.requireFfmpeg().getPath(),
                 "-hide_banner", "-loglevel", "error", "-nostdin",
-                "-protocol_whitelist", "file," + MediaPlayer.PROTOCOLS,
+                // URL の中身 (再生リストなど) からは、このパソコンの中のファイルを読ませない
+                "-protocol_whitelist", remote ? MediaPlayer.PROTOCOLS : "file," + MediaPlayer.PROTOCOLS,
                 // ライブ配信が途中で止まっても、待ち続けない
                 "-rw_timeout", MediaPlayer.NETWORK_TIMEOUT,
                 "-i", source,
@@ -60,7 +62,7 @@ public final class MediaTools {
                 "-f", "image2pipe", "-c:v", "png", "pipe:1"
         )));
         // ほかの再生と同じく通信の行き先を確かめる (ファイルの中から URL を読むこともある)
-        if ((source.startsWith("http://") || source.startsWith("https://")) && !UrlPolicy.isAllowed(source)) {
+        if (remote && !UrlPolicy.isAllowed(source)) {
             throw new IOException("Blocked URL: " + source);
         }
         FilteringProxy.apply(builder, source);
@@ -94,11 +96,16 @@ public final class MediaTools {
     public static boolean isPlayable(File file) {
         if (!Ffmpeg.isAvailable()) return hasMediaExtension(file.getName());
         try {
-            final Process process = new ProcessBuilder(Arrays.asList(
+            // 選んだファイルが再生リストなら、中の URL も読みに行くので、再生と同じく通信の種類と行き先を確かめる
+            final ProcessBuilder builder = new ProcessBuilder(new ArrayList<String>(Arrays.asList(
                     Ffmpeg.requireFfprobe().getPath(), "-v", "error",
+                    "-protocol_whitelist", "file," + MediaPlayer.PROTOCOLS,
+                    "-rw_timeout", MediaPlayer.NETWORK_TIMEOUT,
                     "-show_entries", "stream=codec_type", "-of", "default=noprint_wrappers=1",
-                    file.getPath()
-            )).redirectErrorStream(true).start();
+                    file.getAbsolutePath()
+            )));
+            FilteringProxy.apply(builder, file.getAbsolutePath());
+            final Process process = builder.redirectErrorStream(true).start();
             process.getOutputStream().close();
             final ByteArrayOutputStream output = new ByteArrayOutputStream();
             final InputStream input = process.getInputStream();

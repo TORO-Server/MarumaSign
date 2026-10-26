@@ -31,12 +31,15 @@ public final class UrlPolicy {
         if (!lower.startsWith("http://") && !lower.startsWith("https://")) return false;
         if (allowLocal()) return true;
         final String host;
+        final int port;
         try {
-            host = new URL(url).getHost();
+            final URL parsed = new URL(url);
+            host = parsed.getHost();
+            port = parsed.getPort() < 0 ? parsed.getDefaultPort() : parsed.getPort();
         } catch (Exception e) {
             return false;
         }
-        if (host == null || host.isEmpty() || isLocalName(host)) return false;
+        if (host == null || host.isEmpty() || isLocalName(host) || isBlockedPort(port)) return false;
         final InetAddress[] addresses;
         try {
             addresses = InetAddress.getAllByName(host);
@@ -63,6 +66,22 @@ public final class UrlPolicy {
         return addresses;
     }
 
+    // ウェブのブラウザーがつながない番号 (WHATWG Fetch の「bad port」)。メールやファイル共有などのサービスで、
+    // 看板の URL から HTTP の要求を送りつけさせて、そうしたサービスを操作させないようにする
+    private static final int[] BLOCKED_PORTS = {
+            0, 1, 7, 9, 11, 13, 15, 17, 19, 20, 21, 22, 23, 25, 37, 42, 43, 53, 69, 77, 79, 87, 95, 101, 102, 103, 104, 109, 110,
+            111, 113, 115, 117, 119, 123, 135, 137, 139, 143, 161, 179, 389, 427, 465, 512, 513, 514, 515, 526, 530, 531, 532,
+            540, 548, 554, 556, 563, 587, 601, 636, 989, 990, 993, 995, 1719, 1720, 1723, 2049, 3659, 4045, 4190, 5060, 5061,
+            6000, 6566, 6665, 6666, 6667, 6668, 6669, 6679, 6697, 10080,
+    };
+
+    public static boolean isBlockedPort(int port) {
+        for (int blocked : BLOCKED_PORTS) {
+            if (port == blocked) return true;
+        }
+        return false;
+    }
+
     private static boolean isLocalName(String host) {
         final String name = host.toLowerCase(Locale.ROOT);
         return name.equals("localhost") || name.endsWith(".localhost") || name.endsWith(".local") || name.endsWith(".internal")
@@ -83,19 +102,37 @@ public final class UrlPolicy {
         if (raw.length == 16) {
             // 固有ローカルアドレス fc00::/7
             if ((raw[0] & 0xFE) == 0xFC) return true;
-            // IPv4 を埋め込んだもの (::ffff:a.b.c.d)
-            boolean mapped = true;
+            // IPv4 を埋め込んだもの。埋め込まれた IPv4 のアドレスで確かめる
+            boolean zeros = true;
             for (int i = 0; i < 10; i++) {
-                if (raw[i] != 0) mapped = false;
+                if (raw[i] != 0) zeros = false;
             }
-            if (mapped && (raw[10] & 0xFF) == 0xFF && (raw[11] & 0xFF) == 0xFF) {
-                try {
-                    return isLocal(InetAddress.getByAddress(new byte[]{raw[12], raw[13], raw[14], raw[15]}));
-                } catch (Exception e) {
-                    return true;
+            // ::ffff:a.b.c.d と、古い書き方の ::a.b.c.d
+            if (zeros && (((raw[10] & 0xFF) == 0xFF && (raw[11] & 0xFF) == 0xFF) || (raw[10] == 0 && raw[11] == 0))) {
+                return isLocalIpv4(raw[12], raw[13], raw[14], raw[15]);
+            }
+            // NAT64 の 64:ff9b::a.b.c.d
+            if ((raw[0] & 0xFF) == 0x00 && (raw[1] & 0xFF) == 0x64 && (raw[2] & 0xFF) == 0xFF && (raw[3] & 0xFF) == 0x9B) {
+                boolean nat64 = true;
+                for (int i = 4; i < 12; i++) {
+                    if (raw[i] != 0) nat64 = false;
                 }
+                if (nat64) return isLocalIpv4(raw[12], raw[13], raw[14], raw[15]);
+            }
+            // 6to4 の 2002:a.b.c.d::/48
+            if ((raw[0] & 0xFF) == 0x20 && (raw[1] & 0xFF) == 0x02) {
+                return isLocalIpv4(raw[2], raw[3], raw[4], raw[5]);
             }
         }
         return false;
+    }
+
+    private static boolean isLocalIpv4(byte a, byte b, byte c, byte d) {
+        // ::0.0.0.0 (どこでもないアドレス) や ::1 (ループバック) は Java が先に判定している
+        try {
+            return isLocal(InetAddress.getByAddress(new byte[]{a, b, c, d}));
+        } catch (Exception e) {
+            return true;
+        }
     }
 }
