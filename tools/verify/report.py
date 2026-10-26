@@ -40,10 +40,21 @@ LOADER_FAILURES = [
 ]
 
 
-def cell(entry, digest):
+# 自動の判定では合格したが、画面を目で確かめて見つけた問題: {結果の名前: 表に書く内容}
+VISUAL_ISSUES = {
+    # Iris + NeoForge 1.21.1 では、ガウシアンスプラットの粒が 1 つずつ影を付けて描かれ、なめらかに重ならない。
+    # 公開済みの 4.1.0 でも同じ見た目になる (2026-10-26 に確認)
+    "neoforge:1.21.1+shaders": "ガウシアンスプラットが粒に見える",
+    "neoforge:1.21.1+shaders:sildurs-vibrant-shaders": "ガウシアンスプラットが粒に見える",
+}
+
+
+def cell(entry, digest, key=None):
     # 別のビルドで確認した結果は、いまのファイルの結果としては数えない
     if entry is None or entry.get("mod_sha256") != digest:
         return ""
+    if entry.get("clean") and key in VISUAL_ISSUES:
+        return f"要確認 ({VISUAL_ISSUES[key]})"
     if entry.get("baseline_failed"):
         # Mod を入れなくても起動しなかった。Mod の結果ではない
         return "対象外"
@@ -115,7 +126,8 @@ def main():
             if loader not in supported[minecraft]:
                 cells.append("")
                 continue
-            text = cell(summary.get(f"{loader}:{minecraft}"), supported[(minecraft, loader)]) or "未確認"
+            key = f"{loader}:{minecraft}"
+            text = cell(summary.get(key), supported[(minecraft, loader)], key) or "未確認"
             counts[text.split(" ")[0]] += 1
             cells.append(text)
         lines.append(f"| {minecraft} | " + " | ".join(cells) + " |")
@@ -131,7 +143,7 @@ def main():
             parts = []
             for key in sorted(key for key in summary if key == prefix or key.startswith(prefix + ":")):
                 entry = summary[key]
-                text = cell(entry, supported.get((minecraft, loader))) if loader in supported[minecraft] else ""
+                text = cell(entry, supported.get((minecraft, loader)), key) if loader in supported[minecraft] else ""
                 if not text:
                     continue
                 pack = entry.get("shader_pack") or "bsl-shaders"

@@ -17,6 +17,10 @@ server: moved too quickly
 
 # シェーダーパックを読み込むときに影 Mod が出す、パックの内容についての知らせ (毎回違う関数の名前が出る)
 client: Removing unused function \w+ and omitting further such messages
+# Sodium (NeoForge 1.21.1 の 0.8.13 で確認) が、アトラスの絵を指す頂点の書き方 (SpriteCoordinateExpander) が初めて使われたときに出す知らせ。
+# バニラの看板の編集画面が、看板の板を描くときに使う。どの記録でも編集画面が開いた瞬間 (MarumaSign が URL を読み始める前) に出ており、
+# MarumaSign はこのバージョンでアトラスの絵の頂点を書かない。基準は看板を置かないので、基準では除外されない
+client: Sodium-VertexConsumerTracker.*Class net\.minecraft\.client\.renderer\.SpriteCoordinateExpander does not support optimized vertex writing
 
 # サーバーの処理が遅れたときに、サーバー自身が出す知らせ (確認用の PC が他の処理で忙しいと出る)
 server: Can't keep up! Is the server overloaded\?
