@@ -38,6 +38,11 @@ server: Exception in thread "Server Shutdown Thread"
 # 確認用のアカウントは実在しないので、Minecraft 自体がスキンの情報を取りに行って失敗することがある (通信の状況によって出たり出なかったりする)
 client: Couldn't look up profile properties for
 client: MinecraftClientHttpException
+# 同じ問い合わせを、古いバージョンの authlib (1.14 など) が失敗として出す書き方。Mojang の返事を JSON として読めずに出る。
+# MarumaSign は authlib を使わない (構造物の頭のスキンは自分で読み、失敗しても記録しない)。
+# タイトル画面から接続するバージョン (verify.py の MOD_JOIN) では、基準がワールドに入らないので基準では除外されない
+client: AuthenticationUnavailableException: Cannot contact authentication server
+client: Expected BEGIN_OBJECT but was STRING at line 1 column 1 path \$
 # 同じ問い合わせが Mojang のサーバーから時間内に返ってこなかったとき (原因の「Caused by:」の行も一緒に除かれる)
 client: MinecraftClientException: Failed to read from https://sessionserver\.mojang\.com/
 # Minecraft 自体が Realms (Mojang のサーバー) の状態を問い合わせて、相手のサーバーの一時的な障害 (502 など) で失敗したときに出す
