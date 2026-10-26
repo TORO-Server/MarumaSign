@@ -21,7 +21,7 @@
 - 空欄: そのローダーはこのバージョンに対応していない
 - **未確認**: 対応しているが、配布するファイルの現在の内容ではまだ確認していない
 
-Mod のバージョン: 4.0.2 / 作成日: 2026-10-23
+Mod のバージョン: 4.1.0 / 作成日: 2026-10-26
 
 | Minecraft | Fabric | Forge | NeoForge | LiteLoader |
 | --- | --- | --- | --- | --- |
@@ -122,7 +122,7 @@ Iris は Sodium と、Oculus は Rubidium または Embeddium と一緒に入れ
 | 1.21.4 | Iris + BSL: OK<br>Iris + Photon: OK |  | Iris + BSL: OK |  |
 | 1.21.3 | Iris + BSL: OK |  | Iris + BSL: OK |  |
 | 1.21.2 | Iris + BSL: OK |  | Iris + BSL: OK |  |
-| 1.21.1 | Iris + BSL: OK |  | Iris + BSL: OK<br>Iris + Sildur's Vibrant: OK |  |
+| 1.21.1 | Iris + BSL: OK |  | Iris + BSL: 要確認 (ガウシアンスプラットが粒に見える)<br>Iris + Sildur's Vibrant: 要確認 (ガウシアンスプラットが粒に見える) |  |
 | 1.21 | Iris + BSL: OK |  | Iris + BSL: OK |  |
 | 1.20.6 | Iris + BSL: OK |  |  |  |
 | 1.20.5 | Iris + BSL: OK |  |  |  |
