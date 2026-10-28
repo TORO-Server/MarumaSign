@@ -622,7 +622,7 @@ public final class PageRenderer {
 
     /**
      * 転送関数の表 (赤、緑、青)。関数 1 つか、4 つの配列 (初めの 3 つを赤、緑、青に使う)。Identity、Default、読めないものは null。
-     * 塗りと線の色と画像にかける (シェーディングとパターンにはかけない)。
+     * 塗りと線の色、シェーディング、パターン、画像にかける (poppler と同じ)。
      */
     private static int[][] transfer(Object value) {
         final Object[] functions = new Object[3];
@@ -667,16 +667,9 @@ public final class PageRenderer {
         return identity ? null : tables;
     }
 
-    // 色 (RGB) に転送関数をかける
-    private static int transfer(int[][] tables, int rgb) {
-        if (tables == null) return rgb;
-        int result = rgb & 0xFF000000;
-        for (int c = 0; c < 3; c++) {
-            final int shift = 16 - 8 * c;
-            final int v = (rgb >> shift) & 0xFF;
-            result |= (tables[c] == null ? v : tables[c][v]) << shift;
-        }
-        return result;
+    // シェーディングやパターンの Paint に、今の転送関数をかけたもの
+    private Paint withTransfer(Paint paint) {
+        return paint == null || gs.transfer == null ? paint : new TransferPaint(paint, gs.transfer);
     }
 
     private static double clamp01(double value) {
@@ -760,10 +753,10 @@ public final class PageRenderer {
         if (space.isNone()) return null;
         if (space instanceof SpecialSpaces.Pattern) {
             final Object pattern = stroke ? gs.strokePattern : gs.fillPattern;
-            return patternPaint(pattern, ((SpecialSpaces.Pattern) space).base, color);
+            return withTransfer(patternPaint(pattern, ((SpecialSpaces.Pattern) space).base, color));
         }
         try {
-            return new Color(transfer(gs.transfer, space.toRgb(color)));
+            return new Color(TransferPaint.apply(gs.transfer, space.toRgb(color)));
         } catch (RuntimeException e) {
             Strict.check(e);
             return Color.BLACK;
@@ -1524,7 +1517,7 @@ public final class PageRenderer {
         final BufferedImage result = new BufferedImage(image.getWidth(), image.getHeight(), BufferedImage.TYPE_INT_ARGB);
         final int[] in = ((DataBufferInt) image.getRaster().getDataBuffer()).getData();
         final int[] out = ((DataBufferInt) result.getRaster().getDataBuffer()).getData();
-        for (int i = 0; i < in.length && i < out.length; i++) out[i] = transfer(tables, in[i]);
+        for (int i = 0; i < in.length && i < out.length; i++) out[i] = TransferPaint.apply(tables, in[i]);
         return result;
     }
 
@@ -1660,7 +1653,7 @@ public final class PageRenderer {
             return;
         }
         if (shading.space.isNone()) return;
-        final Paint paint = new ShadingPaint(shading, new AffineTransform(gs.ctm));
+        final Paint paint = withTransfer(new ShadingPaint(shading, new AffineTransform(gs.ctm)));
         // 塗る範囲: クリップの中 (シェーディングの BBox があれば、その中)
         Shape region = gs.clip != null ? gs.clip : canvasBoundsInPage();
         if (region == null) return;

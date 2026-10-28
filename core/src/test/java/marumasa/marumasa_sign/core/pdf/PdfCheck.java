@@ -363,6 +363,8 @@ public final class PdfCheck {
                 break;
             case "transfer-function":
                 expectColor(image, 35, 165, 0x00FFFF, "inverted red");
+                expectColor(image, 95, 165, 0x00FFFF, "inverted shading");
+                expectColor(image, 155, 165, 0x00FFFF, "inverted pattern");
                 break;
             case "link-border":
                 // 太さ 2 の赤い枠の左の辺 (x = 100)
@@ -386,7 +388,11 @@ public final class PdfCheck {
             }
             case "cff-cidtogidmap":
                 // CID 1 は CIDToGIDMap で四角のグリフ 2 (ページの 50 から 150)
-                expect(gray(image, 100, 100) < 30, "CIDToGIDMap of a CFF font is ignored");
+                expect(gray(image, 100, 100) < 30, "CIDToGIDMap of an OpenType CFF font is ignored");
+                break;
+            case "bare-cff-cid":
+                // CID 2 は、そのまま四角のグリフ 2
+                expect(gray(image, 100, 100) < 30, "CID of a bare CFF font is not used as GID");
                 break;
             case "truetype-lsb":
                 // 四角は原点 (x = 50) から 40 ポイントの幅

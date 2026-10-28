@@ -128,9 +128,10 @@ final class PdfSamples {
         samples.add(new String[]{"stroke-adjust", page("<< >>", "0 g 3 w 20 100.4 m 180 100.4 l S")});
         // 縦と横で拡大率の違う CTM: 線の太さもユーザー空間で変わる (縦に 0.1 倍なので、横線は細い)
         samples.add(new String[]{"anisotropic-stroke", page("<< >>", "q 10 0 0 0.1 0 100 cm 0 g 2 w 2 0 m 18 0 l S Q")});
-        // 太さを決めないパターンの線は、いちばん細い線 (パターンの行列で 10 倍にしても太くならない)
+        // 太さを決めないパターンの線は、いちばん細い線 (パターンの行列で 10 倍にしても太くならない)。
+        // poppler は、間隔が BBox と同じパターンだけ別の描き方 (太さ 1) をするので、間隔を BBox より広くして比べる
         samples.add(new String[]{"pattern-hairline", page("<< /Pattern << /P1 5 0 R >> >>", "/Pattern cs /P1 scn 0 0 200 200 re f",
-                stream("/PatternType 1 /PaintType 1 /TilingType 1 /BBox [0 0 10 10] /XStep 10 /YStep 10 /Matrix [10 0 0 10 0 0]",
+                stream("/PatternType 1 /PaintType 1 /TilingType 1 /BBox [0 0 10 10] /XStep 10 /YStep 20 /Matrix [10 0 0 10 0 0]",
                         "0 0 1 RG 0 5 m 10 5 l S"))});
         // 文字の基準線は画素の境目に合う: 基準線 y = 100.5 の I の下の端は、ぼやけない
         samples.add(new String[]{"glyph-baseline", page("<< /Font << /F1 5 0 R >> >>", "0 g BT /F1 40 Tf 20 100.5 Td (I) Tj ET",
@@ -141,9 +142,12 @@ final class PdfSamples {
         // 代わりのフォントにない文字 (名前のないコード 1) は、.notdef の四角を描かない
         samples.add(new String[]{"missing-glyph", page("<< /Font << /F1 5 0 R >> >>", "0 g BT /F1 100 Tf 50 50 Td (\\001\\001) Tj ET",
                 "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>")});
-        // 転送関数 (TR) で色を反転する: 赤は水色になる
-        samples.add(new String[]{"transfer-function", page("<< /ExtGState << /T1 5 0 R >> >>", "q /T1 gs 1 0 0 rg 10 10 50 50 re f Q",
-                "<< /Type /ExtGState /TR << /FunctionType 2 /Domain [0 1] /C0 [1] /C1 [0] /N 1 >> >>")});
+        // 転送関数 (TR) で色を反転する: 赤は水色になる (塗りの色、シェーディング、パターン)
+        samples.add(new String[]{"transfer-function", page("<< /ExtGState << /T1 5 0 R >> /Shading << /S 6 0 R >> /Pattern << /P 7 0 R >> >>",
+                "q /T1 gs 1 0 0 rg 10 10 50 50 re f Q q /T1 gs 70 10 50 50 re W n /S sh Q q /T1 gs /Pattern cs /P scn 130 10 50 50 re f Q",
+                "<< /Type /ExtGState /TR << /FunctionType 2 /Domain [0 1] /C0 [1] /C1 [0] /N 1 >> >>",
+                "<< /ShadingType 2 /ColorSpace /DeviceRGB /Coords [0 0 200 0] /Function << /FunctionType 2 /Domain [0 1] /C0 [1 0 0] /C1 [1 0 0] /N 1 >> >>",
+                stream("/PatternType 1 /PaintType 1 /TilingType 1 /BBox [0 0 10 10] /XStep 10 /YStep 10 /Resources << >>", "1 0 0 rg 0 0 10 10 re f"))});
         // リンクの枠 (外観なし、Border と C)
         samples.add(new String[]{"link-border", build(
                 "<< /Type /Catalog /Pages 2 0 R >>",
@@ -163,7 +167,7 @@ final class PdfSamples {
                 "<< /Type /Font /Subtype /CIDFontType2 /BaseFont /Arial /CIDSystemInfo << /Registry (Adobe) /Ordering (Identity) /Supplement 0 >> "
                         + "/FontDescriptor << /Type /FontDescriptor /FontName /Arial /Flags 32 /FontBBox [-665 -325 2000 1006] /ItalicAngle 0 "
                         + "/Ascent 905 /Descent -212 /CapHeight 716 /StemV 80 >> /W [16 [333]] >>")});
-        // CID の決まっていない CFF を使う CIDFontType0 の CIDToGIDMap (CID 1 を、四角のグリフ 2 にする)
+        // OpenType に入った、CID の決まっていない CFF を使う CIDFontType0 の CIDToGIDMap (CID 1 を、四角のグリフ 2 にする)
         samples.add(new String[]{"cff-cidtogidmap", page("<< /Font << /F1 5 0 R >> >>", "0 g BT /F1 100 Tf 50 50 Td <0001> Tj ET",
                 "<< /Type /Font /Subtype /Type0 /BaseFont /T /Encoding /Identity-H /DescendantFonts [6 0 R] >>",
                 "<< /Type /Font /Subtype /CIDFontType0 /BaseFont /T /CIDSystemInfo << /Registry (Adobe) /Ordering (Identity) /Supplement 0 >> "
@@ -171,6 +175,15 @@ final class PdfSamples {
                 "<< /Type /FontDescriptor /FontName /T /Flags 4 /FontBBox [0 0 1000 1000] /ItalicAngle 0 /Ascent 1000 /Descent 0 "
                         + "/CapHeight 1000 /StemV 80 /FontFile3 9 0 R >>",
                 stream("", latin1(new byte[]{0, 0, 0, 2})),
+                stream("/Subtype /OpenType", latin1(openType(squareCff()))))});
+        // そのままの (OpenType に入っていない) CFF では、CIDToGIDMap を使わず、CID がそのまま GID (CID 2 は四角のグリフ 2)
+        samples.add(new String[]{"bare-cff-cid", page("<< /Font << /F1 5 0 R >> >>", "0 g BT /F1 100 Tf 50 50 Td <0002> Tj ET",
+                "<< /Type /Font /Subtype /Type0 /BaseFont /T /Encoding /Identity-H /DescendantFonts [6 0 R] >>",
+                "<< /Type /Font /Subtype /CIDFontType0 /BaseFont /T /CIDSystemInfo << /Registry (Adobe) /Ordering (Identity) /Supplement 0 >> "
+                        + "/FontDescriptor 7 0 R /CIDToGIDMap 8 0 R /DW 1000 >>",
+                "<< /Type /FontDescriptor /FontName /T /Flags 4 /FontBBox [0 0 1000 1000] /ItalicAngle 0 /Ascent 1000 /Descent 0 "
+                        + "/CapHeight 1000 /StemV 80 /FontFile3 9 0 R >>",
+                stream("", latin1(new byte[]{0, 0, 0, 1, 0, 1})),
                 stream("/Subtype /Type1C", latin1(squareCff())))});
         // TrueType のグリフの原点は xMin - lsb (グリフ 1 は xMin 500 だが lsb 0 なので、原点から描かれる)
         samples.add(new String[]{"truetype-lsb", page("<< /Font << /F1 5 0 R >> >>", "0 g BT /F1 100 Tf 50 50 Td <0001> Tj ET",
@@ -208,30 +221,38 @@ final class PdfSamples {
     }
 
     /**
-     * 2 つのグリフの TrueType。グリフ 1 は x 500 から 900、y 0 から 400 の四角だが、hmtx の lsb は 0。
+     * CFF (3 つのグリフ) を OpenType に入れたもの (FreeType も読めるように、head、hhea、hmtx、maxp も付ける)。
      */
-    static byte[] lsbTrueType() {
+    static byte[] openType(byte[] cff) {
+        // 幅 1000、lsb 0 を 3 つ
+        final byte[] hmtx = {0x03, (byte) 0xE8, 0, 0, 0x03, (byte) 0xE8, 0, 0, 0x03, (byte) 0xE8, 0, 0};
+        final byte[] maxp = {0, 0, 0x50, 0, 0, 3};
+        return sfnt(0x4F54544F, new String[]{"CFF ", "head", "hhea", "hmtx", "maxp"},
+                new byte[][]{cff, head(0, 0, 1000, 1000), hhea(3), hmtx, maxp});
+    }
+
+    // head の表 (単位 1000、範囲は引数、短い loca)
+    private static byte[] head(int xMin, int yMin, int xMax, int yMax) {
         final ByteArrayOutputStream head = new ByteArrayOutputStream();
         write(head, 0, 1, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0x5F, 0x0F, 0x3C, 0xF5, 0, 0, 0x03, 0xE8);
         for (int i = 0; i < 16; i++) head.write(0);
-        write(head, 0x01, 0xF4, 0, 0, 0x03, 0x84, 0x01, 0x90, 0, 0, 0, 8, 0, 2, 0, 0, 0, 0);
+        write(head, xMin >> 8, xMin & 0xFF, yMin >> 8, yMin & 0xFF, xMax >> 8, xMax & 0xFF, yMax >> 8, yMax & 0xFF, 0, 0, 0, 8, 0, 2, 0, 0, 0, 0);
+        return head.toByteArray();
+    }
+
+    // hhea の表 (高さ 1000、hmtx の幅の数は引数)
+    private static byte[] hhea(int metrics) {
         final ByteArrayOutputStream hhea = new ByteArrayOutputStream();
         write(hhea, 0, 1, 0, 0, 0x03, 0xE8, 0, 0, 0, 0, 0x03, 0xE8);
         for (int i = 12; i < 34; i++) hhea.write(0);
-        write(hhea, 0, 1);
-        final byte[] maxp = {0, 0, 0x50, 0, 0, 2};
-        // 幅 1000、lsb 0 (グリフ 0)、lsb 0 (グリフ 1)
-        final byte[] hmtx = {0x03, (byte) 0xE8, 0, 0, 0, 0};
-        final ByteArrayOutputStream glyf = new ByteArrayOutputStream();
-        // 輪郭 1 つ、xMin 500 yMin 0 xMax 900 yMax 400、終わりの点 3、命令なし、4 点とも曲線の上 (座標は 2 バイトの差分)
-        write(glyf, 0, 1, 0x01, 0xF4, 0, 0, 0x03, 0x84, 0x01, 0x90, 0, 3, 0, 0, 1, 1, 1, 1,
-                0x01, 0xF4, 0x01, 0x90, 0, 0, 0xFE, 0x70, 0, 0, 0, 0, 0x01, 0x90, 0, 0);
-        // loca (短い形、2 で割った値): グリフ 0 は空
-        final byte[] loca = {0, 0, 0, 0, 0, (byte) (glyf.size() / 2)};
-        final byte[][] tables = {glyf.toByteArray(), head.toByteArray(), hhea.toByteArray(), hmtx, loca, maxp};
-        final String[] tags = {"glyf", "head", "hhea", "hmtx", "loca", "maxp"};
+        write(hhea, metrics >> 8, metrics & 0xFF);
+        return hhea.toByteArray();
+    }
+
+    // 表を並べたフォントのファイル (sfnt)
+    private static byte[] sfnt(int version, String[] tags, byte[][] tables) {
         final ByteArrayOutputStream out = new ByteArrayOutputStream();
-        write(out, 0, 1, 0, 0, 0, tables.length, 0, 0, 0, 0, 0, 0);
+        write(out, version >>> 24, version >> 16 & 0xFF, version >> 8 & 0xFF, version & 0xFF, 0, tables.length, 0, 0, 0, 0, 0, 0);
         int offset = 12 + 16 * tables.length;
         for (int i = 0; i < tables.length; i++) {
             for (int k = 0; k < 4; k++) out.write(tags[i].charAt(k));
@@ -244,6 +265,23 @@ final class PdfSamples {
             for (int k = table.length; k % 4 != 0; k++) out.write(0);
         }
         return out.toByteArray();
+    }
+
+    /**
+     * 2 つのグリフの TrueType。グリフ 1 は x 500 から 900、y 0 から 400 の四角だが、hmtx の lsb は 0。
+     */
+    static byte[] lsbTrueType() {
+        final byte[] maxp = {0, 0, 0x50, 0, 0, 2};
+        // 幅 1000、lsb 0 (グリフ 0)、lsb 0 (グリフ 1)
+        final byte[] hmtx = {0x03, (byte) 0xE8, 0, 0, 0, 0};
+        final ByteArrayOutputStream glyf = new ByteArrayOutputStream();
+        // 輪郭 1 つ、xMin 500 yMin 0 xMax 900 yMax 400、終わりの点 3、命令なし、4 点とも曲線の上 (座標は 2 バイトの差分)
+        write(glyf, 0, 1, 0x01, 0xF4, 0, 0, 0x03, 0x84, 0x01, 0x90, 0, 3, 0, 0, 1, 1, 1, 1,
+                0x01, 0xF4, 0x01, 0x90, 0, 0, 0xFE, 0x70, 0, 0, 0, 0, 0x01, 0x90, 0, 0);
+        // loca (短い形、2 で割った値): グリフ 0 は空
+        final byte[] loca = {0, 0, 0, 0, 0, (byte) (glyf.size() / 2)};
+        return sfnt(0x00010000, new String[]{"glyf", "head", "hhea", "hmtx", "loca", "maxp"},
+                new byte[][]{glyf.toByteArray(), head(500, 0, 900, 400), hhea(1), hmtx, loca, maxp});
     }
 
     private static void write(ByteArrayOutputStream out, int... bytes) {

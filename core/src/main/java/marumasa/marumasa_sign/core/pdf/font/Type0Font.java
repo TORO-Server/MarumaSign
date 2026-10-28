@@ -341,9 +341,10 @@ final class Type0Font extends PdfFont {
         if (program != null) {
             final CffFont cff = program instanceof CffFont ? (CffFont) program
                     : program instanceof TrueTypeFont && ((TrueTypeFont) program).isCff() ? ((TrueTypeFont) program).cff() : null;
-            // CID の決まった CFF は、文字集合で CID からグリフを選ぶ
-            if (cff != null && cff.isCid()) return cff.gidForCid(cid);
-            // TrueType と、CID の決まっていない CFF: CIDToGIDMap (なければ CID がそのまま GID)。
+            // CID の決まった CFF は、文字集合で CID からグリフを選ぶ。
+            // CID の決まっていない、そのままの CFF は、CID がそのまま GID (CIDToGIDMap は使わない。poppler と pdf.js と同じ)
+            if (cff != null && (cff.isCid() || program instanceof CffFont)) return cff.gidForCid(cid);
+            // TrueType と、OpenType に入った CID の決まっていない CFF: CIDToGIDMap (なければ CID がそのまま GID)。
             // 仕様では TrueType のためのものだが、OpenType の CFF にも付けたものがある (poppler も使う)
             if (cidToGid != null) {
                 final int p = 2 * cid;
