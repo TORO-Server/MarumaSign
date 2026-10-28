@@ -6,11 +6,15 @@ import java.io.IOException;
  * JPEG (ITU-T T.81) を Java だけで戻す。ベースラインとプログレッシブ (ハフマン符号)、8 ビットと 12 ビットに対応する。
  * <p>
  * Java の ImageIO の JPEG の読み込みは C で書かれた libjpeg を使っている。誰でも作れるファイルを読ませると、
- * その不具合でメモリを壊される (任意のコードを実行される) おそれがあるので、PDF の画像はこちらで読む。
+ * その不具合でメモリを壊される (任意のコードを実行される) おそれがあるので、JPEG はすべてこちらで読む
+ * (PDF の画像、看板の画像、3D モデルのテクスチャ、TIFF の中の JPEG)。
  * 大きさや係数の数には上限を設け、壊れたデータは読めたところまでを使う。
  * 縮小して読む指定 (1/2、1/4、1/8) では、DCT の低い周波数だけを使って速く読む。
  */
 public final class JpegReader {
+
+    /** decode の colorTransform に渡すと、色の変換 (YCbCr から RGB、YCCK から CMYK) をせずに、符号のままの値を返す */
+    public static final int NO_COLOR_TRANSFORM = -2;
 
     // 係数を持つためのメモリの上限 (short の数)
     private static final long MAX_COEFFICIENTS = 160L * 1024 * 1024;
@@ -118,11 +122,42 @@ public final class JpegReader {
      *
      * @param scale     縮小の分母 (1、2、4、8)
      * @param maxPixels 戻した画像の画素の数の上限
-     * @param colorTransform PDF の ColorTransform (-1 なら指定なし)
+     * @param colorTransform PDF の ColorTransform (-1 なら指定なし。NO_COLOR_TRANSFORM なら色を変換しない)
      */
     public static Image decode(byte[] data, int scale, long maxPixels, int colorTransform) throws IOException {
         if (scale != 1 && scale != 2 && scale != 4 && scale != 8) scale = 1;
         return new JpegReader(data).read(scale, maxPixels, colorTransform);
+    }
+
+    /**
+     * 戻した画像 (色の変換をしたもの) を、1 画素 1 つの ARGB (不透明) にする。
+     * CMYK は単純な式で RGB にする。Adobe の印があるものは、値が反転している (Photoshop の書き方) ものとして扱う。
+     */
+    public static int[] toArgb(Image image) throws IOException {
+        final int n = image.components;
+        final byte[] s = image.samples;
+        final int[] pixels = new int[image.width * image.height];
+        for (int i = 0, p = 0; i < pixels.length; i++, p += n) {
+            final int r, g, b;
+            if (n == 1) {
+                r = g = b = s[p] & 0xFF;
+            } else if (n == 3) {
+                r = s[p] & 0xFF;
+                g = s[p + 1] & 0xFF;
+                b = s[p + 2] & 0xFF;
+            } else if (n == 4) {
+                // インクの量 (0 から 255)
+                final int flip = image.adobe ? 255 : 0;
+                final int c = (s[p] & 0xFF) ^ flip, m = (s[p + 1] & 0xFF) ^ flip, y = (s[p + 2] & 0xFF) ^ flip, k = (s[p + 3] & 0xFF) ^ flip;
+                r = (255 - c) * (255 - k) / 255;
+                g = (255 - m) * (255 - k) / 255;
+                b = (255 - y) * (255 - k) / 255;
+            } else {
+                throw new IOException("Unsupported JPEG components: " + n);
+            }
+            pixels[i] = 0xFF000000 | (r << 16) | (g << 8) | b;
+        }
+        return pixels;
     }
 
     /**
@@ -746,7 +781,9 @@ public final class JpegReader {
     // YCbCr から RGB、YCCK から CMYK
     private void convert(byte[] samples, int n, int colorTransform) {
         boolean transform;
-        if (n == 3) {
+        if (colorTransform == NO_COLOR_TRANSFORM) {
+            return;
+        } else if (n == 3) {
             if (adobe) transform = adobeTransform != 0;
             else if (colorTransform >= 0) transform = colorTransform != 0;
             else transform = !(components[0].id == 'R' && components[1].id == 'G' && components[2].id == 'B');

@@ -111,6 +111,15 @@ tasks.register('pdfFuzz', JavaExec) {
     if (providers.gradleProperty('fuzzSeed').isPresent()) systemProperty 'fuzz.seed', providers.gradleProperty('fuzzSeed').get()
 }
 
+// JPEG の読み込み (libjpeg を使わない、Java だけで書いたもの) を、libjpeg (Pillow) で戻した結果と比べる
+tasks.register('jpegCheck', JavaExec) {
+    classpath = sourceSets.test.runtimeClasspath
+    mainClass = 'marumasa.marumasa_sign.core.image.format.JpegCheck'
+    javaLauncher = javaToolchains.launcherFor(java.toolchain)
+    maxHeapSize = '512m'
+    args 'src/test/resources/jpeg'
+}
+
 // ダウンロードしたファイルを残しておく仕組み (DownloadCache) を、手元の HTTP サーバーで確かめる
 tasks.register('downloadCacheCheck', JavaExec) {
     classpath = sourceSets.test.runtimeClasspath

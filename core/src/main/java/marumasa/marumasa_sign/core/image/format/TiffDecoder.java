@@ -1,18 +1,14 @@
 package marumasa.marumasa_sign.core.image.format;
 
 import marumasa.marumasa_sign.core.image.DecodedImage;
+import marumasa.marumasa_sign.core.image.ImageLoader;
+import marumasa.marumasa_sign.core.image.jpeg.JpegReader;
 import marumasa.marumasa_sign.core.texture.ZstdDecoder;
 
-import javax.imageio.ImageIO;
-import javax.imageio.ImageReader;
-import javax.imageio.stream.MemoryCacheImageInputStream;
-import java.awt.image.Raster;
-import java.io.ByteArrayInputStream;
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.HashSet;
-import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -433,28 +429,22 @@ final class TiffDecoder {
         } else {
             data = java.util.Arrays.copyOfRange(d, start, start + length);
         }
-        final Iterator<ImageReader> readers = ImageIO.getImageReadersByFormatName("jpeg");
-        if (!readers.hasNext()) throw new IOException("No JPEG reader");
-        final ImageReader reader = readers.next();
+        // libjpeg (ImageIO) には渡さず、色を変えない生の値で読む (色の変換は TIFF の指定に従って後で行う)
+        final JpegReader.Image jpeg;
         try {
-            reader.setInput(new MemoryCacheImageInputStream(new ByteArrayInputStream(data)), true, true);
-            final Raster raster = reader.readRaster(0, null);
-            final int bands = raster.getNumBands();
-            if (bands != perPixel) throw new IOException("Unexpected TIFF JPEG components: " + bands);
-            final int rw = raster.getWidth(), rh = raster.getHeight();
-            final int rowBytes = width * bands;
-            final byte[] out = new byte[expected];
-            final int[] row = new int[rw * bands];
-            for (int y = 0; y < Math.min(rh, rows); y++) {
-                raster.getPixels(raster.getMinX(), raster.getMinY() + y, rw, 1, row);
-                for (int x = 0; x < Math.min(rw, width) * bands; x++) out[y * rowBytes + x] = (byte) row[x];
-            }
-            return out;
+            jpeg = JpegReader.decode(data, 1, (long) ImageLoader.MAX_STATIC_SIZE * ImageLoader.MAX_STATIC_SIZE, JpegReader.NO_COLOR_TRANSFORM);
         } catch (RuntimeException e) {
             throw new IOException("Invalid TIFF JPEG data", e);
-        } finally {
-            reader.dispose();
         }
+        final int bands = jpeg.components;
+        if (bands != perPixel) throw new IOException("Unexpected TIFF JPEG components: " + bands);
+        final int rowBytes = width * bands;
+        final byte[] out = new byte[expected];
+        final int copy = Math.min(jpeg.width, width) * bands;
+        for (int y = 0; y < Math.min(jpeg.height, rows) && y * rowBytes + copy <= expected; y++) {
+            System.arraycopy(jpeg.samples, y * jpeg.width * bands, out, y * rowBytes, copy);
+        }
+        return out;
     }
 
     // ---------- 予測 ----------

@@ -10,7 +10,6 @@ import marumasa.marumasa_sign.core.image.ArgbPixels;
 import marumasa.marumasa_sign.core.texture.TextureDecoder;
 import marumasa.marumasa_sign.core.util.Json;
 
-import javax.imageio.ImageIO;
 import java.awt.Graphics2D;
 import java.awt.RenderingHints;
 import java.awt.image.BufferedImage;
