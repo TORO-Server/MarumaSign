@@ -95,7 +95,8 @@ jobs:
 
   codeql:
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    # ビルドせずに解析しても、リポジトリが大きいので 1 時間を超えることがある
+    timeout-minutes: 120
     permissions:
       contents: read
       security-events: write
@@ -109,7 +110,8 @@ jobs:
         with:
           languages: java-kotlin
           build-mode: none
-          queries: security-extended,security-and-quality
+          # セキュリティの問題を探す問い合わせに絞る (品質の問い合わせまで入れると、時間内に終わらない)
+          queries: security-extended
 
       - name: Analyze
         uses: github/codeql-action/analyze@v4
