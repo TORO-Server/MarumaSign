@@ -91,8 +91,9 @@ check signLimitsCheck 1200 -Xmx3g marumasa.marumasa_sign.core.SignLimitsCheck
 check argbPixelsCheck 300 -Xmx1g marumasa.marumasa_sign.core.image.ArgbPixelsCheck "$root/tools/verify/test-image.png"
 # JPEG は libjpeg (ImageIO) を使わずに読むので、libjpeg (Pillow) の結果と比べる
 check jpegCheck 300 -Xmx512m -Xss512k marumasa.marumasa_sign.core.image.format.JpegCheck src/test/resources/jpeg
+check imageRegressionCheck 300 -Xmx512m -Xss512k marumasa.marumasa_sign.core.image.ImageRegressionCheck
 check imageFormatsFuzz 3600 -Xmx1g -Xss512k marumasa.marumasa_sign.core.image.ImageFormatsFuzz "$image_fuzz" \
-  "$root/tools/verify/test-image.png" src/test/resources/jpeg/*.jpg
+  "$root/tools/verify/test-image.png" src/test/resources/jpeg/*.jpg src/test/resources/image
 check structureFuzz 3600 -Xmx2g -Xss512k marumasa.marumasa_sign.core.structure.StructureFuzz "$structure_fuzz" \
   "$root/tools/verify/test-structure.nbt"
 check dracoCheck 900 -Xmx1g -Xss512k marumasa.marumasa_sign.core.gltf.DracoCheck
