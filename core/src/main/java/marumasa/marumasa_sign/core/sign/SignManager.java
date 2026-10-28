@@ -98,6 +98,9 @@ public final class SignManager {
 
         SignImage image = signs.get(text);
         if (image != null) {
+            // 描くための計算で例外が出たものは描かない (看板そのものを表示する)。
+            // 使われていないものとして、しばらくすると消えるので、そのあとでもう一度試す
+            if (image.isBroken()) return null;
             touch(image);
             return image;
         }

@@ -58,24 +58,38 @@ public final class Adapter {
     // クライアントの tick の最後に呼ばれる
     public static void tick() {
         if (!active) return;
-        if (!rendererInstalled) installRenderer();
-        SignItems.install(mc);
+        // このバージョンでは、tick や描画のイベントの中の例外でゲームが落ちるので、外には出さない
+        try {
+            if (!rendererInstalled) installRenderer();
+            SignItems.install(mc);
+        } catch (RuntimeException e) {
+            MarumaSign.reportOnce("installing the renderers", e);
+        }
 
         MarumaSign.tick();
 
-        while (openMenu.isPressed()) {
-            if (Mc.inWorld() && mc.currentScreen == null) MarumaSign.openMenu();
-        }
+        try {
+            while (openMenu.isPressed()) {
+                if (Mc.inWorld() && mc.currentScreen == null) MarumaSign.openMenu();
+            }
 
-        // 看板の編集画面が開かれたら、予約されている文字列を書き込んで閉じる
-        if (MarumaSign.hasPendingWrite() && mc.currentScreen instanceof GuiEditSign) {
-            writeSign((GuiEditSign) mc.currentScreen);
+            // 看板の編集画面が開かれたら、予約されている文字列を書き込んで閉じる
+            if (MarumaSign.hasPendingWrite() && mc.currentScreen instanceof GuiEditSign) {
+                writeSign((GuiEditSign) mc.currentScreen);
+            }
+        } catch (RuntimeException e) {
+            MarumaSign.reportOnce("handling the keys", e);
         }
     }
 
     // ワールドの描画の最後に呼ばれる
     public static void renderWorld() {
-        if (active) WorldPass.render();
+        if (!active) return;
+        try {
+            WorldPass.render();
+        } catch (RuntimeException e) {
+            MarumaSign.reportOnce("drawing the signs", e);
+        }
     }
 
     // 看板のレンダラーを置き換える

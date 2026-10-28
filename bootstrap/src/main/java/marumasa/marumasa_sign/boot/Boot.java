@@ -98,8 +98,12 @@ public final class Boot {
         if (stream == null) return null;
         try {
             try {
+                // 1 回の read で全部が読めるとは限らない (jar の中のファイルは、少しずつ展開されることがある) ので、繰り返し読む
                 final byte[] buffer = new byte[4096];
-                final int length = stream.read(buffer);
+                int length = 0;
+                for (int read; length < buffer.length && (read = stream.read(buffer, length, buffer.length - length)) > 0; ) {
+                    length += read;
+                }
                 if (length <= 0) return null;
                 final Matcher matcher = VERSION_ID.matcher(new String(buffer, 0, length, StandardCharsets.UTF_8));
                 return matcher.find() ? matcher.group(1) : null;

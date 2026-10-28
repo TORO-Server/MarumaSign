@@ -1,5 +1,6 @@
 package marumasa.marumasa_sign.core.sign;
 
+import marumasa.marumasa_sign.core.MarumaSign;
 import marumasa.marumasa_sign.core.gltf.GltfScene;
 import marumasa.marumasa_sign.core.splat.SplatScene;
 
@@ -82,6 +83,9 @@ public final class SignImage {
     private final PdfControls controls;
     // 最後に看板として引かれた時刻 (System.currentTimeMillis)。SignManager が、使われていないものを消すのに使う
     volatile long lastUsed = System.currentTimeMillis();
+    // 描くための計算で例外が出たかどうか。出た看板は以後描かない (SignManager が引かなくなる)。
+    // 描画の途中で例外が外に出るとゲームが落ちるので、1 つの看板のせいでゲームを止めないようにする
+    private volatile boolean broken;
 
     SignImage(SignSpec spec, TextureEntry texture, PdfControls controls) {
         this.spec = spec;
@@ -147,8 +151,25 @@ public final class SignImage {
 
     // 描画する距離の上限
     public double viewDistance() {
-        ensureBuilt();
-        return viewDistance;
+        try {
+            ensureBuilt();
+            return viewDistance;
+        } catch (RuntimeException e) {
+            failed(e);
+            return 64.0;
+        }
+    }
+
+    // 描くための計算で例外が出たかどうか
+    boolean isBroken() {
+        return broken;
+    }
+
+    // 描くための計算で出た例外を記録し、以後はこの看板を描かないようにする (記録は 1 回だけ)
+    private void failed(RuntimeException e) {
+        if (broken) return;
+        broken = true;
+        MarumaSign.LOGGER.error("Failed to draw the sign: " + spec.url, e);
     }
 
     private void ensureBuilt() {
@@ -297,6 +318,16 @@ public final class SignImage {
 
     private Batch[] batches(float signYaw, boolean wall, double distance, float cameraX, float cameraY, float cameraZ,
                             int blockX, int blockY, int blockZ, boolean placed) {
+        try {
+            return batchesUnchecked(signYaw, wall, distance, cameraX, cameraY, cameraZ, blockX, blockY, blockZ, placed);
+        } catch (RuntimeException e) {
+            failed(e);
+            return new Batch[0];
+        }
+    }
+
+    private Batch[] batchesUnchecked(float signYaw, boolean wall, double distance, float cameraX, float cameraY, float cameraZ,
+                                     int blockX, int blockY, int blockZ, boolean placed) {
         final Batch[] batches = imageBatches(signYaw, wall, distance, cameraX, cameraY, cameraZ);
         final PdfSession pdf = texture.pdf();
         if (!placed || pdf == null || controls == null || model != null || splat != null) return batches;
@@ -337,6 +368,15 @@ public final class SignImage {
      * @param distance カメラからアイテムまでの距離 (ブロック)。動画や音声の音量に使う
      */
     public Batch[] itemBatches(double distance) {
+        try {
+            return itemBatchesUnchecked(distance);
+        } catch (RuntimeException e) {
+            failed(e);
+            return new Batch[0];
+        }
+    }
+
+    private Batch[] itemBatchesUnchecked(double distance) {
         ensureBuilt();
         if (model != null) return modelBatches(ITEM, 0, false);
         if (splat != null) return splatBatches(ITEM, 0, false, distance, 0.5f, 0.5f, 100f);
@@ -461,6 +501,16 @@ public final class SignImage {
      * minX, minY, minZ, maxX, maxY, maxZ の順。
      */
     public float[] bounds(float signYaw, boolean wall) {
+        try {
+            return boundsUnchecked(signYaw, wall);
+        } catch (RuntimeException e) {
+            failed(e);
+            // ブロック 1 つ分
+            return new float[]{0, 0, 0, 1, 1, 1};
+        }
+    }
+
+    private float[] boundsUnchecked(float signYaw, boolean wall) {
         ensureBuilt();
         final int index = meshIndex(signYaw, wall);
         float[] box = bounds[index];
