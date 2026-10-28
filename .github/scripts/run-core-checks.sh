@@ -60,7 +60,8 @@ check() {
   fi
   echo "::group::$name"
   local start=$SECONDS
-  if timeout --kill-after=30 "$seconds" java -Dfuzz.seed="$seed" -cp "$classpath" "$@"; then
+  # 同じ場所で何度も起きた例外でも、どこで起きたかが分かるように、スタックトレースを省かせない
+  if timeout --kill-after=30 "$seconds" java -XX:-OmitStackTraceInFastThrow -Dfuzz.seed="$seed" -cp "$classpath" "$@"; then
     echo "$name: OK ($((SECONDS - start)) s)"
   else
     local status=$?

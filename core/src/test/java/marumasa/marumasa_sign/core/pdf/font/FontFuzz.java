@@ -22,7 +22,7 @@ import java.util.concurrent.TimeoutException;
  * 読めないフォントは FontFormatError (と IOException) で断ればよい。それ以外の例外、スタックやメモリの使い切り、
  * 長い時間 (1 つあたり 10 秒) を失敗にする。失敗した入力は build/font-fuzz に保存する。
  * <p>
- * 引数: 回数 ファイルまたはフォルダ... (.ttf .otf .ttc .pfb .pfa .cff と、CMap の文字 (.cmap か、拡張子のないもの))。
+ * 引数: 回数 ファイルまたはフォルダ... (回数が 0 なら、壊さずにそのまま 1 回ずつ読む。保存した失敗の入力を確かめ直すのに使う) (.ttf .otf .ttc .pfb .pfa .cff と、CMap の文字 (.cmap か、拡張子のないもの))。
  * 乱数の種はシステムプロパティ fuzz.seed で決められる。
  */
 public final class FontFuzz {
@@ -52,10 +52,11 @@ public final class FontFuzz {
         int failed = 0;
         long parsed = 0;
         final long start = System.nanoTime();
-        for (int i = 0; i < iterations; i++) {
-            final int which = random.nextInt(seeds.size());
+        final boolean replay = iterations == 0;
+        for (int i = 0; i < (replay ? seeds.size() : iterations); i++) {
+            final int which = replay ? i : random.nextInt(seeds.size());
             final String name = files.get(which).getName();
-            final byte[] data = mutate(seeds.get(which), random);
+            final byte[] data = replay ? seeds.get(which) : mutate(seeds.get(which), random);
             final Future<Boolean> future = executor.submit(() -> exercise(name, data));
             String problem = null;
             try {
@@ -68,7 +69,10 @@ public final class FontFuzz {
             } catch (ExecutionException e) {
                 problem = describe(e.getCause());
             }
-            if (problem != null) {
+            if (problem != null && replay) {
+                failed++;
+                System.out.println("FAIL " + name + ": " + problem);
+            } else if (problem != null) {
                 failed++;
                 final File dir = new File("build/font-fuzz");
                 dir.mkdirs();

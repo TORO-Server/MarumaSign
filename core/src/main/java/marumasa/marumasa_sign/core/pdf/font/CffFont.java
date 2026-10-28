@@ -88,18 +88,18 @@ public final class CffFont implements FontProgram {
         if (topBytes == null) throw new FontBytes.FontFormatError("No top dict");
         final Map<Integer, double[]> top = dict(topBytes);
         final double[] charStringsOffset = top.get(17);
-        if (charStringsOffset == null) throw new FontBytes.FontFormatError("No CharStrings");
+        if (charStringsOffset == null || charStringsOffset.length == 0) throw new FontBytes.FontFormatError("No CharStrings");
         charStrings = index((long) charStringsOffset[0]);
         final int glyphs = charStrings.count();
         cid = top.containsKey(1230); // ROS (12 30)
         final double[] topMatrix = top.get(1207);
         // 文字集合 (GID ごとの SID か CID)
         final double[] charsetOffset = top.get(15);
-        charset = readCharset(charsetOffset == null ? 0 : (long) charsetOffset[0], glyphs);
+        charset = readCharset((long) first(charsetOffset, 0), glyphs);
         if (cid) {
             final double[] fdArrayOffset = top.get(1236);
             final double[] fdSelectOffset = top.get(1237);
-            if (fdArrayOffset == null) throw new FontBytes.FontFormatError("CID font without FDArray");
+            if (fdArrayOffset == null || fdArrayOffset.length == 0) throw new FontBytes.FontFormatError("CID font without FDArray");
             final Index fdArray = index((long) fdArrayOffset[0]);
             final int fdCount = Math.min(fdArray.count(), 256);
             privates = new PrivateDict[Math.max(1, fdCount)];
@@ -112,14 +112,20 @@ public final class CffFont implements FontProgram {
                 privates[i] = readPrivate(fdDict.get(18));
                 matrices[i] = combine(topMatrix, fdDict.get(1207));
             }
-            fdSelect = fdSelectOffset == null ? new int[glyphs] : readFdSelect((long) fdSelectOffset[0], glyphs, privates.length);
+            fdSelect = fdSelectOffset == null || fdSelectOffset.length == 0 ? new int[glyphs]
+                    : readFdSelect((long) fdSelectOffset[0], glyphs, privates.length);
         } else {
             privates = new PrivateDict[]{readPrivate(top.get(18))};
             matrices = new double[][]{topMatrix != null && topMatrix.length >= 6 ? topMatrix : new double[]{0.001, 0, 0, 0.001, 0, 0}};
             fdSelect = null;
             final double[] encodingOffset = top.get(16);
-            readEncoding(encodingOffset == null ? 0 : (long) encodingOffset[0]);
+            readEncoding((long) first(encodingOffset, 0));
         }
+    }
+
+    // 辞書の値の最初の数。値がない (数のない演算子が書かれている) ときは fallback
+    private static double first(double[] operands, double fallback) {
+        return operands == null || operands.length == 0 ? fallback : operands[0];
     }
 
     // CID フォントの行列: 上の辞書と FD の行列を掛け合わせる (片方しかなければそれ)
