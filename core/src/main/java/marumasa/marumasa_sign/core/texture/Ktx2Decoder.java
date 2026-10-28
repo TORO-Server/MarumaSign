@@ -72,7 +72,10 @@ public final class Ktx2Decoder {
         final long levelOffset = readLong(data, 80);
         final long levelLength = readLong(data, 88);
         final long uncompressedLength = readLong(data, 96);
-        if (levelOffset < 0 || levelLength < 0 || levelOffset + levelLength > data.length) throw new IOException("KTX2 level out of range");
+        // 足し算があふれないように、残りの長さと比べる
+        if (levelOffset < 0 || levelLength < 0 || levelOffset > data.length || levelLength > data.length - levelOffset) {
+            throw new IOException("KTX2 level out of range");
+        }
 
         // データ形式の記述から、色のモデルと、sRGB かどうか、透明度があるかを読む
         int colorModel = 0;
@@ -122,7 +125,9 @@ public final class Ktx2Decoder {
     // ETC1S: 全体のデータ (端点と選択子の表) と、画像ごとの位置の一覧を読んで、最初の画像を展開する
     private static void decodeEtc1s(byte[] data, long sgdOffset, long sgdLength, long levelOffset, int imageCount,
                                     int width, int height, boolean hasAlpha, int[] argb) throws IOException {
-        if (sgdOffset <= 0 || sgdLength < 20 || sgdOffset + sgdLength > data.length) throw new IOException("Invalid BasisLZ global data");
+        if (sgdOffset <= 0 || sgdLength < 20 || sgdOffset > data.length || sgdLength > data.length - sgdOffset) {
+            throw new IOException("Invalid BasisLZ global data");
+        }
         final int p = (int) sgdOffset;
         final int endpointCount = readShort(data, p);
         final int selectorCount = readShort(data, p + 2);

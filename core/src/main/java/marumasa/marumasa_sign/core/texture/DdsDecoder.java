@@ -227,7 +227,7 @@ public final class DdsDecoder {
     private static void decodeBc1(byte[] data, int offset, int width, int height, int[] out) throws IOException {
         final int blocksX = (width + 3) / 4;
         final int blocksY = (height + 3) / 4;
-        final int required = offset + blocksX * blocksY * 8;
+        final long required = (long) offset + (long) blocksX * blocksY * 8;
         if (required > data.length || required < 0) {
             throw new IOException("BC1 data truncated");
         }
@@ -282,7 +282,7 @@ public final class DdsDecoder {
     private static void decodeBc2(byte[] data, int offset, int width, int height, int[] out) throws IOException {
         final int blocksX = (width + 3) / 4;
         final int blocksY = (height + 3) / 4;
-        final int required = offset + blocksX * blocksY * 16;
+        final long required = (long) offset + (long) blocksX * blocksY * 16;
         if (required > data.length || required < 0) {
             throw new IOException("BC2 data truncated");
         }
@@ -337,7 +337,7 @@ public final class DdsDecoder {
     private static void decodeBc3(byte[] data, int offset, int width, int height, int[] out) throws IOException {
         final int blocksX = (width + 3) / 4;
         final int blocksY = (height + 3) / 4;
-        final int required = offset + blocksX * blocksY * 16;
+        final long required = (long) offset + (long) blocksX * blocksY * 16;
         if (required > data.length || required < 0) {
             throw new IOException("BC3 data truncated");
         }
@@ -414,7 +414,7 @@ public final class DdsDecoder {
     private static void decodeBc4(byte[] data, int offset, int width, int height, boolean signed, int[] out) throws IOException {
         final int blocksX = (width + 3) / 4;
         final int blocksY = (height + 3) / 4;
-        final int required = offset + blocksX * blocksY * 8;
+        final long required = (long) offset + (long) blocksX * blocksY * 8;
         if (required > data.length || required < 0) {
             throw new IOException("BC4 data truncated");
         }
@@ -490,7 +490,7 @@ public final class DdsDecoder {
     private static void decodeBc5(byte[] data, int offset, int width, int height, boolean signed, int[] out) throws IOException {
         final int blocksX = (width + 3) / 4;
         final int blocksY = (height + 3) / 4;
-        final int required = offset + blocksX * blocksY * 16;
+        final long required = (long) offset + (long) blocksX * blocksY * 16;
         if (required > data.length || required < 0) {
             throw new IOException("BC5 data truncated");
         }
@@ -547,7 +547,7 @@ public final class DdsDecoder {
     private static void decodeBc7(byte[] data, int offset, int width, int height, int[] out) throws IOException {
         final int blocksX = (width + 3) / 4;
         final int blocksY = (height + 3) / 4;
-        final int required = offset + blocksX * blocksY * 16;
+        final long required = (long) offset + (long) blocksX * blocksY * 16;
         if (required > data.length || required < 0) {
             throw new IOException("BC7 data truncated");
         }
@@ -586,8 +586,8 @@ public final class DdsDecoder {
             if (hasAlpha && aMask != 0) aMask = ((1 << rgbBitCount) - 1) & ~rMask;
         }
         final int bytesPerPixel = (rgbBitCount + 7) / 8;
-        final int rowPitch = ((width * rgbBitCount + 31) / 32) * 4;
-        final int required = offset + (height - 1) * rowPitch + width * bytesPerPixel;
+        final int rowPitch = (int) (((long) width * rgbBitCount + 31) / 32 * 4);
+        final long required = (long) offset + (long) (height - 1) * rowPitch + (long) width * bytesPerPixel;
         if (required > data.length || required < 0) {
             throw new IOException("Uncompressed DDS data truncated");
         }
