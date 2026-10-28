@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="100" height="50">
+<style>.a { fill: green } #t { font-size: 12px } text.b { font-weight: bold }</style>
+<g transform="translate(10,10) rotate(10) scale(1.2) skewX(5)">
+<text id="t" class="a b" x="0" y="20">Hi <tspan fill="red" dy="3">there</tspan></text>
+<use href="#r" x="40"/></g>
+<rect id="r" x="5" y="30" width="10" height="10" style="fill:orange;stroke:black"/>
+<g opacity="0.5"><rect x="60" y="0" width="30" height="30" fill="blue"/><rect x="70" y="10" width="30" height="30" fill="red"/></g>
+<image x="0" y="0" width="8" height="8" href="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAgAAAAICAYAAADED76LAAABCUlEQVR4nC3BTUvCcBwH8O//YZWL8KGaqGvN/1SEJkQdgg6BeIpY0CHoXXTqlQS9jOgFdMhbmERBnepikLIWG2SN2tJflz4flpk9IiUMOFRCZeo/eSvV1u7zcYJ/UjgVjMevWG6YMOdcrX8/bCSts0SRz2yMILmTQk+r2DrMYa99MHNxcl6fxmHCRMgIFuTvqoFygWHf89DvXS9Jl63LMPCJMgIiBof6xsTUkV8sotPeYbfD7naQD5uiuVAlO1FcOCnejQkeowFimvxYnWz68BVuRLmgLhumLaFKIIpwGnahKNLmXWluWjVx03upWHbmU8L+AEcBbzSCTgOtxst2VsTkqDV+dXlX/AN4xl4UpaPsqAAAAABJRU5ErkJggg=="/>
+</svg>
