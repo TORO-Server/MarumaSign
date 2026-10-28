@@ -27,6 +27,8 @@ final class TiffDecoder {
     private final byte[] d;
     private final boolean little;
     private final boolean big;
+    // すべての IFD で読んでよい、項目の値の数の残り (たくさんの IFD から同じ大きな値を指して、メモリを使い切らせないように)
+    private long valueBudget = 1 << 22;
 
     private TiffDecoder(byte[] d, boolean little, boolean big) {
         this.d = d;
@@ -139,6 +141,13 @@ final class TiffDecoder {
             final int valueField = entry + (big ? 12 : 8);
             final long where = total <= inline ? valueField : (big ? u64(valueField) : u32(valueField));
             if (where < 0 || where + total > d.length) continue;
+            if (tag == 347) {
+                // JPEG の共通の表は、バイト列のまま残す (位置と長さを覚える)
+                ifd.values.put(-347, new long[]{where, n});
+                continue;
+            }
+            if (n > valueBudget) continue;
+            valueBudget -= n;
             final long[] values = new long[(int) n];
             for (int k = 0; k < values.length; k++) {
                 final int p = (int) where + k * TYPE_SIZE[type];
@@ -151,11 +160,6 @@ final class TiffDecoder {
                     case 9: values[k] = (int) u32(p); break;
                     default: values[k] = u64(p); break;
                 }
-            }
-            if (tag == 347) {
-                // JPEG の共通の表は、バイト列のまま残す (位置と長さを覚える)
-                ifd.values.put(-347, new long[]{where, n});
-                continue;
             }
             ifd.values.put(tag, values);
         }
@@ -248,12 +252,22 @@ final class TiffDecoder {
                 final int chunk = plane * perPlane + index;
                 final long start = offsets[chunk];
                 long length = counts != null && chunk < counts.length ? counts[chunk] : d.length - start;
-                if (start < 0 || start >= d.length) throw new IOException("Invalid TIFF strip offset");
+                if (start < 0 || start >= d.length || length < 0) throw new IOException("Invalid TIFF strip offset");
                 if (start + length > d.length) length = d.length - start;
                 final int tx = index % across, ty = index / across;
-                final int rows = tiled ? chunkHeight : Math.min(chunkHeight, h - ty * chunkHeight);
+                // 絵に入る行だけを展開する (絵より大きなタイルで、使わない部分のために大きな領域を確保しないように)
+                final int rows = Math.min(chunkHeight, h - ty * chunkHeight);
                 final int expected = FormatUtil.checkedProduct(chunkRowBytes, rows, MAX_RAW);
-                byte[] raw = unpack(compression, (int) start, (int) length, expected, chunkWidth, rows, perPixel, tables, photometric, reverseBits);
+                final int fullExpected = FormatUtil.checkedProduct(chunkRowBytes, chunkHeight, MAX_RAW);
+                byte[] source = d;
+                int sourceStart = (int) start;
+                if (reverseBits && compression != 7) {
+                    // FillOrder が 2 なら、バイトの中のビットの並びが逆になっている (libtiff と同じく、JPEG 以外は展開の前に戻す)
+                    source = reverseBits(d, (int) start, (int) length);
+                    sourceStart = 0;
+                }
+                byte[] raw = unpack(compression, source, sourceStart, (int) length, expected, fullExpected, chunkWidth, chunkHeight, rows, perPixel,
+                        tables);
                 if (predictor == 2) horizontal(raw, chunkWidth, rows, perPixel, bps);
                 else if (predictor == 3) floating(raw, chunkWidth, rows, perPixel, bps);
                 if (raw.length < expected) raw = java.util.Arrays.copyOf(raw, expected);
@@ -282,21 +296,33 @@ final class TiffDecoder {
 
     // ---------- 展開 ----------
 
-    private byte[] unpack(int compression, int start, int length, int expected, int width, int rows, int perPixel, byte[] tables,
-                          int photometric, boolean reverseBits) throws IOException {
+    private static byte[] reverseBits(byte[] d, int start, int length) {
+        final byte[] out = new byte[length];
+        for (int i = 0; i < length; i++) out[i] = (byte) (Integer.reverse(d[start + i] & 0xFF) >>> 24);
+        return out;
+    }
+
+    /**
+     * 1 つのストリップかタイルを展開する。
+     *
+     * @param expected     使う行 (rows) の分のバイト数。これより先は展開しない
+     * @param fullExpected ストリップやタイルの本来の行数 (chunkHeight) の分のバイト数
+     */
+    private byte[] unpack(int compression, byte[] src, int start, int length, int expected, int fullExpected, int width, int chunkHeight,
+                          int rows, int perPixel, byte[] tables) throws IOException {
         switch (compression) {
             case 1: {
                 final byte[] raw = new byte[Math.min(length, expected)];
-                System.arraycopy(d, start, raw, 0, raw.length);
+                System.arraycopy(src, start, raw, 0, raw.length);
                 return raw;
             }
             case 5:
-                return lzw(start, length, expected);
+                return lzw(src, start, length, expected);
             case 8:
             case 32946: {
                 final Inflater inflater = new Inflater();
                 try {
-                    inflater.setInput(d, start, length);
+                    inflater.setInput(src, start, length);
                     final byte[] out = new byte[expected];
                     int filled = 0;
                     while (filled < expected && !inflater.finished()) {
@@ -312,17 +338,18 @@ final class TiffDecoder {
                 }
             }
             case 32773:
-                return packBits(start, length, expected);
+                return packBits(src, start, length, expected);
             case 50000:
-                return ZstdDecoder.decompress(d, start, length, expected);
+                // Zstandard は途中で止められないので、本来の大きさまで展開する (領域は展開した分だけ確保される)
+                return ZstdDecoder.decompress(src, start, length, fullExpected);
             case 7:
-                return jpeg(start, length, tables, expected, width, rows, perPixel);
+                return jpeg(src, start, length, tables, expected, width, chunkHeight, rows, perPixel);
             default:
                 throw new IOException("Unsupported TIFF compression: " + compression);
         }
     }
 
-    private byte[] packBits(int start, int length, int expected) throws IOException {
+    private static byte[] packBits(byte[] d, int start, int length, int expected) throws IOException {
         final byte[] out = new byte[expected];
         int p = start;
         final int end = start + length;
@@ -347,7 +374,7 @@ final class TiffDecoder {
     }
 
     // TIFF の LZW (上位のビットから詰める。符号の長さは、表が埋まる 1 つ手前で増える)
-    private byte[] lzw(int start, int length, int expected) throws IOException {
+    private static byte[] lzw(byte[] d, int start, int length, int expected) throws IOException {
         final byte[] out = new byte[expected];
         final int end = start + length;
         final int[] prefix = new int[4096];
@@ -417,7 +444,8 @@ final class TiffDecoder {
     }
 
     // JPEG の 1 つ分 (ストリップやタイル) を展開して、8 ビットの色を交互に並べたバイト列にする
-    private byte[] jpeg(int start, int length, byte[] tables, int expected, int width, int rows, int perPixel) throws IOException {
+    private static byte[] jpeg(byte[] d, int start, int length, byte[] tables, int expected, int width, int chunkHeight, int rows, int perPixel)
+            throws IOException {
         byte[] data;
         if (tables != null && length >= 2) {
             // 表 (SOI から EOI まで) の EOI を除き、本体の SOI を除いてつなぐ
@@ -429,10 +457,12 @@ final class TiffDecoder {
         } else {
             data = java.util.Arrays.copyOfRange(d, start, start + length);
         }
-        // libjpeg (ImageIO) には渡さず、色を変えない生の値で読む (色の変換は TIFF の指定に従って後で行う)
+        // libjpeg (ImageIO) には渡さず、色を変えない生の値で読む (色の変換は TIFF の指定に従って後で行う)。
+        // 中の JPEG はストリップやタイルの大きさまで (たくさんのストリップから同じ大きな JPEG を指して、時間を使わせないように)
         final JpegReader.Image jpeg;
         try {
-            jpeg = JpegReader.decode(data, 1, (long) ImageLoader.MAX_STATIC_SIZE * ImageLoader.MAX_STATIC_SIZE, JpegReader.NO_COLOR_TRANSFORM);
+            jpeg = JpegReader.decode(data, 1, Math.min((long) width * chunkHeight, (long) ImageLoader.MAX_STATIC_SIZE * ImageLoader.MAX_STATIC_SIZE),
+                    JpegReader.NO_COLOR_TRANSFORM);
         } catch (RuntimeException e) {
             throw new IOException("Invalid TIFF JPEG data", e);
         }
@@ -550,9 +580,16 @@ final class TiffDecoder {
                 if (format == 3) return Float.intBitsToFloat(v);
                 return format == 2 ? (v ^ 0x80000000) & 0xFFFFFFFFL : v & 0xFFFFFFFFL;
             }
-            default: {
+            case 64: {
                 final long a = get32(buffer, p) & 0xFFFFFFFFL, b = get32(buffer, p + 4) & 0xFFFFFFFFL;
                 return Double.longBitsToDouble(little ? b << 32 | a : a << 32 | b);
+            }
+            default: {
+                // 24・40・48・56 ビットの整数
+                final int bytes = bps >> 3;
+                long v = 0;
+                for (int i = 0; i < bytes; i++) v |= (buffer[p + i] & 0xFFL) << (little ? 8 * i : 8 * (bytes - 1 - i));
+                return format == 2 ? v ^ (1L << (bps - 1)) : v;
             }
         }
     }
@@ -615,7 +652,8 @@ final class TiffDecoder {
                 for (int s = 0; s < spp; s++) {
                     final double v = sample(image, planar, spp, rowBytes, bps, format, x, y, s);
                     if (isFloat) c[s] = FormatUtil.clamp8((int) Math.round((Double.isNaN(v) ? 0 : v) * floatScale * 255));
-                    else c[s] = FormatUtil.to8((long) v, max);
+                    // 32 ビットより大きい整数は、掛け算があふれないように上位の 8 ビットを使う
+                    else c[s] = bps > 32 ? (int) ((long) v >>> (bps - 8)) : FormatUtil.to8((long) v, max);
                 }
                 int a = hasAlpha ? c[colorSamples] : 255;
                 int r, g, b;

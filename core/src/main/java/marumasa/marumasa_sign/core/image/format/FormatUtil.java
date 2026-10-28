@@ -1,8 +1,13 @@
 package marumasa.marumasa_sign.core.image.format;
 
+import marumasa.marumasa_sign.core.anim.DecodedAnimation;
+import marumasa.marumasa_sign.core.anim.GifDecoder;
+import marumasa.marumasa_sign.core.image.ArgbPixels;
 import marumasa.marumasa_sign.core.image.DecodedImage;
+import marumasa.marumasa_sign.core.image.ImageBytes;
 import marumasa.marumasa_sign.core.image.ImageLoader;
 
+import java.awt.image.BufferedImage;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 
@@ -25,6 +30,34 @@ final class FormatUtil {
 
     static DecodedImage still(int width, int height, int[] argb) {
         return new DecodedImage(width, height, new int[][]{argb}, new int[]{1}, 0);
+    }
+
+    /**
+     * ほかの形式の中に入っている画像 (ICO と ICNS の中の PNG、SVG の data: URI) を読む。読めない形式なら null。
+     * ImageIO は大きさを確かめずに領域を確保したり、BMP や TIFF の中の JPEG を libjpeg で読んだりするので、
+     * PNG は大きさを確かめてから渡し、JPEG・BMP・GIF は自分のデコーダで読む。それ以外の形式は読まない。
+     */
+    static BufferedImage readEmbedded(byte[] data) throws IOException {
+        if (data.length >= 8 && (data[0] & 0xFF) == 0x89 && data[1] == 'P' && data[2] == 'N' && data[3] == 'G') {
+            if (data.length < 24 || !matchesAt(data, data.length, 12, "IHDR")) throw new IOException("Invalid embedded PNG");
+            checkSize(u32be(data, 16), u32be(data, 20));
+            return ImageBytes.read(data);
+        }
+        final DecodedImage image;
+        if (ImageBytes.isJpeg(data)) {
+            image = JpegDecoder.decode(data);
+        } else if (data.length >= 2 && data[0] == 'B' && data[1] == 'M') {
+            BmpDecoder.checkHeader(data);
+            image = BmpDecoder.decodeFile(data);
+        } else if (ImageLoader.isGif(data)) {
+            final DecodedAnimation gif = GifDecoder.read(data);
+            if (gif.getFrames().isEmpty()) throw new IOException("GIF has no frames");
+            checkSize(gif.getWidth(), gif.getHeight());
+            image = still(gif.getWidth(), gif.getHeight(), gif.getFrames().get(0).getPixels());
+        } else {
+            return null;
+        }
+        return ArgbPixels.wrap(image.width, image.height, image.frames[0]);
     }
 
     static int argb(int a, int r, int g, int b) {

@@ -41,12 +41,16 @@ final class PsdDecoder {
             palette = new int[256];
             for (int i = 0; i < 256; i++) palette[i] = FormatUtil.argb(255, d[p + i], d[p + 256 + i], d[p + 512 + i]);
         }
-        p += (int) modeLength;
+        // 長さの欄は 32 ビット (PSB のレイヤーは 64 ビット) なので、long で足して範囲を確かめる (int にすると桁あふれで戻ってしまう)
+        long at = p + modeLength;
         // 画像リソースとレイヤーの情報は読み飛ばす
-        p += 4 + (int) FormatUtil.u32be(d, p);
-        final long layerLength = version == 2 ? FormatUtil.u32be(d, p) << 32 | FormatUtil.u32be(d, p + 4) : FormatUtil.u32be(d, p);
-        p += (version == 2 ? 8 : 4) + (int) layerLength;
-        if (p + 2 > d.length) throw new IOException("PSD has no merged image");
+        if (at + 4 > d.length) throw new IOException("PSD has no merged image");
+        at += 4 + FormatUtil.u32be(d, (int) at);
+        if (at + (version == 2 ? 8 : 4) > d.length) throw new IOException("PSD has no merged image");
+        final long layerLength = version == 2 ? FormatUtil.u32be(d, (int) at) << 32 | FormatUtil.u32be(d, (int) at + 4) : FormatUtil.u32be(d, (int) at);
+        at += (version == 2 ? 8 : 4) + layerLength;
+        if (layerLength < 0 || at + 2 > d.length) throw new IOException("PSD has no merged image");
+        p = (int) at;
 
         final int compression = FormatUtil.u16be(d, p);
         p += 2;
@@ -75,7 +79,7 @@ final class PsdDecoder {
                 for (int y = 0; y < h; y++) {
                     final int lengthAt = p + (c * h + y) * lengthSize;
                     final int length = lengthSize == 4 ? FormatUtil.s32be(d, lengthAt) : FormatUtil.u16be(d, lengthAt);
-                    if (length < 0 || data + length > d.length) throw new IOException("Truncated PSD");
+                    if (length < 0 || (long) data + length > d.length) throw new IOException("Truncated PSD");
                     if (plane != null) packBits(d, data, length, plane, y * rowBytes, rowBytes);
                     data += length;
                 }

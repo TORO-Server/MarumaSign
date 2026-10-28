@@ -2,6 +2,7 @@ package marumasa.marumasa_sign.core.anim;
 
 import marumasa.marumasa_sign.core.image.ArgbPixels;
 import marumasa.marumasa_sign.core.image.ImageBytes;
+import marumasa.marumasa_sign.core.image.ImageLoader;
 
 import java.awt.image.BufferedImage;
 import java.io.ByteArrayOutputStream;
@@ -17,6 +18,9 @@ import java.util.zip.CRC32;
 public class ApngDecoder {
 
     private static final byte[] PNG_SIGNATURE = {(byte) 137, 80, 78, 71, 13, 10, 26, 10};
+    // 各コマの PNG に写すチャンク (色の一覧・透明・色空間)
+    private static final java.util.Set<String> COLOR_CHUNKS = new java.util.HashSet<String>(
+            Arrays.asList("PLTE", "tRNS", "gAMA", "cHRM", "sRGB", "iCCP", "sBIT"));
 
     static class RawChunk {
         String type;
@@ -66,12 +70,14 @@ public class ApngDecoder {
         byte[] ihdrData = null;
         List<RawChunk> metadataChunks = new ArrayList<>();
         List<ApngFrame> apngFrames = new ArrayList<>();
-        
+
         int numFrames = 1;
         int numPlays = 0; // 0 means infinite
 
         ApngFrame currentFrame = null;
         ByteArrayOutputStream currentFrameData = null;
+        // fcTL より前にある IDAT (アニメーションに含まれない、対応していないソフト向けの絵)
+        ApngFrame defaultImage = null;
 
         while (buffer.remaining() >= 8) {
             int length = buffer.getInt();
@@ -79,7 +85,8 @@ public class ApngDecoder {
             buffer.get(typeBytes);
             String type = new String(typeBytes, StandardCharsets.US_ASCII);
 
-            if (buffer.remaining() < length + 4) {
+            // 長さは 31 ビットまで。足し算があふれないように long で比べる
+            if (length < 0 || buffer.remaining() < (long) length + 4) {
                 throw new IOException("Truncated PNG chunk: " + type);
             }
 
@@ -99,28 +106,32 @@ public class ApngDecoder {
                 // If there was a previous frame being accumulated, finalize it
                 if (currentFrame != null && currentFrameData != null) {
                     currentFrame.imageData = currentFrameData.toByteArray();
-                    apngFrames.add(currentFrame);
+                    if (currentFrame == defaultImage) {
+                        // fcTL のない IDAT の絵は、アニメーションの 1 コマ目ではない (APNG の仕様)
+                    } else {
+                        apngFrames.add(currentFrame);
+                    }
                 }
+                if (data.length < 26) throw new IOException("Invalid fcTL chunk");
 
-                if (data.length >= 26) {
-                    ByteBuffer db = ByteBuffer.wrap(data);
-                    db.getInt(); // sequence_number
-                    currentFrame = new ApngFrame();
-                    currentFrame.w = db.getInt();
-                    currentFrame.h = db.getInt();
-                    currentFrame.x = db.getInt();
-                    currentFrame.y = db.getInt();
-                    currentFrame.delayNum = db.getShort() & 0xFFFF;
-                    currentFrame.delayDen = db.getShort() & 0xFFFF;
-                    currentFrame.disposalOp = db.get() & 0xFF;
-                    currentFrame.blendOp = db.get() & 0xFF;
-                    
-                    currentFrameData = new ByteArrayOutputStream();
-                }
+                ByteBuffer db = ByteBuffer.wrap(data);
+                db.getInt(); // sequence_number
+                currentFrame = new ApngFrame();
+                currentFrame.w = db.getInt();
+                currentFrame.h = db.getInt();
+                currentFrame.x = db.getInt();
+                currentFrame.y = db.getInt();
+                currentFrame.delayNum = db.getShort() & 0xFFFF;
+                currentFrame.delayDen = db.getShort() & 0xFFFF;
+                currentFrame.disposalOp = db.get() & 0xFF;
+                currentFrame.blendOp = db.get() & 0xFF;
+
+                currentFrameData = new ByteArrayOutputStream();
             } else if (type.equals("IDAT")) {
                 // If it's a static PNG (no fcTL yet), we treat the standard IDAT as frame 0
                 if (currentFrame == null) {
                     currentFrame = new ApngFrame();
+                    defaultImage = currentFrame;
                     if (ihdrData != null) {
                         ByteBuffer ihdrBuf = ByteBuffer.wrap(ihdrData);
                         currentFrame.w = ihdrBuf.getInt();
@@ -140,7 +151,8 @@ public class ApngDecoder {
                     // Skip 4 bytes of sequence number in fdAT
                     currentFrameData.write(data, 4, data.length - 4);
                 }
-            } else if (!type.equals("IEND")) {
+            } else if (COLOR_CHUNKS.contains(type)) {
+                // 色に関わるチャンクだけを、各コマの PNG に写す (文字などの大きなチャンクを、コマの数だけ写さないように)
                 metadataChunks.add(new RawChunk(type, data));
             }
         }
@@ -148,10 +160,11 @@ public class ApngDecoder {
         // Finalize last frame
         if (currentFrame != null && currentFrameData != null) {
             currentFrame.imageData = currentFrameData.toByteArray();
-            apngFrames.add(currentFrame);
+            // fcTL が 1 つもなければ、アニメーションに含まれない絵でも表示する
+            if (currentFrame != defaultImage || apngFrames.isEmpty()) apngFrames.add(currentFrame);
         }
 
-        if (ihdrData == null) {
+        if (ihdrData == null || ihdrData.length < 13) {
             throw new IOException("Missing IHDR chunk");
         }
 
@@ -162,6 +175,22 @@ public class ApngDecoder {
         ByteBuffer ihdrBuf = ByteBuffer.wrap(ihdrData);
         int canvasWidth = ihdrBuf.getInt();
         int canvasHeight = ihdrBuf.getInt();
+        // 全体の大きさは、ピクセルの領域を確保する前に確かめる (大きさを偽ったファイルでメモリ不足にならないように)
+        if (canvasWidth <= 0 || canvasHeight <= 0 || canvasWidth > ImageLoader.MAX_STATIC_SIZE || canvasHeight > ImageLoader.MAX_STATIC_SIZE) {
+            throw new IOException("APNG exceeds safety limits: " + canvasWidth + "x" + canvasHeight);
+        }
+        // 小さなファイルに、たくさんのコマを入れられるため、全部のコマのピクセル数の合計も確かめる
+        if (apngFrames.size() > ImageLoader.MAX_ANIMATION_FRAMES
+                || (long) apngFrames.size() * canvasWidth * canvasHeight > ImageLoader.MAX_ANIMATION_PIXELS) {
+            throw new IOException("APNG animation exceeds safety limits");
+        }
+        for (ApngFrame frame : apngFrames) {
+            // コマは全体の中に収まっていなければならない (APNG の仕様)
+            if (frame.w <= 0 || frame.h <= 0 || frame.x < 0 || frame.y < 0
+                    || (long) frame.x + frame.w > canvasWidth || (long) frame.y + frame.h > canvasHeight) {
+                throw new IOException("APNG frame is outside the canvas");
+            }
+        }
 
         AnimationCanvas canvas = new AnimationCanvas(canvasWidth, canvasHeight);
         List<AnimationFrame> frames = new ArrayList<>();
@@ -169,7 +198,7 @@ public class ApngDecoder {
         for (ApngFrame frame : apngFrames) {
             // Reconstruct single frame PNG
             byte[] singlePng = reconstructPng(ihdrData, metadataChunks, frame);
-            
+
             BufferedImage image;
             image = ImageBytes.read(singlePng);
             if (image == null) {
@@ -179,9 +208,10 @@ public class ApngDecoder {
             if (image.getWidth() != frame.w || image.getHeight() != frame.h) {
                 throw new IOException("APNG frame size does not match its header");
             }
-            int[] pixels = ArgbPixels.read(image);
+            // 灰色の PNG は、静止画の PNG と同じ色で読む
+            int[] pixels = ArgbPixels.readDisplay(image);
 
-            // APNG blend_op: 
+            // APNG blend_op:
             // 0 (SOURCE) -> 1 (OVERWRITE)
             // 1 (OVER) -> 0 (BLEND)
             int blend = (frame.blendOp == 0) ? 1 : 0;
