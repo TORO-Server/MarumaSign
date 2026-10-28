@@ -39,6 +39,8 @@ final class Shading {
     final List<double[]> triangles = new ArrayList<>();
     final List<float[][]> triangleColors = new ArrayList<>();
     final double[] bbox;
+    // シェーディングの外を塗る色 (Background、ARGB)。なければ 0。パターンとして使うときだけ塗る (sh では使わない)
+    int background;
 
     private Shading(int type, PdfColorSpace space, PdfFunction[] functions, double[] bbox) {
         this.type = type;
@@ -63,6 +65,13 @@ final class Shading {
             functions = new PdfFunction[]{PdfFunction.create(f)};
         }
         final Shading shading = new Shading(type, space, functions, PdfDocument.rectangle(dict.array("BBox")));
+        final PdfArray background = dict.array("Background");
+        final double[] values = background == null ? null : background.numbers();
+        if (values != null && values.length >= space.components()) {
+            final float[] components = new float[space.components()];
+            for (int i = 0; i < components.length; i++) components[i] = (float) values[i];
+            shading.background = 0xFF000000 | space.toRgb(components);
+        }
         switch (type) {
             case 1:
                 shading.readFunctionBased(dict);

@@ -25,10 +25,24 @@ final class ShadingPaint implements Paint {
 
     private final Shading shading;
     private final AffineTransform toPage;
+    // シェーディングの外を塗る色 (パターンのときの Background)。なければ 0
+    private final int background;
 
-    ShadingPaint(Shading shading, AffineTransform toPage) {
+    /**
+     * @param pattern シェーディングのパターンとして塗るか (Background を使う。sh では使わない)
+     */
+    ShadingPaint(Shading shading, AffineTransform toPage, boolean pattern) {
         this.shading = shading;
         this.toPage = toPage;
+        this.background = pattern ? shading.background : 0;
+    }
+
+    // シェーディングの空間の点 (x, y) の、BBox と Background を考えた色
+    private int finish(int color, double x, double y) {
+        final double[] b = shading.bbox;
+        // BBox は、塗るときの一時的なクリップ (8.7.4.5.1)
+        if (b != null && (x < b[0] || x > b[2] || y < b[1] || y > b[3])) return 0;
+        return color >>> 24 == 0 ? background : color;
     }
 
     @Override
@@ -47,7 +61,7 @@ final class ShadingPaint implements Paint {
         } catch (NoninvertibleTransformException e) {
             inverse = null;
         }
-        if (shading.type >= 4) return new MeshContext(toDevice, deviceBounds);
+        if (shading.type >= 4) return new MeshContext(toDevice, inverse, deviceBounds);
         return new PointContext(inverse);
     }
 
@@ -79,7 +93,7 @@ final class ShadingPaint implements Paint {
                         point[0] = x + i + 0.5;
                         point[1] = y + j + 0.5;
                         inverse.transform(point, 0, point, 0, 1);
-                        pixels[j * w + i] = shading.colorAt(point[0], point[1]);
+                        pixels[j * w + i] = finish(shading.colorAt(point[0], point[1]), point[0], point[1]);
                     }
                 }
             }
@@ -92,8 +106,11 @@ final class ShadingPaint implements Paint {
     private final class MeshContext implements PaintContext {
         private final Rectangle area;
         private final int[] pixels;
+        // 画素からシェーディングの空間へ (BBox と Background を使わないときと、戻せないときは null)
+        private final AffineTransform inverse;
 
-        MeshContext(AffineTransform toDevice, Rectangle bounds) {
+        MeshContext(AffineTransform toDevice, AffineTransform inverse, Rectangle bounds) {
+            this.inverse = shading.bbox != null || background != 0 ? inverse : null;
             Rectangle region = bounds == null ? new Rectangle(0, 0, 1, 1) : new Rectangle(bounds);
             if ((long) region.width * region.height > MAX_MESH_PIXELS) region = new Rectangle(region.x, region.y, 1, 1);
             area = region;
@@ -164,12 +181,20 @@ final class ShadingPaint implements Paint {
         public Raster getRaster(int x, int y, int w, int h) {
             final WritableRaster raster = MODEL.createCompatibleWritableRaster(w, h);
             final int[] out = new int[w * h];
+            final double[] point = new double[2];
             for (int j = 0; j < h; j++) {
                 final int sy = y + j - area.y;
-                if (sy < 0 || sy >= area.height) continue;
                 for (int i = 0; i < w; i++) {
                     final int sx = x + i - area.x;
-                    if (sx >= 0 && sx < area.width) out[j * w + i] = pixels[sy * area.width + sx];
+                    final int color = sx >= 0 && sx < area.width && sy >= 0 && sy < area.height ? pixels[sy * area.width + sx] : 0;
+                    if (inverse == null) {
+                        out[j * w + i] = color;
+                    } else {
+                        point[0] = x + i + 0.5;
+                        point[1] = y + j + 0.5;
+                        inverse.transform(point, 0, point, 0, 1);
+                        out[j * w + i] = finish(color, point[0], point[1]);
+                    }
                 }
             }
             raster.setDataElements(0, 0, w, h, out);

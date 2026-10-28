@@ -422,6 +422,17 @@ public final class PdfCheck {
                 expectColor(image, 160, 130, 0xFFFFFF, "knocked out area over white");
                 expectColor(image, 160, 170, 0x00FF00, "knocked out area over green");
                 break;
+            case "shading-pattern-bbox":
+                expectColor(image, 100, 100, 0xFF0000, "shading");
+                expectColor(image, 20, 100, 0x0000FF, "shading background");
+                expectColor(image, 190, 100, 0xFFFFFF, "shading outside the BBox");
+                expectColor(image, 100, 10, 0xFFFFFF, "shading outside the BBox");
+                break;
+            case "shading-sh-bbox":
+                expectColor(image, 100, 100, 0xFF0000, "shading");
+                expectColor(image, 20, 100, 0xFFFFFF, "background of sh");
+                expectColor(image, 190, 100, 0xFFFFFF, "shading outside the BBox");
+                break;
             case "cff-cidtogidmap":
                 // CID 1 は CIDToGIDMap で四角のグリフ 2 (ページの 50 から 150)
                 expect(gray(image, 100, 100) < 30, "CIDToGIDMap of an OpenType CFF font is ignored");

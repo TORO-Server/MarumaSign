@@ -202,6 +202,12 @@ final class PdfSamples {
                                     + "/Resources << /ExtGState << /A50 << /ca 0.5 >> /A0 << /ca 0 >> >> >>",
                             "1 0 0 rg 20 10 100 110 re f /A50 gs 0 0 1 rg 70 20 100 100 re f /A0 gs 140 0 40 200 re f"))});
         }
+        // シェーディングのパターンの BBox (クリップ) と Background (シェーディングの外の色)。sh では Background を使わない
+        final String backgroundShading = "<< /ShadingType 2 /ColorSpace /DeviceRGB /Coords [50 0 150 0] /BBox [0 0 180 180] /Background [0 0 1] "
+                + "/Function << /FunctionType 2 /Domain [0 1] /C0 [1 0 0] /C1 [1 0 0] /N 1 >> >>";
+        samples.add(new String[]{"shading-pattern-bbox", page("<< /Pattern << /P 5 0 R >> >>", "/Pattern cs /P scn 0 0 200 200 re f",
+                "<< /PatternType 2 /Shading " + backgroundShading + " >>")});
+        samples.add(new String[]{"shading-sh-bbox", page("<< /Shading << /S 5 0 R >> >>", "/S sh", backgroundShading)});
         // OpenType に入った、CID の決まっていない CFF を使う CIDFontType0 の CIDToGIDMap (CID 1 を、四角のグリフ 2 にする)
         samples.add(new String[]{"cff-cidtogidmap", page("<< /Font << /F1 5 0 R >> >>", "0 g BT /F1 100 Tf 50 50 Td <0001> Tj ET",
                 "<< /Type /Font /Subtype /Type0 /BaseFont /T /Encoding /Identity-H /DescendantFonts [6 0 R] >>",

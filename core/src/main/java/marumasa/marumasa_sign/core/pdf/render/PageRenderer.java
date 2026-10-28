@@ -1684,7 +1684,7 @@ public final class PageRenderer {
             return;
         }
         if (shading.space.isNone()) return;
-        final Paint paint = withTransfer(new ShadingPaint(shading, new AffineTransform(gs.ctm)));
+        final Paint paint = withTransfer(new ShadingPaint(shading, new AffineTransform(gs.ctm), false));
         // 塗る範囲: クリップの中 (シェーディングの BBox があれば、その中)
         Shape region = gs.clip != null ? gs.clip : canvasBoundsInPage();
         if (region == null) return;
@@ -1723,7 +1723,7 @@ public final class PageRenderer {
         if (dict.integer("PatternType", 1) == 2) {
             try {
                 final Shading shading = Shading.create(dict.get("Shading"), resources);
-                return shading.space.isNone() ? null : new ShadingPaint(shading, toPage);
+                return shading.space.isNone() ? null : new ShadingPaint(shading, toPage, true);
             } catch (IOException | RuntimeException e) {
                 Strict.check(e);
                 return null;
