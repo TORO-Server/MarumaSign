@@ -17,9 +17,9 @@ seed="${FUZZ_SEED:-$(date +%s)}"
 failed=()
 
 if [ "$mode" = "long" ]; then
-  pdf_fuzz=40000; image_fuzz=3000; structure_fuzz=3000; webp_fuzz=30000; decoder_fuzz_seconds=300; font_fuzz=100000
+  pdf_fuzz=40000; image_fuzz=3000; structure_fuzz=20000; webp_fuzz=30000; decoder_fuzz_seconds=300; font_fuzz=100000
 else
-  pdf_fuzz=3000; image_fuzz=300; structure_fuzz=200; webp_fuzz=3000; decoder_fuzz_seconds=20; font_fuzz=5000
+  pdf_fuzz=3000; image_fuzz=300; structure_fuzz=1000; webp_fuzz=3000; decoder_fuzz_seconds=20; font_fuzz=5000
 fi
 
 echo "mode=$mode seed=$seed"
@@ -94,8 +94,12 @@ check jpegCheck 300 -Xmx512m -Xss512k marumasa.marumasa_sign.core.image.format.J
 check imageRegressionCheck 300 -Xmx512m -Xss512k marumasa.marumasa_sign.core.image.ImageRegressionCheck
 check imageFormatsFuzz 3600 -Xmx1g -Xss512k marumasa.marumasa_sign.core.image.ImageFormatsFuzz "$image_fuzz" \
   "$root/tools/verify/test-image.png" src/test/resources/jpeg/*.jpg src/test/resources/image
+check structureRegressionCheck 600 -Xmx2g -Xss512k marumasa.marumasa_sign.core.structure.StructureRegressionCheck
 check structureFuzz 3600 -Xmx2g -Xss512k marumasa.marumasa_sign.core.structure.StructureFuzz "$structure_fuzz" \
-  "$root/tools/verify/test-structure.nbt"
+  src/test/resources/structure "$root/tools/verify/test-structure.nbt"
+# 3D モデルにするところまで (ゲームの jar の代わりに、試験用に作る資源を使う。通信はしない)
+check structureMeshFuzz 3600 -Xmx2g -Xss512k -Dfuzz.mesh=true marumasa.marumasa_sign.core.structure.StructureFuzz "$structure_fuzz" \
+  src/test/resources/structure "$root/tools/verify/test-structure.nbt"
 check dracoCheck 900 -Xmx1g -Xss512k marumasa.marumasa_sign.core.gltf.DracoCheck
 check splatCheck 900 -Xmx2g -Xss512k marumasa.marumasa_sign.core.splat.SplatCheck
 # 仕様書から書き直したデコーダの試験 (libwebp などの結果との比較と、壊したデータ)

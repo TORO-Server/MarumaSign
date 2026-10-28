@@ -303,7 +303,30 @@ public final class StructureFuzz {
             mutateSlot(slots.get(random.nextInt(slots.size())), slots, random);
         }
         final Writer writer = new Writer(seed.little, random, random.nextInt(4) == 0 ? 1 + random.nextInt(3) : 0);
-        return writer.root(seed.rootName, root);
+        return write(writer, seed.rootName, root);
+    }
+
+    // 何段にも入れ子にした木を書くので、大きなスタックのスレッドで書く (試す側は、深すぎる再帰を見つけるために -Xss を小さくしている)
+    private static byte[] write(Writer writer, String rootName, Map<String, Object> root) throws IOException {
+        final Object[] result = new Object[1];
+        final Thread thread = new Thread(null, () -> {
+            try {
+                result[0] = writer.root(rootName, root);
+            } catch (IOException | RuntimeException | Error e) {
+                result[0] = e;
+            }
+        }, "StructureFuzz-writer", 256L * 1024 * 1024);
+        thread.start();
+        try {
+            thread.join();
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new IOException("Interrupted", e);
+        }
+        if (result[0] instanceof IOException) throw (IOException) result[0];
+        if (result[0] instanceof RuntimeException) throw (RuntimeException) result[0];
+        if (result[0] instanceof Error) throw (Error) result[0];
+        return (byte[]) result[0];
     }
 
     // 値をすべて写す (元の種を壊さないように)
