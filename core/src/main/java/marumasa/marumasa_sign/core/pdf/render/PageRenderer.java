@@ -595,10 +595,75 @@ public final class PageRenderer {
                 case "SMask":
                     gs.softMask = value instanceof PdfDict ? softMask((PdfDict) value) : null;
                     break;
+                case "TR":
+                    // TR2 があれば、そちらを使う
+                    if (!state.has("TR2")) gs.transfer = transfer(value);
+                    break;
+                case "TR2":
+                    gs.transfer = transfer(value);
+                    break;
                 default:
                     break;
             }
         }
+    }
+
+    /**
+     * 転送関数の表 (赤、緑、青)。関数 1 つか、4 つの配列 (初めの 3 つを赤、緑、青に使う)。Identity、Default、読めないものは null。
+     */
+    private static int[][] transfer(Object value) {
+        final Object[] functions = new Object[3];
+        if (value instanceof PdfArray) {
+            final PdfArray list = (PdfArray) value;
+            if (list.size() < 3) return null;
+            for (int i = 0; i < 3; i++) functions[i] = list.get(i);
+        } else if (value instanceof PdfName) {
+            return null;
+        } else {
+            java.util.Arrays.fill(functions, value);
+        }
+        final int[][] tables = new int[3][];
+        boolean identity = true;
+        for (int c = 0; c < 3; c++) {
+            if (functions[c] instanceof PdfName) {
+                // 成分ごとの Identity
+                tables[c] = null;
+                continue;
+            }
+            if (c > 0 && functions[c] == functions[c - 1] && tables[c - 1] != null) {
+                tables[c] = tables[c - 1];
+                identity = false;
+                continue;
+            }
+            final PdfFunction function;
+            try {
+                function = PdfFunction.create(functions[c]);
+            } catch (IOException e) {
+                return null;
+            }
+            final int[] table = new int[256];
+            final double[] in = new double[1], out = new double[Math.max(1, function.outputs())];
+            for (int v = 0; v < 256; v++) {
+                in[0] = v / 255.0;
+                function.evaluate(in, out);
+                table[v] = (int) Math.round(clamp01(out[0]) * 255);
+            }
+            tables[c] = table;
+            identity = false;
+        }
+        return identity ? null : tables;
+    }
+
+    // 色 (RGB) に転送関数をかける
+    private static int transfer(int[][] tables, int rgb) {
+        if (tables == null) return rgb;
+        int result = rgb & 0xFF000000;
+        for (int c = 0; c < 3; c++) {
+            final int shift = 16 - 8 * c;
+            final int v = (rgb >> shift) & 0xFF;
+            result |= (tables[c] == null ? v : tables[c][v]) << shift;
+        }
+        return result;
     }
 
     private static double clamp01(double value) {
@@ -685,7 +750,7 @@ public final class PageRenderer {
             return patternPaint(pattern, ((SpecialSpaces.Pattern) space).base, color);
         }
         try {
-            return new Color(space.toRgb(color));
+            return new Color(transfer(gs.transfer, space.toRgb(color)));
         } catch (RuntimeException e) {
             Strict.check(e);
             return Color.BLACK;
@@ -700,7 +765,7 @@ public final class PageRenderer {
         userPath.setWindingRule(windingRule);
         final Shape pageShape = gs.ctm.createTransformedShape(userPath);
         if (hiddenDepth == 0 && userPath.getCurrentPoint() != null) {
-            if (fill) fillShape(pageShape, windingRule);
+            if (fill) fillShape(snapRectangle(pageShape), windingRule);
             if (stroke) strokeShape(pageShape);
         }
         if (pendingClip != 0) {
@@ -751,37 +816,238 @@ public final class PageRenderer {
         final Paint paint = paint(true);
         if (paint == null) return;
         // 画面から遠くへ伸びる道は、先に切り取る。切り取った端が見えないよう、線の太さの分 (とがった角の分も) 範囲を広げる
-        final double reach = gs.lineWidth * averageScale(gs.ctm) * averageScale(canvas.base) * Math.max(1, Math.min(gs.miterLimit, 1000));
-        final Shape pageShape = ShapeLimits.forStroke(original, canvas, limitMargin() + (reach >= 0 ? Math.min(reach, 1e7) : 0));
-        final BasicStroke stroke = stroke(pageShape);
-        final Shape outline;
+        final double deviceScale = averageScale(canvas.base);
+        final double deviceWidth = gs.lineWidth * averageScale(gs.ctm) * deviceScale;
+        final double reach = deviceWidth * Math.max(1, Math.min(gs.miterLimit, 1000));
+        Shape pageShape = ShapeLimits.forStroke(original, canvas, limitMargin() + (reach >= 0 ? Math.min(reach, 1e7) : 0));
+        Shape outline = null;
         try {
-            outline = ShapeLimits.forFill(stroke.createStrokedShape(pageShape), canvas, limitMargin());
+            // 縦と横で拡大率の違う CTM では、線の太さも向きで変わる (8.4.3.2)。ユーザー空間で線を太らせてから変換する
+            if (deviceWidth >= 1 && !isConformal(gs.ctm)) outline = userSpaceOutline(pageShape, deviceScale);
+            if (outline == null) {
+                // 1 画素より細い、縦と横だけの線は、画素の中心に合わせて 1 画素の太さで描く
+                // (ぼやけた灰色の 2 本にならないように。poppler の線の調整と同じ)
+                final Shape snapped = deviceWidth >= 1 ? null : snapThinLines(pageShape, deviceWidth);
+                if (snapped != null) pageShape = snapped;
+                // 太さ 0 の線は、描ける中でいちばん細い線 (1 画素) にする (8.4.3.2)。
+                // ほかの細い線は、見えるように 0.25 ポイントより細くしない (Adobe Reader と同じ)
+                final double thinnest = snapped != null || gs.lineWidth == 0 ? (deviceScale > 0 ? 1 / deviceScale : 1) : 0.25;
+                final double scale = averageScale(gs.ctm);
+                final double width = gs.lineWidth * scale;
+                outline = stroke(pageShape, scale, deviceScale, width >= thinnest ? width : thinnest).createStrokedShape(pageShape);
+                // 縦と横の辺だけの太い線は、輪郭の辺を画素の境目に合わせる (poppler の線の調整と同じ)
+                if (snapped == null && deviceWidth >= 1) outline = snapOutline(outline);
+            }
+            outline = ShapeLimits.forFill(outline, canvas, limitMargin());
         } catch (RuntimeException e) {
             Strict.check(e);
             return;
         }
+        final Shape filled = outline;
         canvas.paint(new Canvas.Painter() {
             @Override
             public void paint(Graphics2D g) {
                 g.setPaint(paint);
-                g.fill(outline);
+                g.fill(filled);
             }
-        }, outline.getBounds2D(), gs.strokeAlpha, gs.softMask, gs.blendMode, gs.clip);
+        }, filled.getBounds2D(), gs.strokeAlpha, gs.softMask, gs.blendMode, gs.clip);
     }
 
-    // 線の太さなどをページの空間にしたもの。太さは CTM の平均の拡大率で変える
-    private BasicStroke stroke(Shape pageShape) {
-        final double scale = averageScale(gs.ctm);
-        float width = (float) (gs.lineWidth * scale);
-        // 細い線 (太さ 0 を含む) でも見えるように、0.25 ポイントより細くしない (Adobe Reader と同じ)
-        if (!(width >= 0.25f) || Float.isInfinite(width)) width = 0.25f;
-        final double deviceScale = averageScale(canvas.base);
+    // 回転と、縦横同じ拡大 (と裏返し) だけの変換か
+    private static boolean isConformal(AffineTransform m) {
+        final double a = m.getScaleX(), b = m.getShearY(), c = m.getShearX(), d = m.getScaleY();
+        final double size = Math.max(Math.max(Math.abs(a), Math.abs(b)), Math.max(Math.abs(c), Math.abs(d)));
+        final double tolerance = size * 1e-3;
+        return (Math.abs(a - d) <= tolerance && Math.abs(b + c) <= tolerance) || (Math.abs(a + d) <= tolerance && Math.abs(b - c) <= tolerance);
+    }
+
+    /**
+     * ユーザー空間で太らせた線の輪郭 (ページの空間)。CTM がつぶれている (縦と横の拡大率の差が大きすぎる) ときは null。
+     */
+    private Shape userSpaceOutline(Shape pageShape, double deviceScale) {
+        final AffineTransform ctm = gs.ctm;
+        final double det = Math.abs(ctm.getDeterminant());
+        final double scale = averageScale(ctm);
+        // 縦と横の拡大率の比が大きすぎると、ユーザー空間の座標が大きくなりすぎる
+        if (!(det > 0) || !(scale * scale / det < 1e4)) return null;
+        final Shape userShape;
+        try {
+            userShape = ctm.createInverse().createTransformedShape(pageShape);
+        } catch (NoninvertibleTransformException e) {
+            return null;
+        }
+        return ctm.createTransformedShape(stroke(userShape, 1, scale * deviceScale, gs.lineWidth).createStrokedShape(userShape));
+    }
+
+    /**
+     * 縦と横の辺の長方形 1 つだけの道なら、辺を画素の境目に合わせる (1 画素より細ければ 1 画素にする)。
+     * 細い長方形で描いた罫線が、薄い灰色でぼやけて見えないように (poppler や Acrobat の線の調整と同じ)。ほかの形はそのまま返す。
+     */
+    private Shape snapRectangle(Shape pageShape) {
+        final double[] r = deviceRectangle(pageShape);
+        if (r == null) return pageShape;
+        final double[] x = snapSpan(r[0], r[1]), y = snapSpan(r[2], r[3]);
+        return pageRectangle(x[0], x[1], y[0], y[1], pageShape);
+    }
+
+    /**
+     * 道が、画素の空間で縦と横の辺の長方形 1 つだけなら、その範囲 {左, 右, 上, 下} (画素)。ほかの形なら null。
+     */
+    private double[] deviceRectangle(Shape pageShape) {
+        final PathIterator it = pageShape.getPathIterator(canvas.base);
+        final double[] c = new double[6];
+        final double[] xs = new double[5], ys = new double[5];
+        int points = 0;
+        boolean closed = false;
+        for (; !it.isDone(); it.next()) {
+            final int type = it.currentSegment(c);
+            if (closed) {
+                // 閉じたあとの moveTo (閉じた点に戻るもの) だけは許す
+                if (type == PathIterator.SEG_MOVETO && c[0] == xs[0] && c[1] == ys[0]) continue;
+                return null;
+            }
+            if (type == PathIterator.SEG_CLOSE) {
+                closed = true;
+            } else if ((type == PathIterator.SEG_MOVETO) == (points == 0) && (type == PathIterator.SEG_MOVETO || type == PathIterator.SEG_LINETO)) {
+                if (points == 5) return null;
+                xs[points] = c[0];
+                ys[points] = c[1];
+                points++;
+            } else {
+                return null;
+            }
+        }
+        // 最後の点が初めの点と同じなら除く
+        if (points == 5 && xs[4] == xs[0] && ys[4] == ys[0]) points = 4;
+        if (points != 4) return null;
+        double minX = xs[0], maxX = xs[0], minY = ys[0], maxY = ys[0];
+        for (int i = 0; i < 4; i++) {
+            final int j = (i + 1) % 4;
+            // 辺は縦か横
+            if (Math.abs(xs[i] - xs[j]) > 1e-6 && Math.abs(ys[i] - ys[j]) > 1e-6) return null;
+            minX = Math.min(minX, xs[i]);
+            maxX = Math.max(maxX, xs[i]);
+            minY = Math.min(minY, ys[i]);
+            maxY = Math.max(maxY, ys[i]);
+        }
+        if (!(Math.abs(minX) < 1e7) || !(Math.abs(maxX) < 1e7) || !(Math.abs(minY) < 1e7) || !(Math.abs(maxY) < 1e7)) return null;
+        return new double[]{minX, maxX, minY, maxY};
+    }
+
+    // 画素の範囲の長方形を、ページの空間にしたもの。戻せなければ fallback
+    private Shape pageRectangle(double x0, double x1, double y0, double y1, Shape fallback) {
+        try {
+            return canvas.base.createInverse().createTransformedShape(new Rectangle2D.Double(x0, y0, x1 - x0, y1 - y0));
+        } catch (NoninvertibleTransformException e) {
+            return fallback;
+        }
+    }
+
+    // 範囲の両端を画素の境目に丸める。同じになれば、その境目から 1 画素にする (poppler と同じ)
+    private static double[] snapSpan(double min, double max) {
+        final double low = Math.floor(min + 0.5);
+        return new double[]{low, Math.max(low + 1, Math.floor(max + 0.5))};
+    }
+
+    /**
+     * 縦と横の線分だけでできた道を、画素の中心に合わせる。斜めの線や曲線があれば null。
+     * 短い (長さが 1 画素に満たない) 道も null (細かい線分を並べた折れ線が、1 画素の太さで濃くなりすぎないように)。
+     */
+    private Shape snapThinLines(Shape pageShape, double deviceWidth) {
+        final double half = deviceWidth > 0 ? deviceWidth / 2 : 0;
+        final AffineTransform toDevice = canvas.base;
+        final Path2D.Double snapped = new Path2D.Double(pageShape instanceof Path2D ? ((Path2D) pageShape).getWindingRule() : Path2D.WIND_NON_ZERO);
+        final PathIterator it = pageShape.getPathIterator(toDevice);
+        final double[] c = new double[6];
+        double x = 0, y = 0, startX = 0, startY = 0, length = 0;
+        int segments = 0;
+        for (; !it.isDone(); it.next()) {
+            if (++segments > 100_000) return null;
+            final int type = it.currentSegment(c);
+            if (type == PathIterator.SEG_MOVETO) {
+                x = startX = c[0];
+                y = startY = c[1];
+                snapped.moveTo(pixelCenter(x, half), pixelCenter(y, half));
+            } else if (type == PathIterator.SEG_LINETO) {
+                if (Math.abs(c[0] - x) > 1e-3 && Math.abs(c[1] - y) > 1e-3) return null;
+                length += Math.abs(c[0] - x) + Math.abs(c[1] - y);
+                x = c[0];
+                y = c[1];
+                snapped.lineTo(pixelCenter(x, half), pixelCenter(y, half));
+            } else if (type == PathIterator.SEG_CLOSE) {
+                if (Math.abs(startX - x) > 1e-3 && Math.abs(startY - y) > 1e-3) return null;
+                length += Math.abs(startX - x) + Math.abs(startY - y);
+                x = startX;
+                y = startY;
+                snapped.closePath();
+            } else {
+                return null;
+            }
+        }
+        if (!(length >= 1)) return null;
+        try {
+            return snapped.createTransformedShape(toDevice.createInverse());
+        } catch (NoninvertibleTransformException e) {
+            return null;
+        }
+    }
+
+    /**
+     * 縦と横の線分だけでできた輪郭の頂点を、画素の境目に丸める。斜めの線や曲線があれば、そのまま返す。
+     */
+    private Shape snapOutline(Shape outline) {
+        final AffineTransform toDevice = canvas.base;
+        final Path2D.Double snapped = new Path2D.Double(outline instanceof Path2D ? ((Path2D) outline).getWindingRule() : Path2D.WIND_NON_ZERO);
+        final double[] c = new double[6];
+        double x = 0, y = 0, startX = 0, startY = 0;
+        int segments = 0;
+        for (final PathIterator it = outline.getPathIterator(toDevice); !it.isDone(); it.next()) {
+            if (++segments > 100_000) return outline;
+            final int type = it.currentSegment(c);
+            if (type == PathIterator.SEG_MOVETO) {
+                x = startX = c[0];
+                y = startY = c[1];
+                snapped.moveTo(Math.floor(x + 0.5), Math.floor(y + 0.5));
+            } else if (type == PathIterator.SEG_LINETO) {
+                if (Math.abs(c[0] - x) > 1e-3 && Math.abs(c[1] - y) > 1e-3) return outline;
+                x = c[0];
+                y = c[1];
+                snapped.lineTo(Math.floor(x + 0.5), Math.floor(y + 0.5));
+            } else if (type == PathIterator.SEG_CLOSE) {
+                if (Math.abs(startX - x) > 1e-3 && Math.abs(startY - y) > 1e-3) return outline;
+                snapped.closePath();
+            } else {
+                return outline;
+            }
+        }
+        if (!(Math.abs(x) < 1e7) || !(Math.abs(y) < 1e7)) return outline;
+        try {
+            return snapped.createTransformedShape(toDevice.createInverse());
+        } catch (NoninvertibleTransformException e) {
+            return outline;
+        }
+    }
+
+    // 中心 v、太さの半分 half の線の、端に近い画素の境目から始まる 1 画素の中心 (poppler の線の調整と同じ選び方)
+    private static double pixelCenter(double v, double half) {
+        return Double.isNaN(v) || Double.isInfinite(v) ? v : Math.floor(v - half + 0.5) + 0.5;
+    }
+
+    /**
+     * 線の太らせ方。
+     *
+     * @param shape       太らせる道 (ユーザー空間かページの空間)
+     * @param scale       ユーザー空間から、その空間への拡大率
+     * @param deviceScale その空間から、画素への拡大率
+     * @param width       その空間での線の太さ (正の数)
+     */
+    private BasicStroke stroke(Shape shape, double scale, double deviceScale, double width) {
+        final float w = (float) Math.min(width, 1e15);
         final int cap = gs.lineCap == 1 ? BasicStroke.CAP_ROUND : gs.lineCap == 2 ? BasicStroke.CAP_SQUARE : BasicStroke.CAP_BUTT;
         final int join = gs.lineJoin == 1 ? BasicStroke.JOIN_ROUND : gs.lineJoin == 2 ? BasicStroke.JOIN_BEVEL : BasicStroke.JOIN_MITER;
         final float miter = (float) Math.max(1, Math.min(gs.miterLimit, 1000));
-        final float[] dash = dash(scale, pageShape, deviceScale);
-        if (dash == null) return new BasicStroke(width, cap, join, miter);
+        final float[] dash = dash(scale, shape, deviceScale);
+        if (dash == null) return new BasicStroke(w, cap, join, miter);
         // 位相は 1 周期の中に収めて渡す。Java 8 の Java2D は、位相から区切りの長さを 1 つずつ引いていくので、
         // 1e30 のような位相では、引いても値が変わらず、終わらなくなる (区切りの数が奇数なら、2 周で元に戻る)
         double period = 0;
@@ -790,7 +1056,7 @@ public final class PageRenderer {
         double phase = gs.dashPhase * scale;
         phase = Double.isNaN(phase) || Double.isInfinite(phase) ? 0 : phase % period;
         if (phase < 0) phase += period;
-        return new BasicStroke(width, cap, join, miter, dash, (float) Math.min(phase, period));
+        return new BasicStroke(w, cap, join, miter, dash, (float) Math.min(phase, period));
     }
 
     /**
@@ -918,7 +1184,7 @@ public final class PageRenderer {
         if (hiddenDepth > 0 && !clip) return;
         final GeneralPath glyph = font.path(character);
         if (glyph.getCurrentPoint() == null) return;
-        final Shape pageShape = glyphTransform(verticalOrigin).createTransformedShape(glyph);
+        final Shape pageShape = snapBaseline(glyphTransform(verticalOrigin)).createTransformedShape(glyph);
         if (hiddenDepth == 0) {
             if (mode == 0 || mode == 2 || mode == 4 || mode == 6) fillShape(pageShape, Path2D.WIND_NON_ZERO);
             if (mode == 1 || mode == 2 || mode == 5 || mode == 6) strokeShape(pageShape);
@@ -926,6 +1192,29 @@ public final class PageRenderer {
         if (clip) {
             if (textClip == null) textClip = new GeneralPath(GeneralPath.WIND_NON_ZERO);
             textClip.append(pageShape, false);
+        }
+    }
+
+    /**
+     * 傾いていない文字の位置を、画素の格子に合わせる: 基準線は画素の境目に、横の位置は小さな文字なら 1/4 画素、大きな文字なら 1 画素の単位に
+     * (文字の上下の端がにじまないように。poppler の文字の置き方と同じ)。
+     */
+    private AffineTransform snapBaseline(AffineTransform glyphToPage) {
+        final AffineTransform toDevice = new AffineTransform(canvas.base);
+        toDevice.concatenate(glyphToPage);
+        final double tx = toDevice.getTranslateX(), ty = toDevice.getTranslateY();
+        if (toDevice.getShearY() != 0 || toDevice.getShearX() != 0 || !(Math.abs(tx) < 1e6) || !(Math.abs(ty) < 1e6)) return glyphToPage;
+        final double step = Math.abs(toDevice.getScaleY()) < 37.5 ? 0.25 : 1;
+        final double dx = Math.floor(tx / step) * step - tx;
+        final double dy = Math.floor(ty) - ty;
+        if (dx == 0 && dy == 0) return glyphToPage;
+        try {
+            final AffineTransform result = canvas.base.createInverse();
+            result.translate(dx, dy);
+            result.concatenate(toDevice);
+            return result;
+        } catch (NoninvertibleTransformException e) {
+            return glyphToPage;
         }
     }
 
@@ -1195,12 +1484,13 @@ public final class PageRenderer {
             image = downscale(image, Math.min(image.getWidth(), Math.max(1, targetWidth)), Math.min(image.getHeight(), Math.max(1, targetHeight)));
         }
         final int w = image.getWidth(), h = image.getHeight();
-        // 画像の空間 (左上が原点、画素の単位) から、ページの空間へ
-        final AffineTransform imageToPage = new AffineTransform(gs.ctm);
+        // 画像の空間 (左上が原点、画素の単位) から、ページの空間へ。傾いていない画像は、端を画素の境目に合わせる
+        final AffineTransform unitToPage = snapImage(toDevice);
+        final AffineTransform imageToPage = new AffineTransform(unitToPage);
         imageToPage.translate(0, 1);
         imageToPage.scale(1.0 / w, -1.0 / h);
         final boolean smooth = result.interpolate || deviceWidth < result.sourceWidth || deviceHeight < result.sourceHeight;
-        final Shape unit = gs.ctm.createTransformedShape(new Rectangle2D.Double(0, 0, 1, 1));
+        final Shape unit = unitToPage.createTransformedShape(new Rectangle2D.Double(0, 0, 1, 1));
         if (result.stencil) {
             final Paint paint = paint(false);
             if (paint == null) return;
@@ -1212,7 +1502,52 @@ public final class PageRenderer {
             }
             return;
         }
-        drawBufferedImage(image, imageToPage, unit, smooth);
+        if (gs.transfer != null) image = transferImage(image, gs.transfer);
+        // 4 倍より小さく広げる画像も、なめらかにする (画素の角ばりが目立たないように。poppler と同じ)。
+        // それより大きく広げるものは、元の画素が見えるように、そのまま広げる
+        final boolean slightlyEnlarged = deviceWidth < 4.0 * result.sourceWidth && deviceHeight < 4.0 * result.sourceHeight;
+        drawBufferedImage(image, imageToPage, unit, smooth || slightlyEnlarged);
+    }
+
+    // 画像の色に転送関数をかけたもの (元の画像は覚えておいて使い回すので、写しを作る)
+    private static BufferedImage transferImage(BufferedImage image, int[][] tables) {
+        final BufferedImage result = new BufferedImage(image.getWidth(), image.getHeight(), BufferedImage.TYPE_INT_ARGB);
+        final int[] in = ((DataBufferInt) image.getRaster().getDataBuffer()).getData();
+        final int[] out = ((DataBufferInt) result.getRaster().getDataBuffer()).getData();
+        for (int i = 0; i < in.length && i < out.length; i++) out[i] = transfer(tables, in[i]);
+        return result;
+    }
+
+    /**
+     * 画像の単位の正方形からページの空間への変換。画素の空間で傾いていなければ、画像の端を、画像の掛かる画素の外側の境目まで広げる
+     * (端がぼやけたり、並べた画像の間に隙間が見えたりしないように。poppler と同じ)。
+     *
+     * @param toDevice 単位の正方形から画素への変換
+     */
+    private AffineTransform snapImage(AffineTransform toDevice) {
+        final double sx = toDevice.getScaleX(), sy = toDevice.getScaleY();
+        final double tx = toDevice.getTranslateX(), ty = toDevice.getTranslateY();
+        final boolean straight = Math.abs(toDevice.getShearX()) <= Math.abs(sy) * 1e-9 && Math.abs(toDevice.getShearY()) <= Math.abs(sx) * 1e-9;
+        if (!straight || !(Math.abs(sx) < 1e6) || !(Math.abs(sy) < 1e6) || !(Math.abs(tx) < 1e6) || !(Math.abs(ty) < 1e6)
+                || sx == 0 || sy == 0) {
+            return new AffineTransform(gs.ctm);
+        }
+        final double[] x = imageSpan(tx, tx + sx), y = imageSpan(ty, ty + sy);
+        final AffineTransform snapped = new AffineTransform(sx > 0 ? x[1] - x[0] : x[0] - x[1], 0, 0, sy > 0 ? y[1] - y[0] : y[0] - y[1],
+                sx > 0 ? x[0] : x[1], sy > 0 ? y[0] : y[1]);
+        try {
+            final AffineTransform result = canvas.base.createInverse();
+            result.concatenate(snapped);
+            return result;
+        } catch (NoninvertibleTransformException e) {
+            return new AffineTransform(gs.ctm);
+        }
+    }
+
+    // 画像の掛かる画素の範囲 {左, 右} (外側の境目)
+    private static double[] imageSpan(double a, double b) {
+        final double low = Math.floor(Math.min(a, b));
+        return new double[]{low, Math.max(low + 1, Math.ceil(Math.max(a, b)))};
     }
 
     private void drawBufferedImage(final BufferedImage image, final AffineTransform imageToPage, Shape bounds, final boolean smooth) {
@@ -1438,6 +1773,8 @@ public final class PageRenderer {
             for (int i = -repeatX; i <= repeatX; i++) {
                 for (int j = -repeatY; j <= repeatY; j++) {
                     gs = new GraphicsState();
+                    // 線の太さは 0 (いちばん細い線) から始める (Adobe Reader と poppler の振る舞い)
+                    gs.lineWidth = 0;
                     gs.ctm = AffineTransform.getTranslateInstance(i * xStep, j * yStep);
                     gs.clip = new Area(new Rectangle2D.Double(bbox[0] + i * xStep, bbox[1] + j * yStep, bbox[2] - bbox[0], bbox[3] - bbox[1]));
                     if (uncoloredColor != null) {
@@ -1500,6 +1837,12 @@ public final class PageRenderer {
         if (cache.isHiddenContent(annotation.dict("OC"))) return;
         final double[] rect = PdfDocument.rectangle(annotation.array("Rect"));
         if (rect == null || rect[2] - rect[0] <= 0 || rect[3] - rect[1] <= 0) return;
+        appearance(annotation, rect);
+        if ("Link".equals(annotation.name("Subtype"))) linkBorder(annotation, rect);
+    }
+
+    // 注釈の外観 (/AP の /N) を描く
+    private void appearance(PdfDict annotation, double[] rect) {
         final PdfDict appearances = annotation.dict("AP");
         if (appearances == null) return;
         final Object normal = appearances.get("N");
@@ -1528,6 +1871,49 @@ public final class PageRenderer {
         gs.clip = saved.clip;
         try {
             drawForm(form, a);
+        } finally {
+            gs = saved;
+        }
+    }
+
+    /**
+     * リンクの枠 (12.5.2 の Border と BS、12.5.4)。太さの既定は 1、色 (C) がなければ黒、空の配列なら描かない
+     * (Acrobat と poppler の画面での表示と同じ)。
+     */
+    private void linkBorder(PdfDict annotation, double[] rect) {
+        double width = 1;
+        double[] dash = null;
+        final PdfDict style = annotation.dict("BS");
+        final PdfArray border = annotation.array("Border");
+        if (style != null) {
+            width = style.number("W", 1);
+            if (style.isName("S", "D")) {
+                final PdfArray d = style.array("D");
+                dash = d == null ? new double[]{3} : d.numbers();
+            }
+        } else if (border != null) {
+            if (border.size() < 3) return;
+            width = border.number(2, 0);
+            final PdfArray d = border.array(3);
+            if (d != null) dash = d.numbers();
+        }
+        if (!(width > 0) || width > Math.min(rect[2] - rect[0], rect[3] - rect[1])) return;
+        final PdfArray c = annotation.array("C");
+        final double[] color = c == null ? new double[]{0} : c.numbers();
+        if (color == null || color.length == 0) return;
+        final PdfColorSpace space = color.length >= 4 ? DeviceSpaces.CMYK : color.length >= 3 ? DeviceSpaces.RGB : DeviceSpaces.GRAY;
+        final float[] components = new float[space.components()];
+        for (int i = 0; i < components.length; i++) components[i] = (float) color[i];
+        final GraphicsState saved = gs;
+        gs = new GraphicsState();
+        gs.clip = saved.clip;
+        gs.strokeSpace = space;
+        gs.strokeColor = components;
+        gs.lineWidth = width;
+        gs.dashArray = dash;
+        try {
+            // 線の中心を Rect の辺に合わせる (poppler と同じ)
+            strokeShape(new Rectangle2D.Double(rect[0], rect[1], rect[2] - rect[0], rect[3] - rect[1]));
         } finally {
             gs = saved;
         }
