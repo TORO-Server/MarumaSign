@@ -39,6 +39,15 @@ tasks.register('dracoCheck', JavaExec) {
     javaLauncher = javaToolchains.launcherFor(java.toolchain)
 }
 
+// WebP デコーダの単体テスト・安全性検査を実行する。壊したデータを読ませる回数は -PwebpFuzz=回数 で変えられる (既定は 3000)
+tasks.register('webpCheck', JavaExec) {
+    classpath = sourceSets.test.runtimeClasspath
+    mainClass = 'marumasa.marumasa_sign.core.texture.WebpCheck'
+    javaLauncher = javaToolchains.launcherFor(java.toolchain)
+    maxHeapSize = '2g'
+    args = [providers.gradleProperty('webpFuzz').getOrElse('3000')]
+}
+
 // テクスチャデコーダの動作を確認する。引数は -PtextureArgs="出力先 ファイル..." で渡す
 tasks.register('textureCheck', JavaExec) {
     classpath = sourceSets.test.runtimeClasspath
