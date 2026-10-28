@@ -18,6 +18,9 @@ import java.util.concurrent.TimeUnit;
  */
 public final class AvifDecoder {
 
+    // FFmpeg に展開させる時間の上限
+    private static final long TIMEOUT_SECONDS = 15;
+
     private AvifDecoder() {
     }
 
@@ -95,7 +98,20 @@ public final class AvifDecoder {
             });
             errDrainer.setDaemon(true);
             errDrainer.start();
-
+            // 出力を読み終わるのを待つあいだに FFmpeg が止まったままにならないように、時間を過ぎたら終わらせる
+            // (終わらせると出力が閉じて、下の読み込みも終わる)
+            final Thread watchdog = new Thread(new Runnable() {
+                @Override
+                public void run() {
+                    try {
+                        if (!process.waitFor(TIMEOUT_SECONDS, TimeUnit.SECONDS)) process.destroyForcibly();
+                    } catch (InterruptedException e) {
+                        process.destroyForcibly();
+                    }
+                }
+            });
+            watchdog.setDaemon(true);
+            watchdog.start();
 
             final ByteArrayOutputStream bytes = new ByteArrayOutputStream();
             final InputStream input = process.getInputStream();
@@ -104,14 +120,17 @@ public final class AvifDecoder {
                 int read;
                 while ((read = input.read(buffer)) >= 0) {
                     bytes.write(buffer, 0, read);
-                    if (bytes.size() > 64 * 1024 * 1024) break;
+                    if (bytes.size() > 64 * 1024 * 1024) {
+                        process.destroyForcibly();
+                        return null;
+                    }
                 }
             } finally {
                 input.close();
             }
 
             try {
-                if (!process.waitFor(15, TimeUnit.SECONDS)) {
+                if (!process.waitFor(TIMEOUT_SECONDS, TimeUnit.SECONDS) || process.exitValue() != 0) {
                     process.destroyForcibly();
                     return null;
                 }
@@ -122,7 +141,8 @@ public final class AvifDecoder {
             }
 
             if (bytes.size() == 0) return null;
-            return ImageBytes.read(bytes.toByteArray());
+            // 大きさは展開する前に確かめる (AVIF は 1 枚に大きな画像を並べられる)
+            return ImageBytes.read(bytes.toByteArray(), TextureDecoder.MAX_TEXTURE_SIZE);
         } catch (Exception e) {
             return null;
         } finally {

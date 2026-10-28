@@ -3,11 +3,14 @@ package marumasa.marumasa_sign.core.image;
 import marumasa.marumasa_sign.core.image.jpeg.JpegReader;
 
 import javax.imageio.ImageIO;
+import javax.imageio.ImageReader;
+import javax.imageio.stream.ImageInputStream;
 import javax.imageio.stream.MemoryCacheImageInputStream;
 import java.awt.image.BufferedImage;
 import java.awt.image.DataBufferInt;
 import java.io.ByteArrayInputStream;
 import java.io.IOException;
+import java.util.Iterator;
 
 /**
  * メモリ上のバイト列を画像として読む。
@@ -29,6 +32,41 @@ public final class ImageBytes {
         if (isJpeg(data)) return readJpeg(data);
         // 読める形式なら、ImageIO.read がストリームを閉じる。読めなかったときも、メモリだけなので閉じなくてよい
         return ImageIO.read(new MemoryCacheImageInputStream(new ByteArrayInputStream(data)));
+    }
+
+    /**
+     * 画像として読む。読める形式でなければ null。
+     * 幅か高さが maxSide を超える画像は、展開する前に (見出しの大きさだけを読んで) IOException にする
+     * (小さなファイルに大きな幅と高さを書いて、展開する領域でメモリを使い切らせないように)。
+     */
+    public static BufferedImage read(byte[] data, int maxSide) throws IOException {
+        if (isJpeg(data)) {
+            final int[] size = JpegReader.size(data);
+            if (size != null && (size[0] > maxSide || size[1] > maxSide)) {
+                throw new IOException("Image exceeds safety limits (max " + maxSide + "x" + maxSide + "): " + size[0] + "x" + size[1]);
+            }
+            return readJpeg(data);
+        }
+        final ImageInputStream stream = new MemoryCacheImageInputStream(new ByteArrayInputStream(data));
+        try {
+            final Iterator<ImageReader> readers = ImageIO.getImageReaders(stream);
+            if (!readers.hasNext()) return null;
+            final ImageReader reader = readers.next();
+            try {
+                // ImageIO.read と同じ読み方。大きさだけを先に確かめる
+                reader.setInput(stream, true, true);
+                final int width = reader.getWidth(0);
+                final int height = reader.getHeight(0);
+                if (width <= 0 || height <= 0 || width > maxSide || height > maxSide) {
+                    throw new IOException("Image exceeds safety limits (max " + maxSide + "x" + maxSide + "): " + width + "x" + height);
+                }
+                return reader.read(0, reader.getDefaultReadParam());
+            } finally {
+                reader.dispose();
+            }
+        } finally {
+            stream.close();
+        }
     }
 
     public static boolean isJpeg(byte[] data) {

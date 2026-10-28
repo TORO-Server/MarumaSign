@@ -1,7 +1,9 @@
 package marumasa.marumasa_sign.core.gltf;
 
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 
 /**
  * 読み込んだモデルを、ある時刻の姿勢で三角形の列にする。
@@ -77,6 +79,7 @@ public final class GltfScene {
     private float[] dynamicUv = new float[0];
     private int[] front = new int[0];
     private int[] back = new int[0];
+    private int[] activeTargets = new int[0];
     private final float[] lit = new float[3];
     private final int[] cursor;
     // 描画する座標の法線を、モデルの座標に戻すための行列 (配置の行列の左上 3x3 の転置)
@@ -107,10 +110,11 @@ public final class GltfScene {
         lightIntensities = new float[lightCount];
         resetLightProperties();
 
+        // 光源は、ノードの順に最初の GltfLoader.MAX_LIGHTS 個だけを使う (頂点ごとに全部の光源を計算するので)
         int placedCount = 0;
         for (int i : model.order) {
             final GltfModel.Node node = model.nodes[i];
-            if (node.light >= 0 && node.light < model.lights.length) placedCount++;
+            if (node.light >= 0 && node.light < model.lights.length && placedCount < GltfLoader.MAX_LIGHTS) placedCount++;
         }
         sceneLights = new GltfLight.LightInstance[placedCount];
         sceneLightNodes = new int[placedCount];
@@ -118,7 +122,7 @@ public final class GltfScene {
         int lIdx = 0;
         for (int i : model.order) {
             final GltfModel.Node node = model.nodes[i];
-            if (node.light >= 0 && node.light < model.lights.length) {
+            if (node.light >= 0 && node.light < model.lights.length && lIdx < placedCount) {
                 sceneLights[lIdx] = new GltfLight.LightInstance();
                 sceneLightNodes[lIdx] = i;
                 sceneLightIndices[lIdx] = node.light;
@@ -131,6 +135,8 @@ public final class GltfScene {
 
         // 不透明なものを先に、半透明なものを後に並べる
         final List<Group> list = new ArrayList<Group>();
+        // テクスチャと半透明かどうかの組から、groups の添字を引く (材質の多いモデルで、毎回すべてのまとまりを調べないように)
+        final Map<Long, Integer> byKey = new HashMap<Long, Integer>();
         groupIndex = new int[model.meshes.length][];
         for (int pass = 0; pass < 2; pass++) {
             for (int m = 0; m < model.meshes.length; m++) {
@@ -140,13 +146,12 @@ public final class GltfScene {
                     final GltfModel.Material material = model.materials[primitives[p].material];
                     final boolean blend = material.alphaMode == GltfModel.ALPHA_BLEND;
                     if (blend != (pass == 1)) continue;
-                    int index = -1;
-                    for (int i = 0; i < list.size(); i++) {
-                        if (list.get(i).texture == material.texture && list.get(i).blend == blend) index = i;
-                    }
-                    if (index < 0) {
+                    final Long key = ((long) material.texture << 1) | (blend ? 1 : 0);
+                    Integer index = byKey.get(key);
+                    if (index == null) {
                         index = list.size();
                         list.add(new Group(material.texture, blend));
+                        byKey.put(key, index);
                     }
                     groupIndex[m][p] = index;
                 }
@@ -527,7 +532,13 @@ public final class GltfScene {
         }
         final float[] sourcePositions = primitive.positions;
         final float[] sourceNormals = primitive.normals;
-        final int targets = morph == null ? 0 : Math.min(morph.length, primitive.morphPositions.length);
+        // 重みが 0 でない目標だけを、頂点ごとに足す
+        final int allTargets = morph == null ? 0 : Math.min(morph.length, primitive.morphPositions.length);
+        if (activeTargets.length < allTargets) activeTargets = new int[allTargets];
+        int targets = 0;
+        for (int t = 0; t < allTargets; t++) {
+            if (morph[t] != 0) activeTargets[targets++] = t;
+        }
         final int influences = skin == null ? 0 : primitive.influences;
         final float[] m = matrix;
         final float[] n = normal;
@@ -540,9 +551,9 @@ public final class GltfScene {
                 ny = sourceNormals[i * 3 + 1];
                 nz = sourceNormals[i * 3 + 2];
             }
-            for (int t = 0; t < targets; t++) {
+            for (int k = 0; k < targets; k++) {
+                final int t = activeTargets[k];
                 final float weight = morph[t];
-                if (weight == 0) continue;
                 final float[] deltaPositions = primitive.morphPositions[t];
                 if (deltaPositions != null) {
                     px += deltaPositions[i * 3] * weight;

@@ -21,6 +21,7 @@ import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Base64;
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.IdentityHashMap;
 import java.util.List;
@@ -51,6 +52,26 @@ public final class GltfLoader {
     private static final int MAX_NODES = 65536;
     // バッファを持たないアクセサの要素数の上限
     private static final int MAX_EMPTY_ACCESSOR = 1 << 22;
+    // 読み込むアクセサの要素数の合計の上限。同じアクセサを何度も参照しても 1 回分と数える
+    // (小さなファイルから、同じデータを何千回も読ませてメモリを使い切らせないように)
+    private static final long MAX_ACCESSOR_ELEMENTS = 1 << 25;
+    // meshopt で展開したバッファビューの大きさの合計の上限と、圧縮率の上限 (形式の上でこれより縮むことはない)
+    private static final long MAX_MESHOPT_BYTES = 1 << 28;
+    private static final int MAX_MESHOPT_RATIO = 1024;
+    // 読み込んだ画像のピクセル数の合計。これを超えた分の画像は小さくして読み、それでも上限を超える画像は読まない
+    private static final long IMAGE_PIXEL_BUDGET = 48L << 20;
+    private static final long MAX_IMAGE_PIXELS = 64L << 20;
+    private static final int REDUCED_TEXTURE_SIZE = 256;
+    // 描画に使うテクスチャのピクセル数の合計の上限 (材質ごとに 1 枚作るので、同じ画像を使う材質が多いと増える。
+    // Khronos の VirtualCity は 148 枚で約 6600 万)。超える分は、あとの材質のテクスチャを小さくする
+    private static final long MAX_OUTPUT_PIXELS = 80L << 20;
+    // すべての面の三角形の角の数の合計の上限。描く三角形の数の上限の 4 倍まで (使わないメッシュがあっても読めるように)。
+    // 角ごとにテクスチャ座標などの配列を作るので、同じ索引を何千もの面で使わせて、メモリを使い切らせないようにする
+    private static final long MAX_CORNERS = 4L * 3 * MAX_TRIANGLES;
+    // 1 つの面のモーフィングの目標の数の上限
+    static final int MAX_MORPH_TARGETS = 128;
+    // 陰影の計算に使う光源の数の上限 (頂点ごと・ピクセルごとに全部の光源を計算するので、数が多いと止まったようになる)
+    static final int MAX_LIGHTS = 8;
 
     private static final int GLB_MAGIC = 0x46546C67;
     private static final int CHUNK_JSON = 0x4E4F534A;
@@ -171,7 +192,18 @@ public final class GltfLoader {
     private List<Object> imageList;
     private Pixels[] images;
     private boolean[] imageTried;
+    // 同じデータを指す画像は 1 回だけ展開する (bufferView の番号か URI ごと)
+    private final Map<String, Pixels> imagesBySource = new HashMap<String, Pixels>();
+    private long imagePixels;
     private byte[][] decompressedViews;
+    private long meshoptBytes;
+    // 読み込んだアクセサ (番号ごと) と、その要素数の合計
+    private final Map<Integer, float[]> floatAccessors = new HashMap<Integer, float[]>();
+    private final Map<Integer, int[]> intAccessors = new HashMap<Integer, int[]>();
+    private long accessorElements;
+    private long corners;
+    // 同じ URI の外部ファイルは 1 回だけ読む
+    private final Map<String, byte[]> loadedResources = new HashMap<String, byte[]>();
 
     private GltfLoader(Resources resources) {
         this.resources = resources;
@@ -224,6 +256,22 @@ public final class GltfLoader {
         }
 
         readNodes(model);
+        // 三角形の数は、テクスチャの焼き込みなどの重い処理の前に確かめる
+        long triangles = 0;
+        for (GltfModel.Node node : model.nodes) {
+            if (node.mesh < 0) continue;
+            for (GltfModel.Primitive primitive : model.meshes[node.mesh].primitives) {
+                final long count = primitive.indices.length / 3;
+                triangles += model.materials[primitive.material].doubleSided ? count * 2 : count;
+            }
+            if (triangles > MAX_TRIANGLES) break;
+        }
+        if (triangles > MAX_TRIANGLES) {
+            throw new IOException("Model exceeds safety limits (max " + MAX_TRIANGLES + " triangles)");
+        }
+        if (triangles == 0) throw new IOException("Model has nothing to draw");
+        model.triangleCount = (int) triangles;
+
         readLights(model);
         readSkins(model);
         readAnimations(model);
@@ -231,6 +279,9 @@ public final class GltfLoader {
         // テクスチャ。0 番は白 1 ピクセル
         final List<GltfModel.Texture> textures = new ArrayList<GltfModel.Texture>();
         textures.add(new GltfModel.Texture(1, 1, new int[]{0xFFFFFFFF}));
+        // 焼き込む面を探すための、面ごとの「使っているノード」(同じ面を複数のノードが使っていれば -1)
+        final Map<GltfModel.Primitive, Integer> users = primitiveUsers(model);
+        long outputPixels = 0;
         for (int i = 0; i < drafts.length; i++) {
             final Draft draft = drafts[i];
             if (draft.primitives.isEmpty()) continue;
@@ -240,8 +291,10 @@ public final class GltfLoader {
             }
             final int[] tilesU = fit(draft, 0, draft.mapping.wrapS, draft.width);
             final int[] tilesV = fit(draft, 1, draft.mapping.wrapT, draft.height);
-            if (draft.bake != null && tilesU[0] == 1 && tilesV[0] == 1) {
-                final List<GltfBaker.Surface> surfaces = surfaces(model, draft);
+            final long remaining = Math.max(0, MAX_OUTPUT_PIXELS - outputPixels);
+            if (draft.bake != null && tilesU[0] == 1 && tilesV[0] == 1
+                    && (long) draft.bakeWidth * draft.bakeHeight <= remaining) {
+                final List<GltfBaker.Surface> surfaces = surfaces(model, draft, users);
                 if (surfaces != null && (model.lights.length > 0 || model.sphericalHarmonics != null)) {
                     final float[][] globals = computeInitialGlobals(model);
                     draft.bake.lights = collectLights(model, globals);
@@ -251,7 +304,8 @@ public final class GltfLoader {
                 int width = draft.bakeWidth, height = draft.bakeHeight;
                 GltfBaker.Result baked = surfaces == null ? null : GltfBaker.bake(draft.bake, surfaces, width, height);
                 // 層を並べると大きくなりすぎる場合は、細かさを落としてやり直す
-                while (baked != null && width * baked.layers > MAX_TILED_SIZE && width > 64) {
+                while (baked != null && width > 64 && (width * baked.layers > MAX_TILED_SIZE
+                        || (long) width * baked.layers * height > remaining)) {
                     width /= 2;
                     height = Math.max(1, height / 2);
                     baked = GltfBaker.bake(draft.bake, surfaces, width, height);
@@ -267,24 +321,14 @@ public final class GltfLoader {
                     model.bakedCount++;
                 }
             }
+            // テクスチャの合計が上限を超えるなら、このテクスチャを小さくする (材質がとても多いモデルでメモリを使い切らないように)
+            shrink(draft, remaining / ((long) tilesU[0] * tilesV[0]));
+            final GltfModel.Texture texture = tile(draft, tilesU, tilesV);
+            outputPixels += (long) texture.width * texture.height;
             draft.material.texture = textures.size();
-            textures.add(tile(draft, tilesU, tilesV));
+            textures.add(texture);
         }
         model.textures = textures.toArray(new GltfModel.Texture[0]);
-
-        long triangles = 0;
-        for (GltfModel.Node node : model.nodes) {
-            if (node.mesh < 0) continue;
-            for (GltfModel.Primitive primitive : model.meshes[node.mesh].primitives) {
-                final long count = primitive.indices.length / 3;
-                triangles += model.materials[primitive.material].doubleSided ? count * 2 : count;
-            }
-        }
-        if (triangles > MAX_TRIANGLES) {
-            throw new IOException("Model exceeds safety limits (max " + MAX_TRIANGLES + " triangles)");
-        }
-        if (triangles == 0) throw new IOException("Model has nothing to draw");
-        model.triangleCount = (int) triangles;
         return model;
     }
 
@@ -325,8 +369,15 @@ public final class GltfLoader {
         }
     }
 
+    // 同じ URI の外部ファイルは、何度参照されていても 1 回だけ読む (同じものを何度も落とさないように)
     private byte[] resource(String uri) throws IOException {
-        return resource(uri, resources);
+        if (uri.startsWith("data:")) return resource(uri, resources);
+        byte[] data = loadedResources.get(uri);
+        if (data == null) {
+            data = resource(uri, resources);
+            loadedResources.put(uri, data);
+        }
+        return data;
     }
 
     // URI の指すデータを読み込む。data URI はその場で復号する
@@ -342,10 +393,29 @@ public final class GltfLoader {
                     throw new IOException("Invalid data URI", e);
                 }
             }
-            return data.getBytes(StandardCharsets.UTF_8);
+            // base64 でない data URI は、%XX の書き方で書かれている (RFC 2397)
+            return percentDecode(data);
         }
         if (resources == null) throw new IOException("External resource is not available: " + uri);
         return resources.load(uri);
+    }
+
+    // %XX をバイトに戻す。「+」はそのままの文字 (URLDecoder と違い、空白にしない)
+    private static byte[] percentDecode(String text) throws IOException {
+        final byte[] bytes = text.getBytes(StandardCharsets.UTF_8);
+        final java.io.ByteArrayOutputStream out = new java.io.ByteArrayOutputStream(bytes.length);
+        for (int i = 0; i < bytes.length; i++) {
+            if (bytes[i] == '%') {
+                final int high = i + 2 < bytes.length ? Character.digit(bytes[i + 1], 16) : -1;
+                final int low = i + 2 < bytes.length ? Character.digit(bytes[i + 2], 16) : -1;
+                if (high < 0 || low < 0) throw new IOException("Invalid data URI");
+                out.write(high << 4 | low);
+                i += 2;
+            } else {
+                out.write(bytes[i]);
+            }
+        }
+        return out.toByteArray();
     }
 
     // ---- アクセサ ----
@@ -423,12 +493,19 @@ public final class GltfLoader {
         final String mode = Json.string(meshopt, "mode", "ATTRIBUTES");
         final String filter = Json.string(meshopt, "filter", "NONE");
 
-        if (byteStride <= 0 || count < 0) {
+        if (byteStride <= 0 || count < 0 || byteLength < 0) {
             throw new IOException("Invalid meshopt parameters: stride=" + byteStride + ", count=" + count);
         }
         final long totalBytes = (long) count * byteStride;
-        if (totalBytes > 1 << 28) {
-            throw new IOException("Meshopt decompressed size exceeds safety limit: " + totalBytes);
+        // 展開する前に、書かれた数だけで大きな領域を確保しないように、圧縮したデータの長さから上限を決める。
+        // 頂点属性の版 1 でも、1 ブロック (最大 256 要素) の各 4 バイトに 1 バイトの制御が要るので、1024 倍より大きくはならない
+        // (索引は 1 つの三角形か値に 1 バイト以上なので、もっと小さい)
+        if (totalBytes > (long) byteLength * MAX_MESHOPT_RATIO + 4096) {
+            throw new IOException("Meshopt data is too short for " + count + " elements");
+        }
+        meshoptBytes += totalBytes;
+        if (meshoptBytes > MAX_MESHOPT_BYTES) {
+            throw new IOException("Meshopt decompressed size exceeds safety limit: " + meshoptBytes);
         }
         final byte[] decompressed = new byte[(int) totalBytes];
 
@@ -458,10 +535,29 @@ public final class GltfLoader {
         return decompressed;
     }
 
-    // バッファビューから count 個の要素を読んで out に入れる
+    // 番号の指すものを取り出す。範囲の外なら IOException
+    private static Map<String, Object> item(List<Object> list, int index, String what) throws IOException {
+        if (index < 0 || index >= list.size()) throw new IOException("Invalid " + what + " index: " + index);
+        return Json.object(list.get(index));
+    }
+
+    private byte[] buffer(int index) throws IOException {
+        if (index < 0 || index >= buffers.length) throw new IOException("Invalid buffer index: " + index);
+        return buffers[index];
+    }
+
+    // 行列の型なら行の数、そうでなければ 0
+    private static int matrixRows(String type) {
+        return "MAT2".equals(type) ? 2 : "MAT3".equals(type) ? 3 : "MAT4".equals(type) ? 4 : 0;
+    }
+
+    /**
+     * バッファビューから count 個の要素を読んで、floats か ints (使うほうだけが null でない) に入れる。
+     * 行列は列ごとに 4 バイトの境界に揃えて並んでいる (1 バイトや 2 バイトの成分の MAT2 と MAT3 では、列の後ろに詰め物がある)。
+     */
     private void readView(int viewIndex, int byteOffset, int componentType, boolean normalized,
-                          int components, int count, double[] out) throws IOException {
-        final Map<String, Object> view = Json.object(bufferViews.get(viewIndex));
+                          int components, int matrixRows, int count, float[] floats, int[] ints) throws IOException {
+        final Map<String, Object> view = item(bufferViews, viewIndex, "bufferView");
         final byte[] decomp = getDecompressedView(viewIndex);
         final byte[] data;
         final int viewOffset;
@@ -471,60 +567,62 @@ public final class GltfLoader {
             viewOffset = 0;
             viewLength = decomp.length;
         } else {
-            data = buffers[Json.integer(view, "buffer", 0)];
+            data = buffer(Json.integer(view, "buffer", 0));
             viewOffset = Json.integer(view, "byteOffset", 0);
             viewLength = Json.integer(view, "byteLength", 0);
         }
         final int size = componentSize(componentType);
-        final int elementSize = size * components;
+        final int columnStride = matrixRows > 0 ? (matrixRows * size + 3) & ~3 : 0;
+        final int elementSize = matrixRows > 0 ? columnStride * (components / matrixRows) : size * components;
         int stride = Json.integer(view, "byteStride", 0);
         if (stride <= 0) stride = elementSize;
+        // 要素どうしが重なる間隔は仕様に反する
+        if (stride < elementSize) throw new IOException("Invalid byteStride: " + stride);
 
         final long start = (long) viewOffset + byteOffset;
         final long end = count == 0 ? start : start + (long) (count - 1) * stride + elementSize;
-        if (viewOffset < 0 || byteOffset < 0 || end > (long) viewOffset + viewLength || end > data.length) {
+        if (viewOffset < 0 || viewLength < 0 || byteOffset < 0 || end > (long) viewOffset + viewLength || end > data.length) {
             throw new IOException("Accessor is out of range");
         }
         final ByteBuffer buffer = ByteBuffer.wrap(data).order(ByteOrder.LITTLE_ENDIAN);
         for (int i = 0; i < count; i++) {
             final int base = (int) start + i * stride;
             for (int c = 0; c < components; c++) {
-                out[i * components + c] = component(buffer, base + c * size, componentType, normalized);
+                final int position = matrixRows > 0 ? base + (c / matrixRows) * columnStride + (c % matrixRows) * size : base + c * size;
+                final double value = component(buffer, position, componentType, normalized);
+                if (floats != null) {
+                    final float f = (float) value;
+                    // 壊れた値で以降の計算が止まらないようにする
+                    floats[i * components + c] = Float.isNaN(f) || Float.isInfinite(f) ? 0f : f;
+                } else {
+                    ints[i * components + c] = (int) value;
+                }
             }
         }
     }
 
-    private int accessorCount(int index) {
-        return Json.integer(Json.object(accessors.get(index)), "count", 0);
+    private int accessorCount(int index) throws IOException {
+        return Json.integer(item(accessors, index, "accessor"), "count", 0);
     }
 
     private int accessorComponents(int index) throws IOException {
-        return componentCount(Json.string(Json.object(accessors.get(index)), "type", "SCALAR"));
+        return componentCount(Json.string(item(accessors, index, "accessor"), "type", "SCALAR"));
     }
 
-    private double[] accessor(int index) throws IOException {
-        final Map<String, Object> accessor = Json.object(accessors.get(index));
-        final int count = Json.integer(accessor, "count", 0);
-        final int components = componentCount(Json.string(accessor, "type", "SCALAR"));
+    /**
+     * アクセサの値を読む。floats か ints の使うほうだけが null でない。
+     * 疎なアクセサ (sparse) は、bufferView の値 (なければ 0) の一部を上書きする。
+     */
+    private void accessor(Map<String, Object> accessor, int count, int components, int matrixRows,
+                          float[] floats, int[] ints) throws IOException {
         final int componentType = Json.integer(accessor, "componentType", 5126);
         final boolean normalized = Json.bool(accessor, "normalized", false);
-        if (count < 0) throw new IOException("Invalid accessor");
-
-        final double[] out;
         if (accessor.containsKey("bufferView")) {
-            final int viewIndex = Json.integer(accessor, "bufferView", 0);
-            final byte[] decomp = getDecompressedView(viewIndex);
-            final Map<String, Object> view = Json.object(bufferViews.get(viewIndex));
-            final int viewLength = decomp != null ? decomp.length : Json.integer(view, "byteLength", 0);
-            if ((long) count * components * componentSize(componentType) > viewLength) {
-                throw new IOException("Accessor is out of range");
-            }
-            out = new double[count * components];
-            readView(viewIndex, Json.integer(accessor, "byteOffset", 0),
-                    componentType, normalized, components, count, out);
+            readView(Json.integer(accessor, "bufferView", 0), Json.integer(accessor, "byteOffset", 0),
+                    componentType, normalized, components, matrixRows, count, floats, ints);
         } else {
-            if ((long) count * components > MAX_EMPTY_ACCESSOR) throw new IOException("Accessor is too large");
-            out = new double[count * components];
+            // 値を持たないアクセサは 0 (成分の大きさだけ確かめる)
+            componentSize(componentType);
         }
 
         // 一部の要素だけを上書きする形式
@@ -534,38 +632,71 @@ public final class GltfLoader {
             if (sparseCount < 0 || sparseCount > count) throw new IOException("Invalid sparse accessor");
             final Map<String, Object> indices = Json.object(sparse, "indices");
             final Map<String, Object> values = Json.object(sparse, "values");
-            final double[] targets = new double[sparseCount];
+            final int indexType = Json.integer(indices, "componentType", 5125);
+            if (indexType != 5121 && indexType != 5123 && indexType != 5125) {
+                throw new IOException("Invalid sparse index type: " + indexType);
+            }
+            final int[] targets = new int[sparseCount];
             readView(Json.integer(indices, "bufferView", 0), Json.integer(indices, "byteOffset", 0),
-                    Json.integer(indices, "componentType", 5125), false, 1, sparseCount, targets);
-            final double[] value = new double[sparseCount * components];
+                    indexType, false, 1, 0, sparseCount, null, targets);
+            final float[] floatValues = floats != null ? new float[sparseCount * components] : null;
+            final int[] intValues = ints != null ? new int[sparseCount * components] : null;
             readView(Json.integer(values, "bufferView", 0), Json.integer(values, "byteOffset", 0),
-                    componentType, normalized, components, sparseCount, value);
+                    componentType, normalized, components, matrixRows, sparseCount, floatValues, intValues);
             for (int i = 0; i < sparseCount; i++) {
-                final int target = (int) targets[i];
+                final int target = targets[i];
                 if (target < 0 || target >= count) throw new IOException("Invalid sparse accessor");
-                System.arraycopy(value, i * components, out, target * components, components);
+                if (floats != null) System.arraycopy(floatValues, i * components, floats, target * components, components);
+                else System.arraycopy(intValues, i * components, ints, target * components, components);
             }
         }
-        return out;
     }
 
-    private float[] floats(int index) throws IOException {
-        final double[] values = accessor(index);
-        final float[] result = new float[values.length];
-        for (int i = 0; i < result.length; i++) {
-            final float value = (float) values[i];
-            // 壊れた値で以降の計算が止まらないようにする
-            result[i] = Float.isNaN(value) || Float.isInfinite(value) ? 0f : value;
+    // アクセサの要素の数を確かめて、読み込む量の合計に足す
+    private int elements(Map<String, Object> accessor) throws IOException {
+        final int count = Json.integer(accessor, "count", 0);
+        final int components = componentCount(Json.string(accessor, "type", "SCALAR"));
+        if (count < 0) throw new IOException("Invalid accessor");
+        final long elements = (long) count * components;
+        if (accessor.containsKey("bufferView")) {
+            // 実際のデータより多い要素数で、大きな領域を確保しないように先に確かめる (詳しい範囲は readView で確かめる)
+            final int viewIndex = Json.integer(accessor, "bufferView", 0);
+            final byte[] decomp = getDecompressedView(viewIndex);
+            final int viewLength = decomp != null ? decomp.length : Json.integer(item(bufferViews, viewIndex, "bufferView"), "byteLength", 0);
+            if (elements * componentSize(Json.integer(accessor, "componentType", 5126)) > viewLength) {
+                throw new IOException("Accessor is out of range");
+            }
+        } else if (elements > MAX_EMPTY_ACCESSOR) {
+            throw new IOException("Accessor is too large");
         }
+        accessorElements += elements;
+        if (accessorElements > MAX_ACCESSOR_ELEMENTS) {
+            throw new IOException("Model exceeds safety limits (max " + MAX_ACCESSOR_ELEMENTS + " accessor elements)");
+        }
+        return (int) elements;
+    }
+
+    // アクセサの値を小数として読む。同じアクセサは 1 回だけ読み、同じ配列を返す (呼ぶ側は書き換えないこと)
+    private float[] floats(int index) throws IOException {
+        float[] result = floatAccessors.get(index);
+        if (result != null) return result;
+        final Map<String, Object> accessor = item(accessors, index, "accessor");
+        final String type = Json.string(accessor, "type", "SCALAR");
+        result = new float[elements(accessor)];
+        accessor(accessor, Json.integer(accessor, "count", 0), componentCount(type), matrixRows(type), result, null);
+        floatAccessors.put(index, result);
         return result;
     }
 
+    // アクセサの値を整数として読む。同じアクセサは 1 回だけ読み、同じ配列を返す (呼ぶ側は書き換えないこと)
     private int[] ints(int index) throws IOException {
-        final double[] values = accessor(index);
-        final int[] result = new int[values.length];
-        for (int i = 0; i < result.length; i++) {
-            result[i] = (int) values[i];
-        }
+        int[] result = intAccessors.get(index);
+        if (result != null) return result;
+        final Map<String, Object> accessor = item(accessors, index, "accessor");
+        final String type = Json.string(accessor, "type", "SCALAR");
+        result = new int[elements(accessor)];
+        accessor(accessor, Json.integer(accessor, "count", 0), componentCount(type), matrixRows(type), null, result);
+        intAccessors.put(index, result);
         return result;
     }
 
@@ -581,52 +712,64 @@ public final class GltfLoader {
         if (index < 0 || index >= images.length) return null;
         if (imageTried[index]) return images[index];
         imageTried[index] = true;
+        final Map<String, Object> json = Json.object(imageList.get(index));
+        final String uri = Json.string(json, "uri", null);
+        final int viewIndex = Json.integer(json, "bufferView", -1);
+        final String mimeType = Json.string(json, "mimeType", null);
+        // 同じデータを指す画像は、展開したものを使い回す (同じ画像を何千回も展開させてメモリを使い切らせないように)
+        final String source = (uri != null ? "uri:" + uri : "view:" + viewIndex) + "\n" + mimeType;
+        if (imagesBySource.containsKey(source)) {
+            images[index] = imagesBySource.get(source);
+            return images[index];
+        }
         try {
-            final Map<String, Object> json = Json.object(imageList.get(index));
             final byte[] data;
-            final String uri = Json.string(json, "uri", null);
             if (uri != null) {
                 data = resource(uri);
             } else {
-                final int viewIndex = Json.integer(json, "bufferView", -1);
                 final byte[] decomp = getDecompressedView(viewIndex);
                 if (decomp != null) {
                     data = decomp;
                 } else {
-                    final Map<String, Object> view = Json.object(bufferViews.get(viewIndex));
-                    final byte[] buffer = buffers[Json.integer(view, "buffer", 0)];
+                    final Map<String, Object> view = item(bufferViews, viewIndex, "bufferView");
+                    final byte[] buffer = buffer(Json.integer(view, "buffer", 0));
                     final int offset = Json.integer(view, "byteOffset", 0);
                     final int length = Json.integer(view, "byteLength", 0);
-                    if (offset < 0 || length < 0 || (long) offset + length > buffer.length) return null;
+                    if (offset < 0 || length < 0 || (long) offset + length > buffer.length) throw new IOException("Image is out of range");
                     data = new byte[length];
                     System.arraycopy(buffer, offset, data, 0, length);
                 }
             }
-            final String mimeType = Json.string(json, "mimeType", null);
             BufferedImage decoded = TextureDecoder.decode(data, mimeType);
-            if (decoded == null) return null;
-
-            int width = decoded.getWidth();
-            int height = decoded.getHeight();
-            if (width > MAX_TEXTURE_SIZE || height > MAX_TEXTURE_SIZE) {
-                final float ratio = Math.min(MAX_TEXTURE_SIZE / (float) width, MAX_TEXTURE_SIZE / (float) height);
-                width = Math.max(1, Math.round(width * ratio));
-                height = Math.max(1, Math.round(height * ratio));
-                final BufferedImage scaled = new BufferedImage(width, height, BufferedImage.TYPE_INT_ARGB);
-                final Graphics2D g = scaled.createGraphics();
-                try {
-                    g.setRenderingHint(RenderingHints.KEY_INTERPOLATION, RenderingHints.VALUE_INTERPOLATION_BILINEAR);
-                    g.drawImage(decoded, 0, 0, width, height, null);
-                } finally {
-                    g.dispose();
+            if (decoded != null) {
+                // 読み込んだ画像の合計が多くなったら、そのあとの画像は小さくして読む
+                final int limit = imagePixels >= IMAGE_PIXEL_BUDGET ? REDUCED_TEXTURE_SIZE : MAX_TEXTURE_SIZE;
+                int width = decoded.getWidth();
+                int height = decoded.getHeight();
+                if (width > limit || height > limit) {
+                    final float ratio = Math.min(limit / (float) width, limit / (float) height);
+                    width = Math.max(1, Math.round(width * ratio));
+                    height = Math.max(1, Math.round(height * ratio));
+                    final BufferedImage scaled = new BufferedImage(width, height, BufferedImage.TYPE_INT_ARGB);
+                    final Graphics2D g = scaled.createGraphics();
+                    try {
+                        g.setRenderingHint(RenderingHints.KEY_INTERPOLATION, RenderingHints.VALUE_INTERPOLATION_BILINEAR);
+                        g.drawImage(decoded, 0, 0, width, height, null);
+                    } finally {
+                        g.dispose();
+                    }
+                    decoded = scaled;
                 }
-                decoded = scaled;
+                if (imagePixels + (long) width * height <= MAX_IMAGE_PIXELS) {
+                    imagePixels += (long) width * height;
+                    images[index] = new Pixels(width, height, ArgbPixels.read(decoded));
+                }
             }
-            images[index] = new Pixels(width, height, ArgbPixels.read(decoded));
         } catch (Exception e) {
             // 画像が読めなくても、形だけは表示する
             images[index] = null;
         }
+        imagesBySource.put(source, images[index]);
         return images[index];
     }
 
@@ -1060,10 +1203,13 @@ public final class GltfLoader {
             input.specGlossGlossinessFactor = sgGlossinessFactor;
 
             draft.bake = input;
-            final Pixels[] allImages = {baseImage, normalImage, roughnessImage, emissiveImage,
+            // 遮蔽のテクスチャも含める (遮蔽のテクスチャだけを持つ材質では、ほかの画像がすべて null になる)
+            final Pixels[] allImages = {baseImage, normalImage, roughnessImage, emissiveImage, occlusionImage,
                     specularImage, specularColorImage, specGlossImage, clearcoatImage, clearcoatRoughnessImage,
                     clearcoatNormalImage, sheenColorImage, sheenRoughnessImage, iridImage, iridThickImage,
                     anisoImage, transImage, thickImage, dtImage, dtColorImage};
+            draft.bakeWidth = 1;
+            draft.bakeHeight = 1;
             for (Pixels image : allImages) {
                 if (image == null) continue;
                 draft.bakeWidth = Math.max(draft.bakeWidth, image.width);
@@ -1110,7 +1256,7 @@ public final class GltfLoader {
      * 材質を焼き込む対象の面を集める。
      * 陰影はモデルに固定で計算するため、動くモデルや、同じメッシュを複数の場所で使っているモデルは対象にしない (null を返す)。
      */
-    private static List<GltfBaker.Surface> surfaces(GltfModel model, Draft draft) {
+    private static List<GltfBaker.Surface> surfaces(GltfModel model, Draft draft, Map<GltfModel.Primitive, Integer> users) {
         if (model.animations.length > 0) return null;
 
         // 最初の姿勢での、各ノードの変換
@@ -1119,21 +1265,50 @@ public final class GltfLoader {
         final List<GltfBaker.Surface> surfaces = new ArrayList<GltfBaker.Surface>();
         for (GltfModel.Primitive primitive : draft.primitives) {
             if (primitive.morphPositions.length > 0) return null;
-            float[] matrix = null;
-            for (int index : model.order) {
-                final GltfModel.Node node = model.nodes[index];
-                if (node.mesh < 0) continue;
-                boolean uses = false;
-                for (GltfModel.Primitive candidate : model.meshes[node.mesh].primitives) {
-                    if (candidate == primitive) uses = true;
-                }
-                if (!uses) continue;
-                if (matrix != null || node.skin >= 0) return null;
-                matrix = global[index];
-            }
-            if (matrix != null) surfaces.add(new GltfBaker.Surface(primitive, matrix, draft.extraUv.get(primitive)));
+            final Integer user = users.get(primitive);
+            if (user == null) continue;
+            if (user < 0 || model.nodes[user].skin >= 0) return null;
+            surfaces.add(new GltfBaker.Surface(primitive, global[user], draft.extraUv.get(primitive)));
         }
         return surfaces.isEmpty() ? null : surfaces;
+    }
+
+    // 面ごとの、その面を描くノードの番号。複数のノードが描く面は -1
+    // (面ごとにすべてのノードを調べると、ノードと面が多いモデルで時間がかかりすぎるので、先に 1 回だけ数える)
+    private static Map<GltfModel.Primitive, Integer> primitiveUsers(GltfModel model) {
+        final Map<GltfModel.Primitive, Integer> users = new IdentityHashMap<GltfModel.Primitive, Integer>();
+        for (int index : model.order) {
+            final GltfModel.Node node = model.nodes[index];
+            if (node.mesh < 0) continue;
+            for (GltfModel.Primitive primitive : model.meshes[node.mesh].primitives) {
+                users.put(primitive, users.containsKey(primitive) ? -1 : index);
+            }
+        }
+        return users;
+    }
+
+    // テクスチャのピクセル数を limit 以下にする (半分ずつ小さくする)
+    private static void shrink(Draft draft, long limit) {
+        if ((long) draft.width * draft.height <= limit) return;
+        if (draft.pending != null) {
+            draft.pending.run();
+            draft.pending = null;
+        }
+        int width = draft.width, height = draft.height;
+        while ((long) width * height > limit && (width > 1 || height > 1)) {
+            width = Math.max(1, width / 2);
+            height = Math.max(1, height / 2);
+        }
+        final int[] pixels = new int[width * height];
+        for (int y = 0; y < height; y++) {
+            final int sy = (int) ((long) y * draft.height / height);
+            for (int x = 0; x < width; x++) {
+                pixels[y * width + x] = draft.pixels[sy * draft.width + (int) ((long) x * draft.width / width)];
+            }
+        }
+        draft.pixels = pixels;
+        draft.width = width;
+        draft.height = height;
     }
 
     // 繰り返しの指定に合わせて画像を並べたテクスチャを作る。tilesU, tilesV は fit で求めたもの
@@ -1229,7 +1404,15 @@ public final class GltfLoader {
         final List<GltfModel.Primitive> primitives = new ArrayList<GltfModel.Primitive>();
         for (Object item : Json.array(json, "primitives")) {
             final GltfModel.Primitive primitive = primitive(Json.object(item), drafts);
-            if (primitive != null) primitives.add(primitive);
+            // 三角形のない面は描かない (三角形のない面をとても多く並べて、描くたびの処理を重くさせないように)
+            if (primitive == null) continue;
+            if (primitive.indices.length > 0) {
+                primitives.add(primitive);
+            } else {
+                // 材質の側からも外す (primitive で最後に足したもの)
+                final List<GltfModel.Primitive> users = drafts[primitive.material].primitives;
+                if (!users.isEmpty() && users.get(users.size() - 1) == primitive) users.remove(users.size() - 1);
+            }
         }
         mesh.primitives = primitives.toArray(new GltfModel.Primitive[0]);
         if (json.containsKey("weights")) mesh.weights = Json.numbers(json.get("weights"));
@@ -1462,10 +1645,17 @@ public final class GltfLoader {
             source = new int[count];
             for (int i = 0; i < count; i++) source[i] = i;
         }
+        // 帯と扇は、三角形の並びに直すと索引の数が約 3 倍になるので、直す前に数える
+        corners += mode == 4 ? source.length / 3 * 3L : Math.max(0, source.length - 2) * 3L;
+        if (corners > MAX_CORNERS) {
+            throw new IOException("Model exceeds safety limits (max " + MAX_TRIANGLES + " triangles)");
+        }
         primitive.indices = triangles(source, mode);
 
         // モーフィング
-        final List<Object> targets = Json.array(json, "targets");
+        // 目標が多すぎる分は使わない (頂点ごとに全部の目標を足すので、数が多いと描くたびの処理が重くなる)
+        final List<Object> allTargets = Json.array(json, "targets");
+        final List<Object> targets = allTargets.size() > MAX_MORPH_TARGETS ? allTargets.subList(0, MAX_MORPH_TARGETS) : allTargets;
         final List<float[]> morphPositions = new ArrayList<float[]>();
         final List<float[]> morphNormals = new ArrayList<float[]>();
         for (Object item : targets) {
@@ -1665,9 +1855,10 @@ public final class GltfLoader {
                 throw new IOException("Model exceeds safety limits (max " + MAX_NODES + " nodes)");
             }
 
-            final float[] translations = transAcc >= 0 ? floats(transAcc) : null;
-            final float[] rotations = rotAcc >= 0 ? floats(rotAcc) : null;
-            final float[] scales = scaleAcc >= 0 ? floats(scaleAcc) : null;
+            // 型が違う (VEC3 でない平行移動など) アクセサは、要素の数が足りないので使えない
+            final float[] translations = transAcc >= 0 ? instanceValues(transAcc, instanceCount, 3) : null;
+            final float[] rotations = rotAcc >= 0 ? instanceValues(rotAcc, instanceCount, 4) : null;
+            final float[] scales = scaleAcc >= 0 ? instanceValues(scaleAcc, instanceCount, 3) : null;
 
             final int origMesh = parentNode.mesh;
             final int origSkin = parentNode.skin;
@@ -1738,6 +1929,14 @@ public final class GltfLoader {
         model.nodes = nodes;
         model.order = new int[length];
         System.arraycopy(order, 0, model.order, 0, length);
+    }
+
+    private float[] instanceValues(int accessor, int count, int components) throws IOException {
+        final float[] values = floats(accessor);
+        if (accessorComponents(accessor) != components || values.length != count * components) {
+            throw new IOException("Invalid instancing accessor: " + accessor);
+        }
+        return values;
     }
 
     private void readSkins(GltfModel model) throws IOException {
@@ -1870,7 +2069,8 @@ public final class GltfLoader {
             } catch (NumberFormatException e) {
                 return false;
             }
-            if (mat < 0 || mat >= model.materials.length) return false;
+            // 最後の材質は、材質の指定がない面のために足した既定の材質で、ファイルの中の番号では指せない
+            if (mat < 0 || mat >= model.materials.length - 1) return false;
             channel.targetIndex = mat;
             final String last = parts[parts.length - 1];
             if ("baseColorFactor".equals(last)) {
@@ -1984,6 +2184,8 @@ public final class GltfLoader {
         for (int i : model.order) {
             final GltfModel.Node node = model.nodes[i];
             if (node.light < 0 || node.light >= model.lights.length) continue;
+            // 光源は、ノードの順に最初の MAX_LIGHTS 個だけを使う (GltfScene と同じ)
+            if (list.size() >= MAX_LIGHTS) break;
             final GltfModel.Light light = model.lights[node.light];
             final float[] m = globalMatrices[i];
             final GltfLight.LightInstance inst = new GltfLight.LightInstance();

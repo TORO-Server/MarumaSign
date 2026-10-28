@@ -90,27 +90,31 @@ public final class Ktx2Decoder {
         }
         final boolean srgb = transfer == TRANSFER_SRGB;
 
-        final int[] argb = new int[width * height];
+        final int[] argb;
         if (supercompression == SUPERCOMPRESSION_BASISLZ || colorModel == MODEL_ETC1S) {
             if (supercompression != SUPERCOMPRESSION_BASISLZ) throw new IOException("ETC1S KTX2 must use BasisLZ");
-            decodeEtc1s(data, sgdOffset, sgdLength, levelOffset, layers * faces * levels, width, height, samples > 1, argb);
+            argb = decodeEtc1s(data, sgdOffset, sgdLength, levelOffset, layers * faces * levels, width, height, samples > 1);
         } else {
+            // 最初の画像に要るバイト数。展開した結果を入れる領域は、データがそれだけあることを確かめてから確保する
+            // (幅と高さだけを大きく書いた小さなファイルで、メモリを使い切らせないように)
+            final long required = colorModel == MODEL_UASTC ? blocks(width, height) * 16L : formatBytes(vkFormat, width, height);
             final byte[] level;
             final int levelStart;
             if (supercompression == SUPERCOMPRESSION_NONE) {
+                if (required > levelLength) throw new IOException("Truncated KTX2 level data");
                 level = data;
                 levelStart = (int) levelOffset;
-            } else if (supercompression == SUPERCOMPRESSION_ZSTD) {
-                if (uncompressedLength <= 0 || uncompressedLength > MAX_LEVEL_BYTES) throw new IOException("Invalid KTX2 level size");
-                level = ZstdDecoder.decompress(data, (int) levelOffset, (int) levelLength, (int) uncompressedLength);
-                levelStart = 0;
-            } else if (supercompression == SUPERCOMPRESSION_ZLIB) {
-                if (uncompressedLength <= 0 || uncompressedLength > MAX_LEVEL_BYTES) throw new IOException("Invalid KTX2 level size");
-                level = inflate(data, (int) levelOffset, (int) levelLength, (int) uncompressedLength);
+            } else if (supercompression == SUPERCOMPRESSION_ZSTD || supercompression == SUPERCOMPRESSION_ZLIB) {
+                if (uncompressedLength < required || uncompressedLength > MAX_LEVEL_BYTES) throw new IOException("Invalid KTX2 level size");
+                level = supercompression == SUPERCOMPRESSION_ZSTD
+                        ? ZstdDecoder.decompress(data, (int) levelOffset, (int) levelLength, (int) uncompressedLength)
+                        : inflate(data, (int) levelOffset, (int) levelLength, (int) uncompressedLength);
+                if (level.length < required) throw new IOException("Truncated KTX2 level data");
                 levelStart = 0;
             } else {
                 throw new IOException("Unsupported KTX2 supercompression: " + supercompression);
             }
+            argb = new int[width * height];
             if (colorModel == MODEL_UASTC) {
                 decodeUastc(level, levelStart, width, height, srgb, argb);
             } else {
@@ -122,9 +126,36 @@ public final class Ktx2Decoder {
         return ArgbPixels.wrap(width, height, argb);
     }
 
+    // 4x4 のブロックの数
+    private static long blocks(int width, int height) {
+        return (long) ((width + 3) / 4) * ((height + 3) / 4);
+    }
+
+    // 最初の画像に要るバイト数。対応していない形式なら IOException
+    private static long formatBytes(int vkFormat, int width, int height) throws IOException {
+        final long pixels = (long) width * height;
+        switch (vkFormat) {
+            case 9: case 15:
+                return pixels;
+            case 16: case 22:
+                return pixels * 2;
+            case 23: case 29: case 30: case 36:
+                return pixels * 3;
+            case 37: case 43: case 44: case 50:
+                return pixels * 4;
+            default:
+                break;
+        }
+        final int dxgi = bcToDxgi(vkFormat);
+        if (dxgi == 0) throw new IOException("Unsupported KTX2 vkFormat: " + vkFormat);
+        // BC1 と BC4 は 1 ブロック 8 バイト、ほかは 16 バイト
+        final boolean small = dxgi == 71 || dxgi == 72 || dxgi == 80 || dxgi == 81;
+        return blocks(width, height) * (small ? 8 : 16);
+    }
+
     // ETC1S: 全体のデータ (端点と選択子の表) と、画像ごとの位置の一覧を読んで、最初の画像を展開する
-    private static void decodeEtc1s(byte[] data, long sgdOffset, long sgdLength, long levelOffset, int imageCount,
-                                    int width, int height, boolean hasAlpha, int[] argb) throws IOException {
+    private static int[] decodeEtc1s(byte[] data, long sgdOffset, long sgdLength, long levelOffset, int imageCount,
+                                     int width, int height, boolean hasAlpha) throws IOException {
         if (sgdOffset <= 0 || sgdLength < 20 || sgdOffset > data.length || sgdLength > data.length - sgdOffset) {
             throw new IOException("Invalid BasisLZ global data");
         }
@@ -154,10 +185,13 @@ public final class Ktx2Decoder {
         final BasisEtc1s etc1s = new BasisEtc1s(endpointCount, data, codebooks, endpointsLength,
                 selectorCount, codebooks + endpointsLength, selectorsLength,
                 codebooks + endpointsLength + selectorsLength, tablesLength);
+        // ETC1S は同じブロックを 1 ビット未満で並べられるので、データの長さからは大きさを決められない。表を読めてから確保する
+        final int[] argb = new int[width * height];
         etc1s.decodeSlice(data, (int) rgbOffset, (int) rgbLength, width, height, argb, false);
         if (hasAlpha && alphaLength > 0) {
             etc1s.decodeSlice(data, (int) alphaOffset, (int) alphaLength, width, height, argb, true);
         }
+        return argb;
     }
 
     private static void decodeUastc(byte[] data, int offset, int width, int height, boolean srgb, int[] argb) throws IOException {
@@ -252,7 +286,8 @@ public final class Ktx2Decoder {
         final Inflater inflater = new Inflater();
         try {
             inflater.setInput(data, offset, length);
-            final ByteArrayOutputStream out = new ByteArrayOutputStream(size);
+            // 書かれた大きさで先に確保しない (展開してみるまで、本当にその大きさになるかはわからない)
+            final ByteArrayOutputStream out = new ByteArrayOutputStream(Math.min(size, 1 << 16));
             final byte[] buffer = new byte[65536];
             while (!inflater.finished()) {
                 final int n = inflater.inflate(buffer);
