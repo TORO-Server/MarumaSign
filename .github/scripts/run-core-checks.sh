@@ -17,9 +17,9 @@ seed="${FUZZ_SEED:-$(date +%s)}"
 failed=()
 
 if [ "$mode" = "long" ]; then
-  pdf_fuzz=40000; image_fuzz=3000; structure_fuzz=20000; webp_fuzz=30000; decoder_fuzz_seconds=300; font_fuzz=100000
+  pdf_fuzz=40000; image_fuzz=3000; structure_fuzz=20000; webp_fuzz=30000; decoder_fuzz_seconds=300; font_fuzz=100000; gltf_fuzz=200000; splat_fuzz=300000
 else
-  pdf_fuzz=3000; image_fuzz=300; structure_fuzz=1000; webp_fuzz=3000; decoder_fuzz_seconds=20; font_fuzz=5000
+  pdf_fuzz=3000; image_fuzz=300; structure_fuzz=1000; webp_fuzz=3000; decoder_fuzz_seconds=20; font_fuzz=5000; gltf_fuzz=3000; splat_fuzz=20000
 fi
 
 echo "mode=$mode seed=$seed"
@@ -100,6 +100,13 @@ check structureFuzz 3600 -Xmx2g -Xss512k marumasa.marumasa_sign.core.structure.S
 # 3D モデルにするところまで (ゲームの jar の代わりに、試験用に作る資源を使う。通信はしない)
 check structureMeshFuzz 3600 -Xmx2g -Xss512k -Dfuzz.mesh=true marumasa.marumasa_sign.core.structure.StructureFuzz "$structure_fuzz" \
   src/test/resources/structure "$root/tools/verify/test-structure.nbt"
+# 3D モデル (glTF / GLB とテクスチャ) とスプラットの、直した不具合の試験と、壊したファイルのファジング
+check gltfRegressionCheck 600 -Xmx1g -Xss512k marumasa.marumasa_sign.core.gltf.GltfRegressionCheck
+check splatRegressionCheck 600 -Xmx1g -Xss512k marumasa.marumasa_sign.core.splat.SplatRegressionCheck
+check gltfFuzz 3600 -Xmx1g -Xss512k -Dfuzz.strict=true marumasa.marumasa_sign.core.gltf.GltfFuzz "$gltf_fuzz" \
+  src/test/resources/gltf "$root/tools/verify/test-model.glb" src/test/resources/marumasa_sign/test/texture
+check splatFuzz 3600 -Xmx1g -Xss512k -Dfuzz.strict=true marumasa.marumasa_sign.core.splat.SplatFuzz "$splat_fuzz" \
+  src/test/resources/splat "$root/tools/verify/test-splat.splat"
 check dracoCheck 900 -Xmx1g -Xss512k marumasa.marumasa_sign.core.gltf.DracoCheck
 check splatCheck 900 -Xmx2g -Xss512k marumasa.marumasa_sign.core.splat.SplatCheck
 # 仕様書から書き直したデコーダの試験 (libwebp などの結果との比較と、壊したデータ)

@@ -66,7 +66,8 @@ public final class AvifDecoder {
                 fos.write(data);
             }
 
-            // 壊れたファイルで FFmpeg が終わらないことがあるので、時間を限って動かす (出力を読み終わるのを待ち続けないように)
+            // 壊れたファイルで FFmpeg が終わらないことがあるので、時間を限って動かす
+            // (時間が来たら止める。止めると出力が閉じて、下の読み込みも終わる)
             final Process process = Ffmpeg.start(new ProcessBuilder(Arrays.asList(
                     Ffmpeg.requireFfmpeg().getPath(),
                     "-hide_banner", "-loglevel", "error", "-nostdin",
@@ -75,7 +76,7 @@ public final class AvifDecoder {
                     "-i", tempFile.getAbsolutePath(),
                     "-map", "0:v:0", "-frames:v", "1",
                     "-f", "image2pipe", "-c:v", "png", "pipe:1"
-            )).redirectErrorStream(false), 30);
+            )).redirectErrorStream(false), TIMEOUT_SECONDS);
 
             process.getOutputStream().close();
             final InputStream err = process.getErrorStream();
@@ -98,20 +99,6 @@ public final class AvifDecoder {
             });
             errDrainer.setDaemon(true);
             errDrainer.start();
-            // 出力を読み終わるのを待つあいだに FFmpeg が止まったままにならないように、時間を過ぎたら終わらせる
-            // (終わらせると出力が閉じて、下の読み込みも終わる)
-            final Thread watchdog = new Thread(new Runnable() {
-                @Override
-                public void run() {
-                    try {
-                        if (!process.waitFor(TIMEOUT_SECONDS, TimeUnit.SECONDS)) process.destroyForcibly();
-                    } catch (InterruptedException e) {
-                        process.destroyForcibly();
-                    }
-                }
-            });
-            watchdog.setDaemon(true);
-            watchdog.start();
 
             final ByteArrayOutputStream bytes = new ByteArrayOutputStream();
             final InputStream input = process.getInputStream();
