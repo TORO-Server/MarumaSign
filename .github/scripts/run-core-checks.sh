@@ -17,9 +17,9 @@ seed="${FUZZ_SEED:-$(date +%s)}"
 failed=()
 
 if [ "$mode" = "long" ]; then
-  pdf_fuzz=40000; image_fuzz=3000; structure_fuzz=20000; webp_fuzz=30000; decoder_fuzz_seconds=300; font_fuzz=100000; gltf_fuzz=200000; splat_fuzz=300000
+  pdf_fuzz=40000; image_fuzz=3000; structure_fuzz=20000; webp_fuzz=30000; decoder_fuzz_seconds=300; font_fuzz=100000; gltf_fuzz=200000; splat_fuzz=300000; svg_fuzz=30000
 else
-  pdf_fuzz=3000; image_fuzz=300; structure_fuzz=1000; webp_fuzz=3000; decoder_fuzz_seconds=20; font_fuzz=5000; gltf_fuzz=3000; splat_fuzz=20000
+  pdf_fuzz=3000; image_fuzz=300; structure_fuzz=1000; webp_fuzz=3000; decoder_fuzz_seconds=20; font_fuzz=5000; gltf_fuzz=3000; splat_fuzz=20000; svg_fuzz=1000
 fi
 
 echo "mode=$mode seed=$seed"
@@ -94,6 +94,8 @@ check jpegCheck 300 -Xmx512m -Xss512k marumasa.marumasa_sign.core.image.format.J
 check imageRegressionCheck 300 -Xmx512m -Xss512k marumasa.marumasa_sign.core.image.ImageRegressionCheck
 check imageFormatsFuzz 3600 -Xmx1g -Xss512k marumasa.marumasa_sign.core.image.ImageFormatsFuzz "$image_fuzz" \
   "$root/tools/verify/test-image.png" src/test/resources/jpeg/*.jpg src/test/resources/image
+# SVG: 深い入れ子、use の爆弾、極端な CSS や transform、外部の実体などを作って読ませる
+check svgFuzz 3600 -Xmx512m -Xss512k marumasa.marumasa_sign.core.image.SvgFuzz "$svg_fuzz" src/test/resources/image
 check structureRegressionCheck 600 -Xmx2g -Xss512k marumasa.marumasa_sign.core.structure.StructureRegressionCheck
 check structureFuzz 3600 -Xmx2g -Xss512k marumasa.marumasa_sign.core.structure.StructureFuzz "$structure_fuzz" \
   src/test/resources/structure "$root/tools/verify/test-structure.nbt"
