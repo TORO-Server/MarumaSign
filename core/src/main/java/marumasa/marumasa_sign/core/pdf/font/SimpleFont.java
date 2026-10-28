@@ -159,7 +159,10 @@ final class SimpleFont extends PdfFont {
         if (hasMissingWidth) return missingWidth / 1000;
         if (standard14 != null && metrics != null) {
             final String name = names[code & 0xFF];
-            final Double width = name == null ? null : metrics.widths.get(name);
+            Double width = name == null ? null : metrics.widths.get(name);
+            // WinAnsi と MacRoman の、名前の違う空白とハイフン (寸法の表には space と hyphen しかない)
+            if (width == null && "nbspace".equals(name)) width = metrics.widths.get("space");
+            if (width == null && "sfthyphen".equals(name)) width = metrics.widths.get("hyphen");
             return width == null ? 0 : width / 1000;
         }
         final FontProgram font = font();
@@ -303,6 +306,8 @@ final class SimpleFont extends PdfFont {
         final FontProgram font = font();
         if (font == null) return new GeneralPath();
         final int gid = gid(code);
+        // 代わりのフォントにない文字は、.notdef のグリフ (四角など) を描かずに、何も描かない (Acrobat や pdf.js と同じ)
+        if (gid == 0 && program == null) return new GeneralPath();
         GeneralPath path = font.path(gid);
         // 埋め込まれていないフォントは、PDF の幅に合うように横に伸び縮みさせる (標準 14 フォントは除く)
         if (program == null && standard14 == null && hasExplicitWidth(code)) {

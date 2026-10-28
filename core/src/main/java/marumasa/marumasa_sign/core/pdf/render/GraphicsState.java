@@ -37,6 +37,8 @@ final class GraphicsState implements Cloneable {
     String blendMode = "Normal";
     SoftMask softMask;
     boolean alphaIsShape;
+    // 転送関数 (10.5): 赤、緑、青ごとの 256 段階の表。null なら変えない
+    int[][] transfer;
 
     // 文字の状態
     double charSpacing;

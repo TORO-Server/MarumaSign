@@ -36,7 +36,7 @@ import java.util.concurrent.TimeoutException;
  * <ul>
  * <li>部品の確かめ: AES の既知の答え、語の切り分け、CMap、CCITT、JPEG</li>
  * <li>試験用の PDF (src/test/resources/pdf): 暗号化の方式ごとに開けるか、パスワードの要るものを拒むか、描いた色が合うか</li>
- * <li>その場で作る PDF: 機能ごとに描けるか (想定外の例外を出さないか)</li>
+ * <li>その場で作る PDF: 機能ごとに描けるか (想定外の例外を出さないか)、描いた画素が合うか</li>
  * <li>悪意のある PDF: 輪、爆弾、深い入れ子などで、止まらずに短い時間で終わるか</li>
  * </ul>
  * どれも試験の厳しい動作 (marumasign.pdfStrict) で動かし、受け止めている想定外の例外も失敗にする。
@@ -64,6 +64,7 @@ public final class PdfCheck {
         run("encrypted fixtures", PdfCheck::encrypted);
         run("mixed fixture", PdfCheck::mixed);
         run("synthetic samples", PdfCheck::synthetic);
+        run("rendering", PdfCheck::rendering);
         run("malicious samples", PdfCheck::malicious);
         System.out.println("PdfCheck finished in " + (System.nanoTime() - start) / 1_000_000 + " ms, failures: " + failures);
         System.exit(failures == 0 ? 0 : 1);
@@ -277,6 +278,123 @@ public final class PdfCheck {
             if (sample[0].equals("text-and-paths")) {
                 expect(close(image.frames[0][185 * 200 + 15], 0xFFFF0000), "red rectangle");
             }
+        }
+    }
+
+    // ---------- 描いた画素 ----------
+
+    private static void rendering() throws IOException {
+        final StringBuilder problems = new StringBuilder();
+        for (String[] sample : PdfSamples.rendering()) {
+            final PdfFile pdf = PdfFile.open(sample[1].getBytes(StandardCharsets.ISO_8859_1));
+            final DecodedImage image = pdf.render(0, 200);
+            pdf.close();
+            try {
+                checkRendering(sample[0], image);
+            } catch (AssertionError e) {
+                problems.append(sample[0]).append(": ").append(e.getMessage()).append("; ");
+            }
+        }
+        expect(problems.length() == 0, problems.toString());
+    }
+
+    // 画素 (x, y) の色 (RGB)
+    private static int pixel(DecodedImage image, int x, int y) {
+        return image.frames[0][y * image.width + x] & 0xFFFFFF;
+    }
+
+    // 灰色の明るさ (0 から 255、RGB の平均)
+    private static int gray(DecodedImage image, int x, int y) {
+        final int p = pixel(image, x, y);
+        return (((p >> 16) & 0xFF) + ((p >> 8) & 0xFF) + (p & 0xFF)) / 3;
+    }
+
+    private static void expectColor(DecodedImage image, int x, int y, int rgb, String what) {
+        expect(close(pixel(image, x, y), rgb), what + " at " + x + "," + y + " is " + Integer.toHexString(pixel(image, x, y)));
+    }
+
+    private static void checkRendering(String name, DecodedImage image) {
+        expect(image.width == 200 && image.height == 200, "size " + image.width + "x" + image.height);
+        switch (name) {
+            case "thin-lines":
+                // 太さ 0.1 の横線 (画素の y = 49.7) は、y = 50 の 1 画素の濃い線
+                expectColor(image, 100, 50, 0x0000FF, "thin horizontal line");
+                expect(gray(image, 100, 49) > 230 && gray(image, 100, 51) > 230, "thin horizontal line is not one pixel wide");
+                // 太さ 0 の縦線 (x = 100.3) は、x = 100 の 1 画素
+                expectColor(image, 100, 130, 0x0000FF, "zero-width vertical line");
+                // 高さ 0.3 の長方形 (画素の y = 149.5 から 149.8) は、y = 150 の 1 画素
+                expectColor(image, 60, 150, 0xFF0000, "thin rectangle");
+                break;
+            case "stroke-adjust":
+                // 太さ 3 の線 (画素の y = 98.1 から 101.1) は、y = 98 から 100 の 3 画素にそろう
+                expect(gray(image, 100, 98) < 8 && gray(image, 100, 100) < 8, "wide line edge is blurred: " + gray(image, 100, 98));
+                expect(gray(image, 100, 97) > 247 && gray(image, 100, 101) > 247, "wide line is not adjusted: " + gray(image, 100, 101));
+                break;
+            case "anisotropic-stroke":
+                // 線の太さは縦に 0.2 ポイント: 線の 5 ポイント上は白い
+                expect(gray(image, 100, 95) > 247, "line width is not transformed per axis: " + gray(image, 100, 95));
+                expect(gray(image, 100, 100) < 250 || gray(image, 100, 99) < 250, "thin line is not drawn");
+                break;
+            case "pattern-hairline": {
+                // パターンの横線 (ページの y = 50) は細い: 4 画素離れたところは白い
+                expect(gray(image, 100, 146) > 247 && gray(image, 100, 154) > 247, "pattern line is too wide: " + gray(image, 100, 146));
+                boolean drawn = false;
+                for (int y = 147; y <= 153; y++) drawn |= (pixel(image, 100, y) & 0xFF) > 128 && gray(image, 100, y) < 200;
+                expect(drawn, "pattern line is not drawn");
+                break;
+            }
+            case "glyph-baseline":
+                // 基準線 (画素の y = 99.5) は y = 99 に切り下げる: I の縦棒の下の端 (y = 98) は濃く、y = 99 は白い
+                expect(gray(image, 25, 98) < 30, "glyph bottom is blurred: " + gray(image, 25, 98));
+                expect(gray(image, 25, 99) > 230, "glyph is not snapped to the pixel grid: " + gray(image, 25, 99));
+                break;
+            case "nbspace-width": {
+                // 5 つの nbspace (幅 278) の後の I は、x = 80 より右
+                expect(gray(image, 16, 90) > 230, "nbspace has no width");
+                boolean found = false;
+                for (int x = 80; x < 95; x++) found |= gray(image, x, 90) < 64;
+                expect(found, "I after the spaces is missing");
+                break;
+            }
+            case "missing-glyph":
+                for (int y = 50; y < 150; y += 2) {
+                    for (int x = 40; x < 160; x += 2) expect(gray(image, x, y) > 200, "notdef glyph is drawn at " + x + "," + y);
+                }
+                break;
+            case "transfer-function":
+                expectColor(image, 35, 165, 0x00FFFF, "inverted red");
+                break;
+            case "link-border":
+                // 太さ 2 の赤い枠の左の辺 (x = 100)
+                expectColor(image, 100, 80, 0xFF0000, "link border");
+                expect(gray(image, 140, 80) > 247, "link is filled");
+                break;
+            case "type3-uncolored-stroke":
+                // グリフの四角の左の辺 (x = 60) は、塗りの色 (赤) で描く
+                expectColor(image, 60, 100, 0xFF0000, "uncolored Type 3 stroke");
+                break;
+            case "standard-glyph-order": {
+                // CID 16 はハイフン: 字の高さの真ん中あたりに、途切れない横棒がある (四角の .notdef なら、辺は縦だけ)
+                boolean bar = false;
+                for (int y = 86; y <= 100; y++) {
+                    boolean row = true;
+                    for (int x = 58; x <= 74; x++) row &= gray(image, x, y) < 100;
+                    bar |= row;
+                }
+                expect(bar, "hyphen is not drawn");
+                break;
+            }
+            case "cff-cidtogidmap":
+                // CID 1 は CIDToGIDMap で四角のグリフ 2 (ページの 50 から 150)
+                expect(gray(image, 100, 100) < 30, "CIDToGIDMap of a CFF font is ignored");
+                break;
+            case "truetype-lsb":
+                // 四角は原点 (x = 50) から 40 ポイントの幅
+                expect(gray(image, 60, 130) < 30, "left side bearing is ignored");
+                expect(gray(image, 130, 130) > 230, "glyph is drawn at xMin");
+                break;
+            default:
+                throw new AssertionError("no check for " + name);
         }
     }
 
