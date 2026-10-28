@@ -3,6 +3,7 @@ package marumasa.marumasa_sign.core.ui;
 import marumasa.marumasa_sign.core.sign.SignSpec;
 
 import java.awt.Graphics2D;
+import java.text.DecimalFormatSymbols;
 
 /**
  * 数値の入力欄。右端のボタンとマウスホイールでも値を増減できる。
@@ -25,14 +26,19 @@ public final class NumberField extends TextField {
         this.step = step;
         this.integer = integer;
         this.fallback = value;
-        allowed(integer ? "0123456789-" : "0123456789-.");
+        // 小数点にコンマを使う地域 (ドイツやフランスなど) では、テンキーの小数点などで入力されるコンマも小数点として受け付ける
+        allowed(integer ? "0123456789-" : decimalComma() ? "0123456789-.," : "0123456789-.");
         maxLength(12);
         setValue(value);
     }
 
+    private static boolean decimalComma() {
+        return DecimalFormatSymbols.getInstance().getDecimalSeparator() == ',';
+    }
+
     public float getValue() {
         try {
-            final float value = Float.parseFloat(getText());
+            final float value = Float.parseFloat(getText().replace(',', '.'));
             if (Float.isNaN(value) || Float.isInfinite(value)) return fallback;
             return Math.max(min, Math.min(max, integer ? Math.round(value) : value));
         } catch (NumberFormatException e) {
