@@ -39,8 +39,10 @@ class ClassRelocator {
         def input = new DataInputStream(new ByteArrayInputStream(bytes))
         def output = new ByteArrayOutputStream(bytes.length + 256)
         def out = new DataOutputStream(output)
-        if (input.readInt() != 0xCAFEBABE) throw new GradleException('Not a class file')
-        out.writeInt(0xCAFEBABE)
+        // Groovy では 0xCAFEBABE は int に収まらないので Long になる。int にしてから比べる
+        final int magic = 0xCAFEBABE as int
+        if (input.readInt() != magic) throw new GradleException('Not a class file')
+        out.writeInt(magic)
         out.writeShort(input.readUnsignedShort())
         out.writeShort(input.readUnsignedShort())
         int count = input.readUnsignedShort()
