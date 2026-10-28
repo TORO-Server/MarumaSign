@@ -23,7 +23,7 @@ public final class StructureReader {
     // 展開したあとの大きさの上限
     // (小さく圧縮した巨大なファイルで、ゲームのメモリを使い切らせないように)
     static final int MAX_DECOMPRESSED = 96 * 1024 * 1024;
-    // 1 つの領域で読むます目の数の上限 (壊れたファイルで、長い時間かからないように)
+    // 読むます目の数の上限 (Litematica は領域の合計。壊れたファイルで、長い時間かからないように)
     static final long MAX_SCANNED = 128L * 1024 * 1024;
 
     private StructureReader() {
@@ -100,6 +100,12 @@ public final class StructureReader {
         throw new IOException("Unknown structure format");
     }
 
+    // パレットの数を確かめる。状態の種類は MAX_PALETTE までしか持てないので、それより多いものは壊れたファイルとして読まない
+    // (1 つずつ名前を読んで状態に直すのに時間がかからないように、直す前に確かめる)
+    private static void checkPaletteSize(int size) throws IOException {
+        if (size > Structure.MAX_PALETTE) throw new IOException("Too many block states in the palette: " + size);
+    }
+
     private static boolean looksBedrock(Map<String, Object> root) {
         return root.containsKey("structure") && root.containsKey("size") && root.containsKey("format_version");
     }
@@ -117,6 +123,7 @@ public final class StructureReader {
 
         final Map<String, Object> blocks = version >= 3 ? Nbt.compound(schematic, "Blocks") : schematic;
         final Map<String, Object> palette = Nbt.compound(blocks, "Palette");
+        checkPaletteSize(palette.size());
         final byte[] data = Nbt.bytes(blocks, version >= 3 ? "Data" : "BlockData");
         if (data == null) throw new IOException("Schematic has no block data");
         int maxIndex = 0;
@@ -169,10 +176,13 @@ public final class StructureReader {
             structure.setBlockEntity(pos[0], pos[1], pos[2], nbt);
         }
 
+        // バージョン 2 までのエンティティの位置は、構造物の角からではなく、ワールドの座標で書かれている (WorldEdit、FastAsyncWorldEdit)。
+        // 構造物の角のワールドの座標は Offset にある。バージョン 3 からは構造物の角からの位置
+        final int[] offset = version < 3 ? Nbt.ints(schematic.get("Offset")) : null;
         for (Object item : Nbt.list(schematic, "Entities")) {
             final Map<String, Object> entity = Nbt.compound(item);
-            final double[] pos = Nbt.doubles(entity.get("Pos"));
-            if (pos == null || pos.length < 3) continue;
+            final double[] pos = relative(Nbt.doubles(entity.get("Pos")), offset, structure);
+            if (pos == null) continue;
             Map<String, Object> nbt = entity;
             if (version >= 3 && entity.get("Data") instanceof Map) nbt = Nbt.compound(entity, "Data");
             structure.addEntity(Nbt.string(entity, "Id", Nbt.string(nbt, "id", "")), pos[0], pos[1], pos[2], nbt);
@@ -180,6 +190,25 @@ public final class StructureReader {
 
         readSpongeBiomes(structure, version, version >= 3 ? Nbt.compound(schematic, "Biomes") : schematic, width, height, length);
         return structure;
+    }
+
+    /**
+     * ワールドの座標で書かれたエンティティの位置を、構造物の角からの位置にする。位置がなければ null。
+     * 角の座標を引くと構造物から外れるのに、引かなければ中にあるもの (構造物の角からの位置で書く道具で作ったもの) は、そのまま使う。
+     *
+     * @param origin 構造物の角のワールドの座標 (分からなければ null)
+     */
+    private static double[] relative(double[] pos, int[] origin, Structure structure) {
+        if (pos == null || pos.length < 3) return null;
+        if (origin == null || origin.length < 3) return pos;
+        final double[] moved = {pos[0] - origin[0], pos[1] - origin[1], pos[2] - origin[2]};
+        return !inside(moved, structure) && inside(pos, structure) ? pos : moved;
+    }
+
+    // 構造物の中 (まわり 1 ブロックを含む) かどうか
+    private static boolean inside(double[] pos, Structure structure) {
+        return pos[0] >= -1 && pos[0] <= structure.fullX + 1 && pos[1] >= -1 && pos[1] <= structure.fullY + 1
+                && pos[2] >= -1 && pos[2] <= structure.fullZ + 1;
     }
 
     private static void readSpongeBiomes(Structure structure, int version, Map<String, Object> source, int width, int height, int length) {
@@ -231,12 +260,12 @@ public final class StructureReader {
         final Map<String, Object> regions = Nbt.compound(root, "Regions");
         if (regions.isEmpty()) throw new IOException("Litematic has no regions");
 
-        // すべての領域を囲む範囲
-        int minX = Integer.MAX_VALUE, minY = Integer.MAX_VALUE, minZ = Integer.MAX_VALUE;
-        int maxX = Integer.MIN_VALUE, maxY = Integer.MIN_VALUE, maxZ = Integer.MIN_VALUE;
+        // すべての領域を囲む範囲。位置と大きさは int の範囲のどこにでも書けるので、足し算があふれないように long で計算する
+        long minX = Long.MAX_VALUE, minY = Long.MAX_VALUE, minZ = Long.MAX_VALUE;
+        long maxX = Long.MIN_VALUE, maxY = Long.MIN_VALUE, maxZ = Long.MIN_VALUE;
         for (Object item : regions.values()) {
             final Map<String, Object> region = Nbt.compound(item);
-            final int[] min = regionMin(region);
+            final long[] min = regionMin(region);
             final int[] size = regionSize(region);
             minX = Math.min(minX, min[0]);
             minY = Math.min(minY, min[1]);
@@ -245,15 +274,20 @@ public final class StructureReader {
             maxY = Math.max(maxY, min[1] + size[1]);
             maxZ = Math.max(maxZ, min[2] + size[2]);
         }
-        final Structure structure = new Structure(Structure.Source.JAVA, dataVersion, maxX - minX, maxY - minY, maxZ - minZ);
+        if (maxX - minX > Structure.MAX_EDGE || maxY - minY > Structure.MAX_EDGE || maxZ - minZ > Structure.MAX_EDGE) {
+            throw new IOException("Litematic is too large (" + (maxX - minX) + " x " + (maxY - minY) + " x " + (maxZ - minZ) + ")");
+        }
+        final Structure structure = new Structure(Structure.Source.JAVA, dataVersion, (int) (maxX - minX), (int) (maxY - minY), (int) (maxZ - minZ));
 
+        long scanned = 0;
         for (Object item : regions.values()) {
             final Map<String, Object> region = Nbt.compound(item);
-            final int[] min = regionMin(region);
+            final long[] min = regionMin(region);
             final int[] size = regionSize(region);
-            final int offsetX = min[0] - minX, offsetY = min[1] - minY, offsetZ = min[2] - minZ;
+            final int offsetX = (int) (min[0] - minX), offsetY = (int) (min[1] - minY), offsetZ = (int) (min[2] - minZ);
 
             final List<Object> paletteList = Nbt.list(region, "BlockStatePalette");
+            checkPaletteSize(paletteList.size());
             final int[] mapping = new int[Math.max(1, paletteList.size())];
             for (int i = 0; i < paletteList.size(); i++) {
                 final Map<String, Object> entry = Nbt.compound(paletteList.get(i));
@@ -264,9 +298,11 @@ public final class StructureReader {
             // 1 つの番号のビット数。番号は long の境目をまたいで詰められている
             final int bits = Math.max(2, 32 - Integer.numberOfLeadingZeros(Math.max(1, paletteList.size()) - 1));
             final long mask = (1L << bits) - 1L;
+            // 1 辺は囲む範囲 (MAX_EDGE) に収まっているので、かけ算はあふれない
             final long total = (long) size[0] * size[1] * size[2];
+            scanned += total;
+            if (scanned > MAX_SCANNED) throw new IOException("Litematic regions are too large");
             if ((total * bits + 63) / 64 > states.length) throw new IOException("Litematic block data is too short");
-            if (total > MAX_SCANNED) throw new IOException("Litematic region is too large");
             for (int y = 0; y < size[1]; y++) {
                 for (int z = 0; z < size[2]; z++) {
                     for (int x = 0; x < size[0]; x++) {
@@ -294,9 +330,9 @@ public final class StructureReader {
             // エンティティの位置は、最も小さい角ではなく、領域の位置 (Position) からの位置
             // (大きさが負の領域では、両者がずれる)
             final Map<String, Object> position = Nbt.compound(region, "Position");
-            final int entityX = Nbt.integer(position, "x", 0) - minX;
-            final int entityY = Nbt.integer(position, "y", 0) - minY;
-            final int entityZ = Nbt.integer(position, "z", 0) - minZ;
+            final long entityX = Nbt.integer(position, "x", 0) - minX;
+            final long entityY = Nbt.integer(position, "y", 0) - minY;
+            final long entityZ = Nbt.integer(position, "z", 0) - minZ;
             for (Object entityItem : Nbt.list(region, "Entities")) {
                 final Map<String, Object> entity = Nbt.compound(entityItem);
                 final double[] pos = Nbt.doubles(entity.get("Pos"));
@@ -307,20 +343,28 @@ public final class StructureReader {
         return structure;
     }
 
-    private static int[] regionSize(Map<String, Object> region) {
-        final Map<String, Object> size = Nbt.compound(region, "Size");
-        return new int[]{Math.abs(Nbt.integer(size, "x", 0)), Math.abs(Nbt.integer(size, "y", 0)), Math.abs(Nbt.integer(size, "z", 0))};
-    }
-
-    // 領域の最も小さい角。大きさが負なら、位置から負の向きに広がっている
-    private static int[] regionMin(Map<String, Object> region) {
-        final Map<String, Object> position = Nbt.compound(region, "Position");
+    // 領域の大きさ (負の向きに広がるものも正の値にする)。1 辺が MAX_EDGE を超える領域は読まない
+    private static int[] regionSize(Map<String, Object> region) throws IOException {
         final Map<String, Object> size = Nbt.compound(region, "Size");
         final int[] result = new int[3];
         final String[] axes = {"x", "y", "z"};
         for (int i = 0; i < 3; i++) {
-            final int p = Nbt.integer(position, axes[i], 0);
-            final int s = Nbt.integer(size, axes[i], 0);
+            final long value = Math.abs((long) Nbt.integer(size, axes[i], 0));
+            if (value > Structure.MAX_EDGE) throw new IOException("Litematic region is too large");
+            result[i] = (int) value;
+        }
+        return result;
+    }
+
+    // 領域の最も小さい角。大きさが負なら、位置から負の向きに広がっている
+    private static long[] regionMin(Map<String, Object> region) {
+        final Map<String, Object> position = Nbt.compound(region, "Position");
+        final Map<String, Object> size = Nbt.compound(region, "Size");
+        final long[] result = new long[3];
+        final String[] axes = {"x", "y", "z"};
+        for (int i = 0; i < 3; i++) {
+            final long p = Nbt.integer(position, axes[i], 0);
+            final long s = Nbt.integer(size, axes[i], 0);
             result[i] = s < 0 ? p + s + 1 : p;
         }
         return result;
@@ -351,6 +395,7 @@ public final class StructureReader {
             final List<Object> palettes = Nbt.list(root, "palettes");
             if (!palettes.isEmpty()) paletteList = Nbt.list(palettes.get(0));
         }
+        checkPaletteSize(paletteList.size());
         final int[] mapping = new int[paletteList.size()];
         for (int i = 0; i < mapping.length; i++) mapping[i] = structure.paletteId(stateFromNbt(Nbt.compound(paletteList.get(i))));
 
@@ -382,6 +427,7 @@ public final class StructureReader {
         final List<Object> layers = Nbt.list(body, "block_indices");
         final Map<String, Object> palette = Nbt.compound(Nbt.compound(body, "palette"), "default");
         final List<Object> paletteList = Nbt.list(palette, "block_palette");
+        checkPaletteSize(paletteList.size());
 
         final int[] mapping = new int[paletteList.size()];
         final boolean[] water = new boolean[paletteList.size()];
@@ -514,10 +560,14 @@ public final class StructureReader {
             final Map<String, Object> entity = Nbt.compound(item);
             structure.setBlockEntity(Nbt.integer(entity, "x", 0), Nbt.integer(entity, "y", 0), Nbt.integer(entity, "z", 0), entity);
         }
+        // WorldEdit で書いたものは、エンティティの位置がワールドの座標で、構造物の角のワールドの座標が WEOrigin にある
+        // (MCEdit と Schematica は構造物の角からの位置)
+        final int[] origin = Nbt.has(root, "WEOriginX") && Nbt.has(root, "WEOriginY") && Nbt.has(root, "WEOriginZ")
+                ? new int[]{Nbt.integer(root, "WEOriginX", 0), Nbt.integer(root, "WEOriginY", 0), Nbt.integer(root, "WEOriginZ", 0)} : null;
         for (Object item : Nbt.list(root, "Entities")) {
             final Map<String, Object> entity = Nbt.compound(item);
-            final double[] pos = Nbt.doubles(entity.get("Pos"));
-            if (pos == null || pos.length < 3) continue;
+            final double[] pos = relative(Nbt.doubles(entity.get("Pos")), origin, structure);
+            if (pos == null) continue;
             structure.addEntity(Nbt.string(entity, "id", ""), pos[0], pos[1], pos[2], entity);
         }
         return structure;
