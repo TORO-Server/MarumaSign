@@ -48,11 +48,6 @@ final class Type0Font extends PdfFont {
     // グリフの並びの表 (STANDARD_GLYPH_ORDER か、CALIBRI_GLYPH_ORDER と STANDARD_GLYPH_ORDER)。使わなければ null
     private final int[][] glyphOrder;
 
-    /**
-     * Windows の標準のフォント (Arial、Times New Roman、Courier New、Verdana など) のグリフの並び:
-     * {最初の GID, 最初の Unicode, 数} の繰り返し (pdf.js の GlyphMapForStandardFonts の、ラテン、ギリシャ、キリル、ヘブライ文字の分)。
-     * 埋め込まずに Identity-H で書いた CID は、元のフォントのグリフの番号なので、これで文字に戻す
-     */
     // Calibri で、STANDARD_GLYPH_ORDER と違うところ (pdf.js の SupplementalGlyphMapForCalibri)
     private static final int[] CALIBRI_GLYPH_ORDER = {
             1, 0x20, 1, 4, 0x41, 1, 5, 0xC0, 2, 9, 0xC4, 1, 17, 0x42, 2,
@@ -75,6 +70,11 @@ final class Type0Font extends PdfFont {
             1004, 0x30, 10, 1081, 0x25, 1, 1085, 0x2B, 1, 1086, 0x2D, 1
     };
 
+    /**
+     * Windows の標準のフォント (Arial、Times New Roman、Courier New、Verdana など) のグリフの並び:
+     * {最初の GID, 最初の Unicode, 数} の繰り返し (pdf.js の GlyphMapForStandardFonts の、ラテン、ギリシャ、キリル、ヘブライ文字の分)。
+     * 埋め込まずに Identity-H で書いた CID は、元のフォントのグリフの番号なので、これで文字に戻す
+     */
     private static final int[] STANDARD_GLYPH_ORDER = {
             2, 0xA, 1, 3, 0x20, 95, 98, 0xC4, 2,
             100, 0xC7, 1, 101, 0xC9, 1, 102, 0xD1, 1, 103, 0xD6, 1, 104, 0xDC, 1,
@@ -344,7 +344,7 @@ final class Type0Font extends PdfFont {
             // CID の決まった CFF は、文字集合で CID からグリフを選ぶ
             if (cff != null && cff.isCid()) return cff.gidForCid(cid);
             // TrueType と、CID の決まっていない CFF: CIDToGIDMap (なければ CID がそのまま GID)。
-            // 仕様では TrueType のためのものだが、OpenType の CFF にも付けたものがある (Acrobat や poppler も使う)
+            // 仕様では TrueType のためのものだが、OpenType の CFF にも付けたものがある (poppler も使う)
             if (cidToGid != null) {
                 final int p = 2 * cid;
                 return p + 1 < cidToGid.length ? ((cidToGid[p] & 0xFF) << 8) | (cidToGid[p + 1] & 0xFF) : 0;

@@ -112,7 +112,142 @@ final class PdfSamples {
                 "<< /Type /Annot /Subtype /Square /Rect [50 50 150 150] /AP << /N 7 0 R >> >>",
                 "<< /Type /OCG /Name (Hidden) >>",
                 stream("/Type /XObject /Subtype /Form /BBox [0 0 10 10]", "0 0 1 RG 1 w 1 1 8 8 re S"))});
+        samples.addAll(rendering());
         return samples;
+    }
+
+    /**
+     * 描いた結果の画素を確かめる PDF (PdfCheck の rendering)。{名前, 中身}。どれも 200 x 200 ポイントのページで、200 画素の大きさで描く。
+     */
+    static List<String[]> rendering() {
+        final List<String[]> samples = new ArrayList<>();
+        // 細い線: 太さ 0.1 の横線、太さ 0 の縦線、高さ 0.3 の長方形は、どれも画素に合わせた 1 画素の濃い線になる
+        samples.add(new String[]{"thin-lines", page("<< >>",
+                "0 0 1 RG 0.1 w 20 150.3 m 180 150.3 l S 0 w 100.3 20 m 100.3 120 l S 1 0 0 rg 20 50.2 160 0.3 re f")});
+        // 太い線の線の調整: 縦と横の線は、輪郭が画素の境目に合う (端がぼやけない)
+        samples.add(new String[]{"stroke-adjust", page("<< >>", "0 g 3 w 20 100.4 m 180 100.4 l S")});
+        // 縦と横で拡大率の違う CTM: 線の太さもユーザー空間で変わる (縦に 0.1 倍なので、横線は細い)
+        samples.add(new String[]{"anisotropic-stroke", page("<< >>", "q 10 0 0 0.1 0 100 cm 0 g 2 w 2 0 m 18 0 l S Q")});
+        // 太さを決めないパターンの線は、いちばん細い線 (パターンの行列で 10 倍にしても太くならない)
+        samples.add(new String[]{"pattern-hairline", page("<< /Pattern << /P1 5 0 R >> >>", "/Pattern cs /P1 scn 0 0 200 200 re f",
+                stream("/PatternType 1 /PaintType 1 /TilingType 1 /BBox [0 0 10 10] /XStep 10 /YStep 10 /Matrix [10 0 0 10 0 0]",
+                        "0 0 1 RG 0 5 m 10 5 l S"))});
+        // 文字の基準線は画素の境目に合う: 基準線 y = 100.5 の I の下の端は、ぼやけない
+        samples.add(new String[]{"glyph-baseline", page("<< /Font << /F1 5 0 R >> >>", "0 g BT /F1 40 Tf 20 100.5 Td (I) Tj ET",
+                "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>")});
+        // WinAnsi の 240 (nbspace) は空白の幅を持つ
+        samples.add(new String[]{"nbspace-width", page("<< /Font << /F1 5 0 R >> >>", "0 g BT /F1 50 Tf 10 100 Td (\240\240\240\240\240I) Tj ET",
+                "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>")});
+        // 代わりのフォントにない文字 (名前のないコード 1) は、.notdef の四角を描かない
+        samples.add(new String[]{"missing-glyph", page("<< /Font << /F1 5 0 R >> >>", "0 g BT /F1 100 Tf 50 50 Td (\\001\\001) Tj ET",
+                "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>")});
+        // 転送関数 (TR) で色を反転する: 赤は水色になる
+        samples.add(new String[]{"transfer-function", page("<< /ExtGState << /T1 5 0 R >> >>", "q /T1 gs 1 0 0 rg 10 10 50 50 re f Q",
+                "<< /Type /ExtGState /TR << /FunctionType 2 /Domain [0 1] /C0 [1] /C1 [0] /N 1 >> >>")});
+        // リンクの枠 (外観なし、Border と C)
+        samples.add(new String[]{"link-border", build(
+                "<< /Type /Catalog /Pages 2 0 R >>",
+                "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+                "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Contents 4 0 R /Annots [5 0 R] >>",
+                stream("", "0 g"),
+                "<< /Type /Annot /Subtype /Link /Rect [100 100 180 140] /Border [0 0 2] /C [1 0 0] >>")});
+        // 色のない (d1) Type 3 のグリフの線は、塗りの色で描く
+        samples.add(new String[]{"type3-uncolored-stroke", page("<< /Font << /T3 5 0 R >> >>",
+                "1 0 0 rg 0 0 1 RG BT /T3 100 Tf 50 50 Td (a) Tj ET",
+                "<< /Type /Font /Subtype /Type3 /FontBBox [0 0 1000 1000] /FontMatrix [0.001 0 0 0.001 0 0] /CharProcs << /a 6 0 R >> "
+                        + "/Encoding << /Differences [97 /a] >> /FirstChar 97 /LastChar 97 /Widths [1000] >>",
+                stream("", "1000 0 0 0 1000 1000 d1 100 w 100 100 800 800 re S"))});
+        // 埋め込まれていない Arial (Identity-H) の CID は、Windows の Arial のグリフの番号 (16 はハイフン)
+        samples.add(new String[]{"standard-glyph-order", page("<< /Font << /F1 5 0 R >> >>", "0 g BT /F1 100 Tf 50 80 Td <0010> Tj ET",
+                "<< /Type /Font /Subtype /Type0 /BaseFont /Arial /Encoding /Identity-H /DescendantFonts [6 0 R] >>",
+                "<< /Type /Font /Subtype /CIDFontType2 /BaseFont /Arial /CIDSystemInfo << /Registry (Adobe) /Ordering (Identity) /Supplement 0 >> "
+                        + "/FontDescriptor << /Type /FontDescriptor /FontName /Arial /Flags 32 /FontBBox [-665 -325 2000 1006] /ItalicAngle 0 "
+                        + "/Ascent 905 /Descent -212 /CapHeight 716 /StemV 80 >> /W [16 [333]] >>")});
+        // CID の決まっていない CFF を使う CIDFontType0 の CIDToGIDMap (CID 1 を、四角のグリフ 2 にする)
+        samples.add(new String[]{"cff-cidtogidmap", page("<< /Font << /F1 5 0 R >> >>", "0 g BT /F1 100 Tf 50 50 Td <0001> Tj ET",
+                "<< /Type /Font /Subtype /Type0 /BaseFont /T /Encoding /Identity-H /DescendantFonts [6 0 R] >>",
+                "<< /Type /Font /Subtype /CIDFontType0 /BaseFont /T /CIDSystemInfo << /Registry (Adobe) /Ordering (Identity) /Supplement 0 >> "
+                        + "/FontDescriptor 7 0 R /CIDToGIDMap 8 0 R /DW 1000 >>",
+                "<< /Type /FontDescriptor /FontName /T /Flags 4 /FontBBox [0 0 1000 1000] /ItalicAngle 0 /Ascent 1000 /Descent 0 "
+                        + "/CapHeight 1000 /StemV 80 /FontFile3 9 0 R >>",
+                stream("", latin1(new byte[]{0, 0, 0, 2})),
+                stream("/Subtype /Type1C", latin1(squareCff())))});
+        // TrueType のグリフの原点は xMin - lsb (グリフ 1 は xMin 500 だが lsb 0 なので、原点から描かれる)
+        samples.add(new String[]{"truetype-lsb", page("<< /Font << /F1 5 0 R >> >>", "0 g BT /F1 100 Tf 50 50 Td <0001> Tj ET",
+                "<< /Type /Font /Subtype /Type0 /BaseFont /L /Encoding /Identity-H /DescendantFonts [6 0 R] >>",
+                "<< /Type /Font /Subtype /CIDFontType2 /BaseFont /L /CIDSystemInfo << /Registry (Adobe) /Ordering (Identity) /Supplement 0 >> "
+                        + "/FontDescriptor 7 0 R /CIDToGIDMap /Identity /DW 1000 >>",
+                "<< /Type /FontDescriptor /FontName /L /Flags 4 /FontBBox [0 0 1000 1000] /ItalicAngle 0 /Ascent 1000 /Descent 0 "
+                        + "/CapHeight 1000 /StemV 80 /FontFile2 8 0 R >>",
+                stream("", latin1(lsbTrueType())))});
+        return samples;
+    }
+
+    /**
+     * 3 つのグリフ (.notdef、空、0 から 1000 の四角) の CFF (CID の決まっていないもの)。
+     */
+    static byte[] squareCff() {
+        final ByteArrayOutputStream out = new ByteArrayOutputStream();
+        // 0 0 rmoveto 1000 hlineto 1000 vlineto -1000 hlineto endchar
+        final byte[] square = {(byte) 139, (byte) 139, 21, (byte) 250, 124, 6, (byte) 250, 124, 7, (byte) 254, 124, 6, 14};
+        final int charStrings = 4 + 6 + 22 + 2 + 2;
+        final int privateOffset = charStrings + 2 + 1 + 4 + 2 + square.length;
+        // ヘッダー、名前の INDEX ("T")
+        write(out, 1, 0, 4, 1, 0, 1, 1, 1, 2, 'T');
+        // Top DICT の INDEX: CharStrings (17) と Private (18) を、5 バイトの整数で
+        write(out, 0, 1, 1, 1, 18);
+        write(out, 29, 0, 0, 0, charStrings, 17, 29, 0, 0, 0, 2, 29, 0, 0, 0, privateOffset, 18);
+        // 文字列と大域サブルーチンの INDEX (空)
+        write(out, 0, 0, 0, 0);
+        // CharStrings の INDEX
+        write(out, 0, 3, 1, 1, 2, 3, 3 + square.length, 14, 14);
+        out.write(square, 0, square.length);
+        // Private DICT: defaultWidthX 0
+        write(out, 139, 20);
+        return out.toByteArray();
+    }
+
+    /**
+     * 2 つのグリフの TrueType。グリフ 1 は x 500 から 900、y 0 から 400 の四角だが、hmtx の lsb は 0。
+     */
+    static byte[] lsbTrueType() {
+        final ByteArrayOutputStream head = new ByteArrayOutputStream();
+        write(head, 0, 1, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0x5F, 0x0F, 0x3C, 0xF5, 0, 0, 0x03, 0xE8);
+        for (int i = 0; i < 16; i++) head.write(0);
+        write(head, 0x01, 0xF4, 0, 0, 0x03, 0x84, 0x01, 0x90, 0, 0, 0, 8, 0, 2, 0, 0, 0, 0);
+        final ByteArrayOutputStream hhea = new ByteArrayOutputStream();
+        write(hhea, 0, 1, 0, 0, 0x03, 0xE8, 0, 0, 0, 0, 0x03, 0xE8);
+        for (int i = 12; i < 34; i++) hhea.write(0);
+        write(hhea, 0, 1);
+        final byte[] maxp = {0, 0, 0x50, 0, 0, 2};
+        // 幅 1000、lsb 0 (グリフ 0)、lsb 0 (グリフ 1)
+        final byte[] hmtx = {0x03, (byte) 0xE8, 0, 0, 0, 0};
+        final ByteArrayOutputStream glyf = new ByteArrayOutputStream();
+        // 輪郭 1 つ、xMin 500 yMin 0 xMax 900 yMax 400、終わりの点 3、命令なし、4 点とも曲線の上 (座標は 2 バイトの差分)
+        write(glyf, 0, 1, 0x01, 0xF4, 0, 0, 0x03, 0x84, 0x01, 0x90, 0, 3, 0, 0, 1, 1, 1, 1,
+                0x01, 0xF4, 0x01, 0x90, 0, 0, 0xFE, 0x70, 0, 0, 0, 0, 0x01, 0x90, 0, 0);
+        // loca (短い形、2 で割った値): グリフ 0 は空
+        final byte[] loca = {0, 0, 0, 0, 0, (byte) (glyf.size() / 2)};
+        final byte[][] tables = {glyf.toByteArray(), head.toByteArray(), hhea.toByteArray(), hmtx, loca, maxp};
+        final String[] tags = {"glyf", "head", "hhea", "hmtx", "loca", "maxp"};
+        final ByteArrayOutputStream out = new ByteArrayOutputStream();
+        write(out, 0, 1, 0, 0, 0, tables.length, 0, 0, 0, 0, 0, 0);
+        int offset = 12 + 16 * tables.length;
+        for (int i = 0; i < tables.length; i++) {
+            for (int k = 0; k < 4; k++) out.write(tags[i].charAt(k));
+            write(out, 0, 0, 0, 0, offset >> 24, offset >> 16 & 0xFF, offset >> 8 & 0xFF, offset & 0xFF,
+                    0, 0, tables[i].length >> 8, tables[i].length & 0xFF);
+            offset += (tables[i].length + 3) & ~3;
+        }
+        for (byte[] table : tables) {
+            out.write(table, 0, table.length);
+            for (int k = table.length; k % 4 != 0; k++) out.write(0);
+        }
+        return out.toByteArray();
+    }
+
+    private static void write(ByteArrayOutputStream out, int... bytes) {
+        for (int b : bytes) out.write(b);
     }
 
     /**

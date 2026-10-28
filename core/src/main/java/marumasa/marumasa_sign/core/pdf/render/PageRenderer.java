@@ -508,7 +508,19 @@ public final class PageRenderer {
             case "d0":
                 break;
             case "d1":
-                // 色のない Type 3 のグリフ (色は文字を描くときの色を使う)
+                // 色のない Type 3 のグリフ (色は文字を描くときの色を使う)。グリフは形だけなので、
+                // 塗るだけの文字では線も塗りの色で、線だけの文字では塗りも線の色で描く (poppler と同じ)
+                if (!uncolored && depth > 0) {
+                    if (gs.renderMode == 1 || gs.renderMode == 5) {
+                        gs.fillSpace = gs.strokeSpace;
+                        gs.fillColor = gs.strokeColor;
+                        gs.fillPattern = gs.strokePattern;
+                    } else if (gs.renderMode != 2 && gs.renderMode != 6) {
+                        gs.strokeSpace = gs.fillSpace;
+                        gs.strokeColor = gs.fillColor;
+                        gs.strokePattern = gs.fillPattern;
+                    }
+                }
                 uncolored = true;
                 break;
             // 画像とシェーディングと XObject
@@ -610,6 +622,7 @@ public final class PageRenderer {
 
     /**
      * 転送関数の表 (赤、緑、青)。関数 1 つか、4 つの配列 (初めの 3 つを赤、緑、青に使う)。Identity、Default、読めないものは null。
+     * 塗りと線の色と画像にかける (シェーディングとパターンにはかけない)。
      */
     private static int[][] transfer(Object value) {
         final Object[] functions = new Object[3];
@@ -1039,10 +1052,10 @@ public final class PageRenderer {
      * @param shape       太らせる道 (ユーザー空間かページの空間)
      * @param scale       ユーザー空間から、その空間への拡大率
      * @param deviceScale その空間から、画素への拡大率
-     * @param width       その空間での線の太さ (正の数)
+     * @param width       その空間での線の太さ
      */
     private BasicStroke stroke(Shape shape, double scale, double deviceScale, double width) {
-        final float w = (float) Math.min(width, 1e15);
+        final float w = width >= 0 ? (float) Math.min(width, 1e15) : 0;
         final int cap = gs.lineCap == 1 ? BasicStroke.CAP_ROUND : gs.lineCap == 2 ? BasicStroke.CAP_SQUARE : BasicStroke.CAP_BUTT;
         final int join = gs.lineJoin == 1 ? BasicStroke.JOIN_ROUND : gs.lineJoin == 2 ? BasicStroke.JOIN_BEVEL : BasicStroke.JOIN_MITER;
         final float miter = (float) Math.max(1, Math.min(gs.miterLimit, 1000));
@@ -1503,10 +1516,7 @@ public final class PageRenderer {
             return;
         }
         if (gs.transfer != null) image = transferImage(image, gs.transfer);
-        // 4 倍より小さく広げる画像も、なめらかにする (画素の角ばりが目立たないように。poppler と同じ)。
-        // それより大きく広げるものは、元の画素が見えるように、そのまま広げる
-        final boolean slightlyEnlarged = deviceWidth < 4.0 * result.sourceWidth && deviceHeight < 4.0 * result.sourceHeight;
-        drawBufferedImage(image, imageToPage, unit, smooth || slightlyEnlarged);
+        drawBufferedImage(image, imageToPage, unit, smooth);
     }
 
     // 画像の色に転送関数をかけたもの (元の画像は覚えておいて使い回すので、写しを作る)

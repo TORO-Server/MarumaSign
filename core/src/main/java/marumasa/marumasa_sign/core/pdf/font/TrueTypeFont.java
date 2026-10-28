@@ -1,5 +1,6 @@
 package marumasa.marumasa_sign.core.pdf.font;
 
+import java.awt.geom.AffineTransform;
 import java.awt.geom.GeneralPath;
 import java.util.HashMap;
 import java.util.Map;
@@ -419,10 +420,29 @@ public final class TrueTypeFont implements UnicodeFont {
                 if (end >= start) contour(path, points, start, end, scale);
                 start = end + 1;
             }
+            // 原点は、グリフの左端 (xMin) から hmtx の左の余白 (lsb) だけ左 (TrueType の決まり。FreeType などと同じ)。
+            // ふつうは xMin と lsb が同じなので、ずらさない
+            final int shift = leftSideBearing(gid) - xMin(gid);
+            if (shift != 0) path.transform(AffineTransform.getTranslateInstance(shift * scale, 0));
         } catch (FontBytes.FontFormatError | ArrayIndexOutOfBoundsException e) {
             // 壊れたグリフは、読めたところまで (または空) にする
         }
         return path;
+    }
+
+    // hmtx の左の余白 (フォントの単位)。なければ、グリフの xMin (ずらさない)
+    private int leftSideBearing(int gid) {
+        final FontBytes hmtx = tables.get("hmtx");
+        if (hmtx == null || metricsCount == 0) return xMin(gid);
+        final long offset = gid < metricsCount ? 4L * gid + 2 : 4L * metricsCount + 2L * (gid - metricsCount);
+        if (offset + 2 > hmtx.length()) return xMin(gid);
+        return hmtx.s16(offset);
+    }
+
+    // glyf のグリフの xMin (フォントの単位)。中身のないグリフは 0
+    private int xMin(int gid) {
+        final FontBytes g = glyphData(gid);
+        return g == null || g.length() < 10 ? 0 : g.s16(2);
     }
 
     private FontBytes glyphData(int gid) {
