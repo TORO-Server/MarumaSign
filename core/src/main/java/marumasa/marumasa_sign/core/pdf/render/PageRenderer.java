@@ -1327,10 +1327,15 @@ public final class PageRenderer {
             final byte[] content = form.decode(PdfDocument.MAX_DECODED);
             final PdfDict group = form.dict.dict("Group");
             final boolean transparencyGroup = group != null && group.isName("S", "Transparency");
+            final boolean knockout = transparencyGroup && group.bool("K", false);
+            // ノックアウトのグループの中のグループは、まとめて 1 つのものとして重ねる。分離したノックアウトのグループも、別の画像に描く
             final boolean needsLayer = transparencyGroup && (gs.fillAlpha < 1 || gs.softMask != null
-                    || !(gs.blendMode.equals("Normal") || gs.blendMode.equals("Compatible")));
+                    || !(gs.blendMode.equals("Normal") || gs.blendMode.equals("Compatible"))
+                    || canvas.knockoutBackdrop != null || (knockout && group.bool("I", false)));
             if (needsLayer) {
-                drawGroupLayer(content, gs.clip);
+                drawGroupLayer(content, gs.clip, knockout);
+            } else if (knockout) {
+                drawKnockout(content, gs.clip);
             } else {
                 run(content);
             }
@@ -1349,8 +1354,27 @@ public final class PageRenderer {
         }
     }
 
+    /**
+     * 分離していない、そのまま重ねるノックアウトのグループを、今の画像に直接描く。中のものは、どれもグループの初めの背景に重ね、前のものを置き換える。
+     */
+    private void drawKnockout(byte[] content, Area clip) {
+        final Rectangle area = canvas.deviceBounds(clip == null ? null : clip.getBounds2D(), clip);
+        if (area == null) return;
+        final Canvas target = canvas;
+        final int[] savedBackdrop = target.knockoutBackdrop;
+        final Rectangle savedArea = target.knockoutArea;
+        target.knockoutBackdrop = target.copy(area);
+        target.knockoutArea = area;
+        try {
+            run(content);
+        } finally {
+            target.knockoutBackdrop = savedBackdrop;
+            target.knockoutArea = savedArea;
+        }
+    }
+
     // 透明のグループを別の画像に描いてから、不透明度・ソフトマスク・合成の方法で重ねる
-    private void drawGroupLayer(byte[] content, Area clip) {
+    private void drawGroupLayer(byte[] content, Area clip, boolean knockout) {
         final Rectangle area = canvas.deviceBounds(clip == null ? null : clip.getBounds2D(), clip);
         if (area == null) return;
         final double alpha = gs.fillAlpha;
@@ -1359,6 +1383,11 @@ public final class PageRenderer {
         final Canvas parent = canvas;
         final Canvas layer = new Canvas(area.width, area.height, parent.originX + area.x, parent.originY + area.y,
                 pageToDevice(parent), false, true);
+        if (knockout) {
+            // 分離したグループとして描くので、初めの背景は透明
+            layer.knockoutBackdrop = new int[layer.width * layer.height];
+            layer.knockoutArea = new Rectangle(0, 0, layer.width, layer.height);
+        }
         // グループの中は、不透明度とソフトマスクと合成の方法を初めの値に戻して描く
         gs.fillAlpha = 1;
         gs.strokeAlpha = 1;

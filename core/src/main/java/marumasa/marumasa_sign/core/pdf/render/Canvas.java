@@ -36,6 +36,9 @@ final class Canvas {
     final AffineTransform base;
     private final Graphics2D graphics;
     private final boolean antialias;
+    // ノックアウトのグループ (11.4.8) の中で描いているときの、グループの初めの背景 (knockoutArea の範囲の画素)。null ならノックアウトしない
+    int[] knockoutBackdrop;
+    Rectangle knockoutArea;
 
     Canvas(int width, int height, int originX, int originY, AffineTransform pageToDevice, boolean opaqueWhite, boolean antialias) {
         this.width = Math.max(1, width);
@@ -72,9 +75,11 @@ final class Canvas {
      * @param clip       クリップ (ページの空間、null なら制限なし)
      */
     void paint(Painter painter, Rectangle2D pageBounds, double alpha, SoftMask mask, String blend, Area clip) {
-        if (alpha <= 0) return;
+        // ノックアウトのグループの中では、不透明度 0 のものも、形の中を初めの背景に戻す
+        if (alpha <= 0 && knockoutBackdrop == null) return;
         final boolean normal = blend == null || blend.equals("Normal") || blend.equals("Compatible");
-        if (mask == null && normal) {
+        // 不透明で普通の重ね方なら、ノックアウトしても結果は同じ (形の割合で、前のものを置き換える)
+        if (mask == null && normal && (knockoutBackdrop == null || alpha >= 1)) {
             graphics.setTransform(base);
             graphics.setClip(clip);
             graphics.setComposite(alpha >= 1 ? AlphaComposite.SrcOver : AlphaComposite.getInstance(AlphaComposite.SRC_OVER, (float) alpha));
@@ -137,12 +142,21 @@ final class Canvas {
                 final int dx = area.x + x;
                 if (dx < 0 || dx >= width) continue;
                 final int s = source[y * area.width + x];
-                int sa = s >>> 24;
-                if (sa == 0) continue;
-                sa = sa * alpha256 / 255;
+                final int shape = s >>> 24;
+                if (shape == 0) continue;
+                final int index = dy * width + dx;
+                if (knockoutBackdrop != null && knockoutArea.contains(dx, dy)) {
+                    // ノックアウト: 不透明度だけで初めの背景に重ね、形の割合で前のものと置き換える
+                    int q = alpha256;
+                    if (mask != null) q = q * mask.value(dx + originX, dy + originY) / 255;
+                    final int backdrop = knockoutBackdrop[(dy - knockoutArea.y) * knockoutArea.width + dx - knockoutArea.x];
+                    final int result = q == 0 ? backdrop : mode == null ? over(s, q, backdrop) : mode.apply(s, q, backdrop);
+                    pixels[index] = shape == 255 ? result : mix(pixels[index], result, shape);
+                    continue;
+                }
+                int sa = shape * alpha256 / 255;
                 if (mask != null) sa = sa * mask.value(dx + originX, dy + originY) / 255;
                 if (sa == 0) continue;
-                final int index = dy * width + dx;
                 pixels[index] = mode == null ? over(s, sa, pixels[index]) : mode.apply(s, sa, pixels[index]);
             }
         }
@@ -161,6 +175,29 @@ final class Canvas {
             result |= Math.min(255, c) << shift;
         }
         return result;
+    }
+
+    // from から to へ、t (0 から 255) の割合で寄せた色 (色は乗算していない ARGB。乗算した値で混ぜる)
+    static int mix(int from, int to, int t) {
+        final int fa = from >>> 24, ta = to >>> 24;
+        final int wf = fa * (255 - t), wt = ta * t;
+        final int a = (wf + wt + 127) / 255;
+        if (a == 0 || wf + wt == 0) return 0;
+        int result = a << 24;
+        for (int shift = 16; shift >= 0; shift -= 8) {
+            final int c = (((from >> shift) & 0xFF) * wf + ((to >> shift) & 0xFF) * wt + (wf + wt) / 2) / (wf + wt);
+            result |= Math.min(255, c) << shift;
+        }
+        return result;
+    }
+
+    /**
+     * 今の画素のうち、範囲 area の写し (ノックアウトのグループの初めの背景に使う)。
+     */
+    int[] copy(Rectangle area) {
+        final int[] copy = new int[area.width * area.height];
+        for (int y = 0; y < area.height; y++) System.arraycopy(pixels, (area.y + y) * width + area.x, copy, y * area.width, area.width);
+        return copy;
     }
 
     /**

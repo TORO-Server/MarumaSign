@@ -193,6 +193,15 @@ final class PdfSamples {
         samples.add(new String[]{"page-group-backdrop", page("<< /ExtGState << /D 5 0 R >> >>",
                 "0 0 1 rg 100 10 80 80 re f q /D gs 1 0 0 rg 20 20 120 50 re f Q",
                 "<< /Type /ExtGState /BM /Difference >>")});
+        // ノックアウトのグループ (分離していないものと、分離したもの): 中のものは前のものに重ならず、グループの初めの背景に重ねて置き換える。
+        // 不透明度 0 のものは、形の中を初めの背景に戻す
+        for (String isolated : new String[]{"false", "true"}) {
+            samples.add(new String[]{"knockout-" + ("true".equals(isolated) ? "isolated" : "nonisolated"), page(
+                    "<< /XObject << /G 5 0 R >> >>", "0 1 0 rg 0 0 200 40 re f /G Do",
+                    stream("/Type /XObject /Subtype /Form /BBox [0 0 200 200] /Group << /S /Transparency /K true /I " + isolated + " >> "
+                                    + "/Resources << /ExtGState << /A50 << /ca 0.5 >> /A0 << /ca 0 >> >> >>",
+                            "1 0 0 rg 20 10 100 110 re f /A50 gs 0 0 1 rg 70 20 100 100 re f /A0 gs 140 0 40 200 re f"))});
+        }
         // OpenType に入った、CID の決まっていない CFF を使う CIDFontType0 の CIDToGIDMap (CID 1 を、四角のグリフ 2 にする)
         samples.add(new String[]{"cff-cidtogidmap", page("<< /Font << /F1 5 0 R >> >>", "0 g BT /F1 100 Tf 50 50 Td <0001> Tj ET",
                 "<< /Type /Font /Subtype /Type0 /BaseFont /T /Encoding /Identity-H /DescendantFonts [6 0 R] >>",

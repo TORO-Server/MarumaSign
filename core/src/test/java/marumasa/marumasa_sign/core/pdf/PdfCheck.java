@@ -413,6 +413,15 @@ public final class PdfCheck {
                 expectColor(image, 50, 150, 0xFF0000, "difference over nothing");
                 expectColor(image, 120, 150, 0xFF00FF, "difference over blue");
                 break;
+            case "knockout-nonisolated":
+            case "knockout-isolated":
+                expectColor(image, 45, 130, 0xFF0000, "red");
+                // 半透明の青は、赤に重ならない (紫ではなく、白の上の薄い青)
+                expectColor(image, 95, 130, 0x8080FF, "translucent blue over red");
+                // 不透明度 0 の長方形の中は、初めの背景 (白と緑) に戻る
+                expectColor(image, 160, 130, 0xFFFFFF, "knocked out area over white");
+                expectColor(image, 160, 170, 0x00FF00, "knocked out area over green");
+                break;
             case "cff-cidtogidmap":
                 // CID 1 は CIDToGIDMap で四角のグリフ 2 (ページの 50 から 150)
                 expect(gray(image, 100, 100) < 30, "CIDToGIDMap of an OpenType CFF font is ignored");
