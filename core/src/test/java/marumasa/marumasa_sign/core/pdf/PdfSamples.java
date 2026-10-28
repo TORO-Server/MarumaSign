@@ -169,6 +169,8 @@ final class PdfSamples {
                 stream("/Type /XObject /Subtype /Image /Width 2000000000 /Height 2000000000 /ColorSpace /DeviceRGB /BitsPerComponent 8", "abc"))});
         // 細かすぎる点線 (Java2D が膨大な図形を作る)
         samples.add(new String[]{"tiny-dashes", page("<< >>", "[0.00001 0.00001] 0 d 0 0 m 1000000 1000000 l 0 1000000 l h S")});
+        // 巨大な点線の位相 (Java 8 の Java2D は、位相から区切りを 1 つずつ引くので終わらなくなる)
+        samples.add(new String[]{"huge-dash-phase", page("<< >>", "[3 2 1] 1e30 d 10 10 m 500 400 l S [5] 99999999999 d 0 0 m 300 0 l S")});
         // 巨大な Size の関数
         samples.add(new String[]{"huge-sampled-function", page("<< /Shading << /S 5 0 R >> >>", "/S sh",
                 "<< /ShadingType 2 /ColorSpace /DeviceRGB /Coords [0 0 1 0] /Function 6 0 R >>",

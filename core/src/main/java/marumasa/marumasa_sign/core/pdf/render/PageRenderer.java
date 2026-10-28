@@ -782,9 +782,15 @@ public final class PageRenderer {
         final float miter = (float) Math.max(1, Math.min(gs.miterLimit, 1000));
         final float[] dash = dash(scale, pageShape, deviceScale);
         if (dash == null) return new BasicStroke(width, cap, join, miter);
-        float phase = (float) (gs.dashPhase * scale);
-        if (!(phase >= 0) || Float.isInfinite(phase)) phase = 0;
-        return new BasicStroke(width, cap, join, miter, dash, phase);
+        // 位相は 1 周期の中に収めて渡す。Java 8 の Java2D は、位相から区切りの長さを 1 つずつ引いていくので、
+        // 1e30 のような位相では、引いても値が変わらず、終わらなくなる (区切りの数が奇数なら、2 周で元に戻る)
+        double period = 0;
+        for (float value : dash) period += value;
+        if (dash.length % 2 == 1) period *= 2;
+        double phase = gs.dashPhase * scale;
+        phase = Double.isNaN(phase) || Double.isInfinite(phase) ? 0 : phase % period;
+        if (phase < 0) phase += period;
+        return new BasicStroke(width, cap, join, miter, dash, (float) Math.min(phase, period));
     }
 
     /**
