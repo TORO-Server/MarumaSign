@@ -88,7 +88,7 @@ jobs:
         with:
           name: fuzz-failures-java${{ matrix.java }}
           path: |
-            core/build/pdf-fuzz
+            core/build/*-fuzz
             core/build/fuzz*
           if-no-files-found: ignore
           retention-days: 14
