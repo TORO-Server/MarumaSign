@@ -17,9 +17,9 @@ seed="${FUZZ_SEED:-$(date +%s)}"
 failed=()
 
 if [ "$mode" = "long" ]; then
-  pdf_fuzz=40000; image_fuzz=3000; structure_fuzz=3000; webp_fuzz=30000; decoder_fuzz_seconds=300
+  pdf_fuzz=40000; image_fuzz=3000; structure_fuzz=3000; webp_fuzz=30000; decoder_fuzz_seconds=300; font_fuzz=100000
 else
-  pdf_fuzz=3000; image_fuzz=300; structure_fuzz=200; webp_fuzz=3000; decoder_fuzz_seconds=20
+  pdf_fuzz=3000; image_fuzz=300; structure_fuzz=200; webp_fuzz=3000; decoder_fuzz_seconds=20; font_fuzz=5000
 fi
 
 echo "mode=$mode seed=$seed"
@@ -78,6 +78,8 @@ check() {
 check pdfEngineCheck 900 -Xmx512m -Xss512k marumasa.marumasa_sign.core.pdf.PdfCheck
 check pdfFuzz 3600 -Xmx768m -Xss512k marumasa.marumasa_sign.core.pdf.PdfFuzz "$pdf_fuzz" \
   src/test/resources/pdf "$root/tools/verify/test-pdf.pdf"
+# PDF のフォント (TrueType、CFF、Type 1、CMap) の解析を、パソコンにあるフォントを種にして直接壊して試す
+check fontFuzz 1800 -Xmx768m -Xss512k marumasa.marumasa_sign.core.pdf.font.FontFuzz "$font_fuzz" /usr/share/fonts
 check signPdfCheck 600 -Xmx1g marumasa.marumasa_sign.core.SignPdfCheck "$root/tools/verify/test-pdf.pdf" "$out/sign-pdf"
 # ネットワーク (看板の URL から、パソコンの中や家の中のネットワークに触れられないこと)
 check securityCheck 900 -Xmx1g marumasa.marumasa_sign.core.net.SecurityCheck
