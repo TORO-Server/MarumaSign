@@ -38,7 +38,11 @@ public final class FontFuzz {
         final int iterations = Integer.parseInt(args[0]);
         final List<File> files = new ArrayList<>();
         for (int i = 1; i < args.length; i++) collect(new File(args[i]), files);
-        if (files.isEmpty()) throw new IllegalArgumentException("No seed fonts");
+        if (files.isEmpty()) {
+            // フォントの入っていない環境 (最小限の CI の機械など) では試せない
+            System.out.println("skip: no seed fonts were found in " + Arrays.toString(Arrays.copyOfRange(args, 1, args.length)));
+            System.exit(0);
+        }
         final long seed = Long.getLong("fuzz.seed", System.nanoTime());
         System.out.println("FontFuzz: " + iterations + " iterations over " + files.size() + " seeds, seed=" + seed);
         final Random random = new Random(seed);
