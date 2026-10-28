@@ -1,6 +1,5 @@
 package marumasa.marumasa_sign.core.pdf.filter;
 
-import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.util.zip.DataFormatException;
 import java.util.zip.Inflater;
@@ -31,7 +30,7 @@ final class Flate {
         final Inflater inflater = new Inflater(raw);
         try {
             inflater.setInput(data);
-            final ByteArrayOutputStream out = new ByteArrayOutputStream(Math.min(limit, Math.max(64, data.length * 4)));
+            final ChunkedOutput out = new ChunkedOutput();
             final byte[] buffer = new byte[65536];
             int idle = 0;
             while (!inflater.finished()) {

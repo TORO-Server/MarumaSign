@@ -64,8 +64,9 @@ public final class Type3Font extends PdfFont {
      */
     @Override
     public double width(long character) {
-        final int index = (int) character - firstChar;
-        final double w = index >= 0 && index < widths.length ? widths[index] : 0;
+        // FirstChar が極端な値でもあふれないように long で求める
+        final long index = character - firstChar;
+        final double w = index >= 0 && index < widths.length ? widths[(int) index] : 0;
         return w * matrix[0];
     }
 

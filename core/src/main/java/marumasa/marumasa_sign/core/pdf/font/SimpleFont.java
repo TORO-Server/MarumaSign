@@ -148,7 +148,8 @@ final class SimpleFont extends PdfFont {
     }
 
     private boolean hasExplicitWidth(int code) {
-        return widths != null && code >= firstChar && code - firstChar < widths.length;
+        // FirstChar が極端な値でもあふれないように long で比べる
+        return widths != null && code >= firstChar && (long) code - firstChar < widths.length;
     }
 
     @Override

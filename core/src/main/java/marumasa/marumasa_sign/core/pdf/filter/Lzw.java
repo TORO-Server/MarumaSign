@@ -1,6 +1,5 @@
 package marumasa.marumasa_sign.core.pdf.filter;
 
-import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 
 /**
@@ -24,7 +23,7 @@ final class Lzw {
             suffix[i] = (byte) i;
             length[i] = 1;
         }
-        final ByteArrayOutputStream out = new ByteArrayOutputStream(Math.min(limit, data.length * 3 + 16));
+        final ChunkedOutput out = new ChunkedOutput();
         final byte[] buffer = new byte[4096];
         int next = 258;
         int bits = 9;

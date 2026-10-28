@@ -31,7 +31,6 @@ import java.awt.geom.PathIterator;
 import java.awt.geom.Rectangle2D;
 import java.awt.image.BufferedImage;
 import java.awt.image.DataBufferInt;
-import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
@@ -163,9 +162,9 @@ public final class PageRenderer {
         return r[2] > r[0] && r[3] > r[1] ? r : null;
     }
 
-    // /Contents (ストリームか、ストリームの配列) をつなげたもの
+    // /Contents (ストリームか、ストリームの配列) をつなげたもの。
+    // 大きなデータを何度も写さないように、1 つならそのまま使い、複数なら合計の大きさの配列に 1 度だけ写す
     private static byte[] contents(Object value) {
-        final ByteArrayOutputStream out = new ByteArrayOutputStream();
         final List<PdfStream> streams = new ArrayList<>();
         if (value instanceof PdfStream) {
             streams.add((PdfStream) value);
@@ -176,21 +175,29 @@ public final class PageRenderer {
                 if (stream != null) streams.add(stream);
             }
         }
+        final List<byte[]> parts = new ArrayList<>();
         long total = 0;
         for (PdfStream stream : streams) {
             try {
                 final byte[] data = stream.decode(PdfDocument.MAX_DECODED);
-                total += data.length;
-                if (total > PdfDocument.MAX_DECODED) break;
-                out.write(data, 0, data.length);
-                // ストリームの境目で語がつながらないように
-                out.write('\n');
+                // ストリームの境目で語がつながらないように、間に改行を入れる
+                if (total + data.length + 1 > PdfDocument.MAX_DECODED) break;
+                total += data.length + 1;
+                parts.add(data);
             } catch (IOException | RuntimeException e) {
                 Strict.check(e);
                 // 読めないストリームは飛ばす
             }
         }
-        return out.toByteArray();
+        if (parts.size() == 1) return parts.get(0);
+        final byte[] out = new byte[(int) total];
+        int p = 0;
+        for (byte[] part : parts) {
+            System.arraycopy(part, 0, out, p, part.length);
+            p += part.length;
+            out[p++] = '\n';
+        }
+        return out;
     }
 
     // ---------- 実行 ----------
@@ -705,7 +712,7 @@ public final class PageRenderer {
     }
 
     private void intersectClip(Shape pageShape) {
-        final Area area = new Area(pageShape);
+        final Area area = new Area(ShapeLimits.forFill(pageShape, canvas, limitMargin()));
         if (gs.clip == null) {
             gs.clip = area;
         } else {
@@ -718,7 +725,8 @@ public final class PageRenderer {
     private void fillShape(Shape pageShape, int windingRule) {
         final Paint paint = paint(false);
         if (paint == null) return;
-        final Shape shape = windingRule == Path2D.WIND_EVEN_ODD ? withRule(pageShape, windingRule) : pageShape;
+        final Shape shape = ShapeLimits.forFill(windingRule == Path2D.WIND_EVEN_ODD ? withRule(pageShape, windingRule) : pageShape,
+                canvas, limitMargin());
         canvas.paint(new Canvas.Painter() {
             @Override
             public void paint(Graphics2D g) {
@@ -728,19 +736,27 @@ public final class PageRenderer {
         }, shape.getBounds2D(), gs.fillAlpha, gs.softMask, gs.blendMode, gs.clip);
     }
 
+    // 道を切り取る範囲の、画面からのはみ出しの幅 (画素)。描く結果には影響しない広さにする
+    private double limitMargin() {
+        return 2.0 * Math.max(canvas.width, canvas.height) + 512;
+    }
+
     private static Shape withRule(Shape shape, int rule) {
         final Path2D.Double copy = new Path2D.Double(shape);
         copy.setWindingRule(rule);
         return copy;
     }
 
-    private void strokeShape(Shape pageShape) {
+    private void strokeShape(Shape original) {
         final Paint paint = paint(true);
         if (paint == null) return;
+        // 画面から遠くへ伸びる道は、先に切り取る。切り取った端が見えないよう、線の太さの分 (とがった角の分も) 範囲を広げる
+        final double reach = gs.lineWidth * averageScale(gs.ctm) * averageScale(canvas.base) * Math.max(1, Math.min(gs.miterLimit, 1000));
+        final Shape pageShape = ShapeLimits.forStroke(original, canvas, limitMargin() + (reach >= 0 ? Math.min(reach, 1e7) : 0));
         final BasicStroke stroke = stroke(pageShape);
         final Shape outline;
         try {
-            outline = stroke.createStrokedShape(pageShape);
+            outline = ShapeLimits.forFill(stroke.createStrokedShape(pageShape), canvas, limitMargin());
         } catch (RuntimeException e) {
             Strict.check(e);
             return;
