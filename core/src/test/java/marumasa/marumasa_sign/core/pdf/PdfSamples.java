@@ -167,6 +167,15 @@ final class PdfSamples {
                 "<< /Type /Font /Subtype /CIDFontType2 /BaseFont /Arial /CIDSystemInfo << /Registry (Adobe) /Ordering (Identity) /Supplement 0 >> "
                         + "/FontDescriptor << /Type /FontDescriptor /FontName /Arial /Flags 32 /FontBBox [-665 -325 2000 1006] /ItalicAngle 0 "
                         + "/Ascent 905 /Descent -212 /CapHeight 716 /StemV 80 >> /W [16 [333]] >>")});
+        // ToUnicode があれば、グリフの並びより優先する (pdf.js と同じ): CID 16 (並びではハイフン) を I にする
+        samples.add(new String[]{"standard-glyph-order-tounicode", page("<< /Font << /F1 5 0 R >> >>", "0 g BT /F1 100 Tf 50 80 Td <0010> Tj ET",
+                "<< /Type /Font /Subtype /Type0 /BaseFont /Arial /Encoding /Identity-H /DescendantFonts [6 0 R] /ToUnicode 7 0 R >>",
+                "<< /Type /Font /Subtype /CIDFontType2 /BaseFont /Arial /CIDSystemInfo << /Registry (Adobe) /Ordering (Identity) /Supplement 0 >> "
+                        + "/FontDescriptor << /Type /FontDescriptor /FontName /Arial /Flags 32 /FontBBox [-665 -325 2000 1006] /ItalicAngle 0 "
+                        + "/Ascent 905 /Descent -212 /CapHeight 716 /StemV 80 >> /W [16 [278]] >>",
+                stream("", "/CIDInit /ProcSet findresource begin 12 dict begin begincmap /CMapName /U def "
+                        + "1 begincodespacerange <0000> <FFFF> endcodespacerange 1 beginbfchar <0010> <0049> endbfchar "
+                        + "endcmap CMapName currentdict /CMap defineresource pop end end"))});
         // OpenType に入った、CID の決まっていない CFF を使う CIDFontType0 の CIDToGIDMap (CID 1 を、四角のグリフ 2 にする)
         samples.add(new String[]{"cff-cidtogidmap", page("<< /Font << /F1 5 0 R >> >>", "0 g BT /F1 100 Tf 50 50 Td <0001> Tj ET",
                 "<< /Type /Font /Subtype /Type0 /BaseFont /T /Encoding /Identity-H /DescendantFonts [6 0 R] >>",

@@ -11,6 +11,7 @@ import java.io.IOException;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 
 /**
@@ -45,8 +46,11 @@ final class Type0Font extends PdfFont {
     private final double defaultVerticalAdvance;
     private final Map<Long, Integer> gidCache = new HashMap<>();
     // 埋め込まれていない、Windows の標準のフォント (Arial、Times New Roman など) の CID を、そのフォントのグリフの番号とみなすときの、
-    // グリフの並びの表 (STANDARD_GLYPH_ORDER か、CALIBRI_GLYPH_ORDER と STANDARD_GLYPH_ORDER)。使わなければ null
+    // グリフの並びの表 (STANDARD_GLYPH_ORDER と、Arial Black と Calibri ではその前に違うところの表)。使わなければ null
     private final int[][] glyphOrder;
+
+    // Arial Black で、STANDARD_GLYPH_ORDER と違うところ (pdf.js の SupplementalGlyphMapForArialBlack)
+    private static final int[] ARIAL_BLACK_GLYPH_ORDER = {227, 0x142, 1, 264, 0x105, 1, 291, 0x15A, 1};
 
     // Calibri で、STANDARD_GLYPH_ORDER と違うところ (pdf.js の SupplementalGlyphMapForCalibri)
     private static final int[] CALIBRI_GLYPH_ORDER = {
@@ -72,32 +76,38 @@ final class Type0Font extends PdfFont {
 
     /**
      * Windows の標準のフォント (Arial、Times New Roman、Courier New、Verdana など) のグリフの並び:
-     * {最初の GID, 最初の Unicode, 数} の繰り返し (pdf.js の GlyphMapForStandardFonts の、ラテン、ギリシャ、キリル、ヘブライ文字の分)。
+     * {最初の GID, 最初の Unicode, 数} の繰り返し (pdf.js の GlyphMapForStandardFonts と同じ。ただし GID 30 は、
+     * 同じ形のギリシャ文字の疑問符 U+037E ではなく、代わりのフォントにもあるセミコロン)。
      * 埋め込まずに Identity-H で書いた CID は、元のフォントのグリフの番号なので、これで文字に戻す
      */
     private static final int[] STANDARD_GLYPH_ORDER = {
-            2, 0xA, 1, 3, 0x20, 95, 98, 0xC4, 2,
-            100, 0xC7, 1, 101, 0xC9, 1, 102, 0xD1, 1, 103, 0xD6, 1, 104, 0xDC, 1,
-            105, 0xE1, 1, 106, 0xE0, 1, 107, 0xE2, 1, 108, 0xE4, 1, 109, 0xE3, 1,
-            110, 0xE5, 1, 111, 0xE7, 1, 112, 0xE9, 1, 113, 0xE8, 1, 114, 0xEA, 2,
-            116, 0xED, 1, 117, 0xEC, 1, 118, 0xEE, 2, 120, 0xF1, 1, 121, 0xF3, 1,
-            122, 0xF2, 1, 123, 0xF4, 1, 124, 0xF6, 1, 125, 0xF5, 1, 126, 0xFA, 1,
-            127, 0xF9, 1, 128, 0xFB, 2, 130, 0x2020, 1, 131, 0xB0, 1, 132, 0xA2, 2,
-            134, 0xA7, 1, 135, 0x2022, 1, 136, 0xB6, 1, 137, 0xDF, 1, 138, 0xAE, 1,
-            139, 0xA9, 1, 140, 0x2122, 1, 141, 0xB4, 1, 142, 0xA8, 1, 143, 0x2260, 1,
-            144, 0xC6, 1, 145, 0xD8, 1, 146, 0x221E, 1, 147, 0xB1, 1, 148, 0x2264, 2,
-            150, 0xA5, 1, 151, 0xB5, 1, 152, 0x2202, 1, 153, 0x2211, 1, 154, 0x220F, 1,
-            156, 0x222B, 1, 157, 0xAA, 1, 158, 0xBA, 1, 159, 0x2126, 1, 160, 0xE6, 1,
-            161, 0xF8, 1, 162, 0xBF, 1, 163, 0xA1, 1, 164, 0xAC, 1, 165, 0x221A, 1,
-            166, 0x192, 1, 167, 0x2248, 1, 168, 0x2206, 1, 169, 0xAB, 1, 170, 0xBB, 1,
-            171, 0x2026, 1, 179, 0x201C, 2, 181, 0x2018, 2, 200, 0xC1, 1, 203, 0xCD, 1,
-            207, 0xD3, 1, 210, 0xDA, 1, 223, 0x2C7, 1, 224, 0x141, 2, 226, 0x160, 2,
-            228, 0x17D, 2, 233, 0xDD, 1, 234, 0xFD, 1, 252, 0x107, 1, 253, 0x10C, 2,
-            258, 0x102, 1, 260, 0x104, 2, 265, 0x118, 4, 269, 0x139, 1, 275, 0x143, 2,
-            278, 0x148, 1, 283, 0x158, 4, 292, 0x16F, 1, 295, 0x179, 2, 298, 0x17C, 1,
-            305, 0x3C3, 2, 307, 0x3C6, 1, 308, 0x2017, 1, 309, 0x203C, 1, 310, 0x207F, 1,
-            311, 0x20A7, 1, 312, 0x2190, 2, 337, 0x2550, 1, 493, 0x40F, 2, 570, 0x410, 64,
-            672, 0x5D0, 27, 705, 0x5F4, 1, 706, 0x20AA, 1
+            2, 0xA, 1, 3, 0x20, 95, 98, 0xC4, 2, 100, 0xC7, 1, 101, 0xC9, 1, 102, 0xD1, 1, 103, 0xD6, 1, 104, 0xDC, 1, 105, 0xE1, 1,
+            106, 0xE0, 1, 107, 0xE2, 1, 108, 0xE4, 1, 109, 0xE3, 1, 110, 0xE5, 1, 111, 0xE7, 1, 112, 0xE9, 1, 113, 0xE8, 1, 114, 0xEA, 2,
+            116, 0xED, 1, 117, 0xEC, 1, 118, 0xEE, 2, 120, 0xF1, 1, 121, 0xF3, 1, 122, 0xF2, 1, 123, 0xF4, 1, 124, 0xF6, 1, 125, 0xF5, 1,
+            126, 0xFA, 1, 127, 0xF9, 1, 128, 0xFB, 2, 130, 0x2020, 1, 131, 0xB0, 1, 132, 0xA2, 2, 134, 0xA7, 1, 135, 0x2022, 1,
+            136, 0xB6, 1, 137, 0xDF, 1, 138, 0xAE, 1, 139, 0xA9, 1, 140, 0x2122, 1, 141, 0xB4, 1, 142, 0xA8, 1, 143, 0x2260, 1,
+            144, 0xC6, 1, 145, 0xD8, 1, 146, 0x221E, 1, 147, 0xB1, 1, 148, 0x2264, 2, 150, 0xA5, 1, 151, 0xB5, 1, 152, 0x2202, 1,
+            153, 0x2211, 1, 154, 0x220F, 1, 156, 0x222B, 1, 157, 0xAA, 1, 158, 0xBA, 1, 159, 0x2126, 1, 160, 0xE6, 1, 161, 0xF8, 1,
+            162, 0xBF, 1, 163, 0xA1, 1, 164, 0xAC, 1, 165, 0x221A, 1, 166, 0x192, 1, 167, 0x2248, 1, 168, 0x2206, 1, 169, 0xAB, 1,
+            170, 0xBB, 1, 171, 0x2026, 1, 179, 0x201C, 2, 181, 0x2018, 2, 200, 0xC1, 1, 203, 0xCD, 1, 207, 0xD3, 1, 210, 0xDA, 1,
+            223, 0x2C7, 1, 224, 0x141, 2, 226, 0x160, 2, 228, 0x17D, 2, 233, 0xDD, 1, 234, 0xFD, 1, 252, 0x107, 1, 253, 0x10C, 2,
+            258, 0x102, 1, 260, 0x104, 2, 265, 0x118, 4, 269, 0x139, 1, 275, 0x143, 2, 278, 0x148, 1, 283, 0x158, 4, 292, 0x16F, 1,
+            295, 0x179, 2, 298, 0x17C, 1, 305, 0x3C3, 2, 307, 0x3C6, 1, 308, 0x2017, 1, 309, 0x203C, 1, 310, 0x207F, 1, 311, 0x20A7, 1,
+            312, 0x2190, 2, 337, 0x2550, 1, 493, 0x40F, 2, 570, 0x410, 64, 672, 0x5D0, 27, 705, 0x5F4, 1, 706, 0x20AA, 1, 710, 0xFB20, 1,
+            711, 0xFB2A, 1, 759, 0x651, 1, 761, 0x6F0, 1, 763, 0x6F2, 1, 775, 0x674, 1, 777, 0x6E4, 1, 778, 0x6F4, 3, 782, 0x303, 1,
+            783, 0xFCD6, 1, 786, 0x20AB, 1, 788, 0x2154, 1, 790, 0x300, 2, 792, 0x300, 1, 795, 0x323, 1, 797, 0xFB50, 2, 799, 0xFB56, 4,
+            803, 0xFB6A, 3, 2424, 0x1E8D, 7, 2433, 0x1E02, 1, 2678, 0x1F6D, 2, 2830, 0x610, 1, 2838, 0x2AE, 1, 2840, 0x2EF, 1,
+            2842, 0x2F1, 3, 2846, 0x2F5, 1, 2856, 0x2FF, 1, 2857, 0x350, 2, 2862, 0x355, 3, 2865, 0x35D, 2, 2906, 0x1D24, 1,
+            2908, 0x1D26, 3, 2912, 0x1D2A, 3, 2916, 0x1D2E, 3, 2920, 0x1D32, 3, 2924, 0x1D36, 3, 2928, 0x1D3A, 3, 2932, 0x1D3E, 3,
+            2936, 0x1D42, 3, 2940, 0x1D46, 3, 2944, 0x1D4A, 1, 2946, 0x1D4C, 1, 2948, 0x1D4E, 1, 2950, 0x1D50, 3, 2954, 0x1D54, 3,
+            2958, 0x1D58, 3, 2962, 0x1D5C, 3, 2966, 0x1D60, 3, 2970, 0x1D64, 3, 2974, 0x1D68, 3, 2978, 0x601, 3, 2982, 0x60D, 1,
+            2983, 0x60F, 2, 2986, 0x612, 3, 2990, 0x657, 2, 2995, 0x6EF, 1, 2999, 0x6FF, 1, 3002, 0xFB22, 3, 3006, 0xFB26, 3,
+            3011, 0x76C, 1, 3014, 0x201F, 1, 3015, 0x2034, 1, 3017, 0x1D6C, 3, 3075, 0x1DA6, 2, 3079, 0x1DAA, 2, 3083, 0x1DAE, 2,
+            3087, 0x1DB2, 2, 3091, 0x1DB6, 2, 3095, 0x1DBA, 2, 3099, 0x1DBE, 2, 3103, 0x1DC2, 2, 3107, 0x2091, 2, 3116, 0x75C, 1,
+            3119, 0x75D, 1, 3120, 0x75D, 1, 3123, 0x75E, 1, 3124, 0x75E, 1, 3127, 0x75F, 1, 3128, 0x75F, 1, 3131, 0x760, 1, 3132, 0x760, 1,
+            3135, 0x761, 1, 3136, 0x761, 1, 3139, 0x762, 1, 3140, 0x762, 1, 3143, 0x763, 1, 3144, 0x763, 1, 3147, 0x764, 1, 3148, 0x764, 1,
+            3153, 0x244, 2, 3157, 0x248, 2, 3161, 0x24C, 2, 3165, 0x37B, 2, 3169, 0x4FA, 2, 3173, 0x4FE, 2, 3181, 0x1DC6, 2,
+            3282, 0x2E17, 1, 3316, 0x242, 1, 3379, 0xA721, 1, 3393, 0x487, 1, 3416, 0x20B9, 1
     };
 
     Type0Font(PdfDict dict) throws IOException {
@@ -143,8 +153,15 @@ final class Type0Font extends PdfFont {
         glyphOrder = program == null && type2 && encodingValue instanceof PdfName
                 && ((PdfName) encodingValue).name.startsWith("Identity-") && cidToGid == null
                 && hasStandardGlyphOrder(baseName, dict.get("ToUnicode") == null)
-                ? baseName.replace(" ", "").startsWith("Calibri") ? new int[][]{CALIBRI_GLYPH_ORDER, STANDARD_GLYPH_ORDER} : new int[][]{STANDARD_GLYPH_ORDER}
+                ? glyphOrder(baseName.replace(" ", "").toLowerCase(Locale.ENGLISH))
                 : null;
+    }
+
+    // フォントの名前 (空白を除いた小文字) に合う、グリフの並びの表 (先の表を優先する)
+    private static int[][] glyphOrder(String name) {
+        if (name.contains("arialblack") || name.contains("arial-black")) return new int[][]{ARIAL_BLACK_GLYPH_ORDER, STANDARD_GLYPH_ORDER};
+        if (name.contains("calibri")) return new int[][]{CALIBRI_GLYPH_ORDER, STANDARD_GLYPH_ORDER};
+        return new int[][]{STANDARD_GLYPH_ORDER};
     }
 
     // Windows の標準のフォントと同じグリフの並びのフォントか (pdf.js と同じ選び方)。
@@ -362,7 +379,9 @@ final class Type0Font extends PdfFont {
             if (gid > 0) return gid;
         }
         if (glyphOrder != null && font instanceof UnicodeFont) {
-            final int standard = glyphUnicode(glyphOrder, cid);
+            // ToUnicode に書いた文字を優先し、なければグリフの並びの表で文字に戻す (pdf.js と同じ)
+            int standard = toUnicode(code(character), length(character));
+            if (standard <= 0) standard = glyphUnicode(glyphOrder, cid);
             final int gid = standard > 0 ? ((UnicodeFont) font).unicodeLookup(standard) : 0;
             if (gid > 0) return gid;
         }
@@ -373,6 +392,21 @@ final class Type0Font extends PdfFont {
 
     // 文字の Unicode: ToUnicode を優先し、なければ文字の集まりの UCS2 の表
     private int unicode(int code, int length, int cid) {
+        final int mapped = toUnicode(code, length);
+        if (mapped > 0) return mapped;
+        if (!ucs2Read) {
+            ucs2Read = true;
+            if (registry != null && ordering != null) ucs2 = CMaps.predefined(registry + "-" + ordering + "-UCS2");
+        }
+        if (ucs2 != null) {
+            final int value = ucs2.lookup(cid, 2);
+            if (value > 0) return value;
+        }
+        return -1;
+    }
+
+    // ToUnicode に書いた文字の Unicode。なければ -1
+    private int toUnicode(int code, int length) {
         if (!toUnicodeRead) {
             toUnicodeRead = true;
             final PdfStream stream = dict.stream("ToUnicode");
@@ -385,19 +419,8 @@ final class Type0Font extends PdfFont {
                 }
             }
         }
-        if (toUnicode != null) {
-            final int value = toUnicode.lookup(code, length);
-            if (value > 0) return value;
-        }
-        if (!ucs2Read) {
-            ucs2Read = true;
-            if (registry != null && ordering != null) ucs2 = CMaps.predefined(registry + "-" + ordering + "-UCS2");
-        }
-        if (ucs2 != null) {
-            final int value = ucs2.lookup(cid, 2);
-            if (value > 0) return value;
-        }
-        return -1;
+        final int value = toUnicode == null ? -1 : toUnicode.lookup(code, length);
+        return value > 0 ? value : -1;
     }
 
     @Override

@@ -386,6 +386,13 @@ public final class PdfCheck {
                 expect(bar, "hyphen is not drawn");
                 break;
             }
+            case "standard-glyph-order-tounicode": {
+                // I の縦棒は、ハイフンの高さより上 (画素の y = 60) まで伸びる
+                boolean stem = false;
+                for (int x = 52; x <= 75; x++) stem |= gray(image, x, 60) < 64;
+                expect(stem, "ToUnicode is not preferred to the standard glyph order");
+                break;
+            }
             case "cff-cidtogidmap":
                 // CID 1 は CIDToGIDMap で四角のグリフ 2 (ページの 50 から 150)
                 expect(gray(image, 100, 100) < 30, "CIDToGIDMap of an OpenType CFF font is ignored");
