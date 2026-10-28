@@ -56,6 +56,23 @@ tasks.register('textureCheck', JavaExec) {
     args = providers.gradleProperty('textureArgs').getOrElse('').tokenize(' ')
 }
 
+// meshopt の展開を、テスト用の符号化との往復と、壊したデータで確かめる。引数は -PmeshoptCheckArgs="壊したデータを試す秒数"
+tasks.register('meshoptCheck', JavaExec) {
+    classpath = sourceSets.test.runtimeClasspath
+    mainClass = 'marumasa.marumasa_sign.core.gltf.meshopt.MeshoptCheck'
+    javaLauncher = javaToolchains.launcherFor(java.toolchain)
+    args = providers.gradleProperty('meshoptCheckArgs').getOrElse('').tokenize(' ')
+}
+
+// BC6H / BC7 / UASTC / ETC1S の展開を、乱数のブロックと小さな KTX2 のハッシュ、壊したデータで確かめる。
+// 引数は -PcompressedTextureArgs="壊したデータを試す秒数"
+tasks.register('compressedTextureCheck', JavaExec) {
+    classpath = sourceSets.test.runtimeClasspath
+    mainClass = 'marumasa.marumasa_sign.core.texture.CompressedTextureCheck'
+    javaLauncher = javaToolchains.launcherFor(java.toolchain)
+    args = providers.gradleProperty('compressedTextureArgs').getOrElse('').tokenize(' ')
+}
+
 // ガウシアンスプラッティングを PNG に描く。引数は -PsplatPreviewArgs="出力先 スプラットのファイル..." で渡す
 tasks.register('splatPreview', JavaExec) {
     classpath = sourceSets.test.runtimeClasspath

@@ -1,0 +1,11 @@
+CompressedTextureCheck で使うテスト用の KTX2 ファイル
+
+2d_etc1s.ktx2, 2d_uastc.ktx2, 2d_bc7.ktx2
+  three.js (https://github.com/mrdoob/three.js) の examples/textures/ktx2/ にあるファイルをそのまま置いたもの。
+  three.js は MIT License (Copyright © 2010-2025 three.js authors)。
+
+2d_etc1s_alpha.ktx2
+  2d_etc1s.ktx2 の段 0 だけを取り出し、RGB のスライスを透明度のスライスとしても使うように作り直したもの (透明度のある ETC1S の確認用)。
+
+2d_uastc_zstd.ktx2
+  2d_uastc.ktx2 の段 0 だけを取り出し、圧縮しない Zstandard のフレーム (Raw ブロック) で包み直したもの (超圧縮の経路の確認用)。
