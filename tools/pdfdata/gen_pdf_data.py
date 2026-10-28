@@ -117,7 +117,9 @@ def gen_glyphlist(source):
 def gen_afm(source):
     keep = ("Comment Copyright", "FontName", "FamilyName", "Weight", "ItalicAngle", "IsFixedPitch", "FontBBox", "CapHeight",
             "XHeight", "Ascender", "Descender", "StdHW", "StdVW", "C ")
-    out = []
+    # AFM の使用条件 (MustRead.html) により、変えたことを書いておく
+    out = ["Comment Modified by MarumaSign: only the entries needed to lay out text are kept from the Adobe Core 14 AFM files",
+           "Comment (see marumasa_sign/licenses/adobe-core14-afm.txt)"]
     for file in sorted(os.listdir(source)):
         if not file.endswith(".afm"):
             continue

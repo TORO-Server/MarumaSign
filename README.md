@@ -170,6 +170,8 @@ Web ブラウザの PDF ビューアと同じく、URL の末尾に `#page=ペ�
 - 照準が絵に合っている間の使用キーは、ページ送りのためだけに使い、ブロックを置いたり看板を編集したりはしません。
 - 埋め込まれていないフォントは、パソコンにあるフォントで代わりに表示します。フォントの一覧は、ゲームを起動して初めて PDF を読むときに作ります (フォントが 6000 個ほどあるパソコンで 0.3 秒ほど)。一覧は `marumasign/pdf-fonts.cache` に保存し、次からは変わったフォントだけを読み直します (変わったものがなければ 0.1 秒ほど)。
 - ファイルは 64 MB までです。
+- PDF の読み込みと描画は、ライブラリを使わない独自の実装です (暗号化された PDF、圧縮の形式、フォント、透明、模様、グラデーションなどに対応)。
+  JPEG 2000 (JPX) と JBIG2 の画像は表示しません
 
 #### 構造物 (建築のファイル)
 
@@ -232,7 +234,10 @@ Web ブラウザの PDF ビューアと同じく、URL の末尾に `#page=ペ�
 - `http` と `https` 以外の URL (`file:` など) は読みません。メール (25 番) や SSH (22 番) など、ブラウザーがつながない番号の URL も読みません
 - 画像として FFmpeg に渡すものが再生リスト (HLS・DASH など) だった場合は渡しません (パソコンの中のファイルを看板に映させないように)
 - ログに書く URL などの文字は、`${` や改行を無害にしてから書きます (古い Minecraft の Log4j の脆弱性 Log4Shell への対策)
-- PDF の中の圧縮されたデータを展開するのに使うメモリは 256 MB までにします
+- PDF の中の圧縮されたデータを展開するのに使うメモリは、1 つあたり 128 MB までにします。描く時間 (20 秒)、命令の数、入れ子の深さ、
+  関数・フォントの手続きの深さと回数にも上限を設け、輪になったページの木や相互参照の表、自分を呼ぶフォントでも止まるようにしています
+- PDF の中の色の定義 (ICC プロファイル) や JPEG の画像は、Java の中のネイティブのライブラリ (LCMS、libjpeg) に渡さず、
+  Java で書いた処理で読みます (細工したデータでメモリを壊されないように)
 - 1 バイトずつゆっくり送り続けるようなサーバーは、30 秒たっても速さが 16 KB/秒に届かなければ、読むのをやめます。
   応答が 60 秒たっても返らないときも、やめます
 - 看板の中身が使うメモリは合計 1 GB ほどまでにします。超えるときは、いま見えていないものから消し (また見えたら読み込み直します)、
@@ -347,6 +352,15 @@ python tools/check_linkage.py
 ```
 
 ```bash
+# CI の「Quality」と同じ検査を、Gradle を使わずに javac と java だけで動かす (Minecraft の準備は要らない)。
+# quick は PR ごと、long は毎晩のもの (ファジングが長い)。乱数の種は FUZZ_SEED で決められる
+bash .github/scripts/run-core-checks.sh quick
+# ライブラリ (第三者のコード) を使っていないことを確かめる
+python3 .github/scripts/check-no-libraries.py
+# PDF の読み込みと描画の試験 (暗号、圧縮、フォント、描画の結果、壊したファイルや悪意のあるファイル)
+./gradlew :core:pdfEngineCheck
+# 壊した PDF を読ませて、想定外の例外や長い時間、メモリの使い切りが出ないかを確かめる (回数, ファイルまたはフォルダ...)
+./gradlew :core:pdfFuzz -PpdfFuzzArgs="300"
 # ゲーム内のウィンドウの見た目を PNG に書き出す
 ./gradlew :core:uiPreview
 # 3D モデルを PNG に描く (出力先, アニメーションの時刻, モデルのファイル...)
@@ -389,6 +403,13 @@ python tools/verify/compare_structure.py --template minecraft:village/plains/hou
 構造物の表示に使うブロックの性質や対応表は `core/src/main/resources/marumasa_sign/structure` にあり、`tools/blockdata` の道具で作ります。
 作り方は [tools/blockdata/README.md](tools/blockdata/README.md) を参照してください。
 
+### PDF の表示に使う表
+
+PDF の表示に使う表 (`core/src/main/resources/marumasa_sign/pdf`) は、`tools/pdfdata` の道具で作ります。
+
+- `encodings.txt` `glyphlist.txt.gz` `afm.txt.gz` `cmaps.bin.gz`: `python3 tools/pdfdata/gen_pdf_data.py <元のフォルダ>` (元のフォルダに置くものは道具の先頭に書いてあります)
+- `cmyk.lut`: `java tools/pdfdata/CmykLut.java <ISO Coated v2 300% (ECI) の ICC プロファイル> <出力先>`
+
 ### 取り込んでいるソースコード
 
 次のライブラリのコードを、Java に書き直して (またはそのまま) `core` に取り込んでいます。
@@ -402,12 +423,19 @@ python tools/verify/compare_structure.py --template minecraft:village/plains/hou
 | [bcdec](https://github.com/iOrange/bcdec) | MIT | BC6H と BC7 の展開 (`core/texture/Bptc.java`) |
 | [Basis Universal](https://github.com/BinomialLLC/basis_universal) | Apache 2.0 | KTX2 の ETC1S と UASTC の展開 (`core/texture/BasisEtc1s.java`, `Uastc.java`) |
 | [minecraft-data](https://github.com/PrismarineJS/minecraft-data) | MIT | 構造物の、古いブロックの番号と統合版のブロックの対応表 (`marumasa_sign/structure/legacy.txt.gz`, `bedrock.txt.gz`) |
+| [Adobe Glyph List](https://github.com/adobe-type-tools/agl-aglfn) | BSD 3-Clause | PDF のグリフの名前と Unicode の対応 (`marumasa_sign/pdf/glyphlist.txt.gz`) |
+| [Adobe CMap resources](https://github.com/adobe-type-tools/cmap-resources) | BSD 3-Clause | PDF の日本語・中国語・韓国語の定義済みの CMap (`marumasa_sign/pdf/cmaps.bin.gz`) |
+| Adobe Core 14 AFM | Adobe の使用条件 (`adobe-core14-afm.txt`) | PDF の標準 14 フォントの寸法 (`marumasa_sign/pdf/afm.txt.gz`、必要な項目だけを残したもの) |
+| ISO Coated v2 300% (ECI) の ICC プロファイル | (表だけを使用) | CMYK の色を sRGB にする表 (`marumasa_sign/pdf/cmyk.lut`、プロファイルから格子の点の色を求めたもの) |
 
-次のライブラリは、そのまま配布する jar に同梱しています。他の Mod とぶつからないよう、パッケージ名を `marumasa.marumasa_sign.lib` の下に変えています。
+配布する jar には、ライブラリ (第三者のコード) を同梱していません。PDF の読み込みと描画 (`core/pdf`)、記録 (`SafeLog`)、
+配布物の組み立て (`dist` のパッケージ名の書き換え) は、それぞれ Apache PDFBox 2.0、Log4j、ASM を参考にした独自の実装です。
+参考にしたライブラリにあった次の問題は、独自の実装では起きないようにしています。
 
-| ライブラリ | ライセンス | 使っているところ |
-| --- | --- | --- |
-| [Apache PDFBox](https://pdfbox.apache.org/) (pdfbox, fontbox) 2.0 | Apache 2.0 | PDF の読み込みと描画 (`core/pdf`) |
+- PDF の中の ICC プロファイルをネイティブの LCMS に渡すこと (細工したプロファイルによるメモリ破壊の危険) → 渡さない
+- Type 1 フォントの seac (アクセント付きの文字) の入れ子でスタックを使い切ること → 入れ子を受け付けない
+- CMap の範囲をすべての文字に展開してメモリを使うこと → 範囲のまま持つ
+- 1 ページを描く時間と命令の数に上限がないこと → 上限を設けた (CI の `pdfFuzz` で、壊したファイルでも止まることを毎回確かめます)
 
 ## 貢献者
 
