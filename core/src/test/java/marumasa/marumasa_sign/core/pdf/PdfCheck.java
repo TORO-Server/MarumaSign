@@ -409,6 +409,10 @@ public final class PdfCheck {
                 // 高さ 0.3 の画像 (画素の y = 189.1 から 189.4) は、y = 189 の 1 画素
                 expect(gray(image, 40, 189) < 8, "thin image is lost: " + gray(image, 40, 189));
                 break;
+            case "page-group-backdrop":
+                expectColor(image, 50, 150, 0xFF0000, "difference over nothing");
+                expectColor(image, 120, 150, 0xFF00FF, "difference over blue");
+                break;
             case "cff-cidtogidmap":
                 // CID 1 は CIDToGIDMap で四角のグリフ 2 (ページの 50 から 150)
                 expect(gray(image, 100, 100) < 30, "CIDToGIDMap of an OpenType CFF font is ignored");

@@ -189,6 +189,10 @@ final class PdfSamples {
         samples.add(new String[]{"image-snap", page("<< /XObject << /Im 5 0 R >> >>",
                 "q 49.8 0 0 50.3 20.6 30.6 cm /Im Do Q q 49.8 0 0 0.3 20.6 10.6 cm /Im Do Q",
                 stream("/Type /XObject /Subtype /Image /Width 1 /Height 1 /ColorSpace /DeviceGray /BitsPerComponent 8", latin1(new byte[]{0})))});
+        // ページは分離したグループ (背景は透明): 何もないところの Difference は元の色 (白と混ぜた水色ではない)、青の上では混ざる
+        samples.add(new String[]{"page-group-backdrop", page("<< /ExtGState << /D 5 0 R >> >>",
+                "0 0 1 rg 100 10 80 80 re f q /D gs 1 0 0 rg 20 20 120 50 re f Q",
+                "<< /Type /ExtGState /BM /Difference >>")});
         // OpenType に入った、CID の決まっていない CFF を使う CIDFontType0 の CIDToGIDMap (CID 1 を、四角のグリフ 2 にする)
         samples.add(new String[]{"cff-cidtogidmap", page("<< /Font << /F1 5 0 R >> >>", "0 g BT /F1 100 Tf 50 50 Td <0001> Tj ET",
                 "<< /Type /Font /Subtype /Type0 /BaseFont /T /Encoding /Identity-H /DescendantFonts [6 0 R] >>",

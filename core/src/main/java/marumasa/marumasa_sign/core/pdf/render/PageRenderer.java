@@ -138,7 +138,9 @@ public final class PageRenderer {
         base.translate(-crop[0], -crop[1]);
 
         final PageRenderer renderer = new PageRenderer(cache, timeoutMillis);
-        renderer.canvas = new Canvas(width, height, 0, 0, base, true, true);
+        // ページのグループは、透明な背景の上に描く分離したグループとして描き、最後に白い紙に重ねる (11.4.7)。
+        // 白の上に直接描くと、Multiply や Color などの合成の方法が、何も描いていないところの白と混ざってしまう
+        renderer.canvas = new Canvas(width, height, 0, 0, base, false, true);
         renderer.gs.clip = new Area(new Rectangle2D.Double(crop[0], crop[1], cropWidth, cropHeight));
         try {
             renderer.resources = page.resources;
