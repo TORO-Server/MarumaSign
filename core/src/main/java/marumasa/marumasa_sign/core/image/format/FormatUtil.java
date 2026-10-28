@@ -6,6 +6,7 @@ import marumasa.marumasa_sign.core.image.ArgbPixels;
 import marumasa.marumasa_sign.core.image.DecodedImage;
 import marumasa.marumasa_sign.core.image.ImageBytes;
 import marumasa.marumasa_sign.core.image.ImageLoader;
+import marumasa.marumasa_sign.core.image.jpeg.JpegReader;
 
 import java.awt.image.BufferedImage;
 import java.io.IOException;
@@ -38,9 +39,18 @@ final class FormatUtil {
      * PNG は大きさを確かめてから渡し、JPEG・BMP・GIF は自分のデコーダで読む。それ以外の形式は読まない。
      */
     static BufferedImage readEmbedded(byte[] data) throws IOException {
+        return readEmbedded(data, (long) ImageLoader.MAX_STATIC_SIZE * ImageLoader.MAX_STATIC_SIZE);
+    }
+
+    /**
+     * readEmbedded と同じだが、ピクセル数が maxPixels を超える画像は、展開する前に断る (先頭に書かれた大きさで確かめる)。
+     */
+    static BufferedImage readEmbedded(byte[] data, long maxPixels) throws IOException {
+        final long[] size = embeddedSize(data);
+        if (size == null) return null;
+        checkSize(size[0], size[1]);
+        if (size[0] * size[1] > maxPixels) throw new IOException("Embedded image is too large: " + size[0] + "x" + size[1]);
         if (data.length >= 8 && (data[0] & 0xFF) == 0x89 && data[1] == 'P' && data[2] == 'N' && data[3] == 'G') {
-            if (data.length < 24 || !matchesAt(data, data.length, 12, "IHDR")) throw new IOException("Invalid embedded PNG");
-            checkSize(u32be(data, 16), u32be(data, 20));
             return ImageBytes.read(data);
         }
         final DecodedImage image;
@@ -58,6 +68,29 @@ final class FormatUtil {
             return null;
         }
         return ArgbPixels.wrap(image.width, image.height, image.frames[0]);
+    }
+
+    // 埋め込まれた画像の、先頭に書かれた大きさ ({幅, 高さ})。readEmbedded が読まない形式なら null。壊れていれば IOException
+    private static long[] embeddedSize(byte[] data) throws IOException {
+        if (data.length >= 8 && (data[0] & 0xFF) == 0x89 && data[1] == 'P' && data[2] == 'N' && data[3] == 'G') {
+            if (data.length < 24 || !matchesAt(data, data.length, 12, "IHDR")) throw new IOException("Invalid embedded PNG");
+            return new long[]{u32be(data, 16), u32be(data, 20)};
+        }
+        if (ImageBytes.isJpeg(data)) {
+            final int[] size = JpegReader.size(data);
+            if (size == null) throw new IOException("Invalid embedded JPEG");
+            return new long[]{size[0], size[1]};
+        }
+        if (data.length >= 2 && data[0] == 'B' && data[1] == 'M') {
+            if (data.length < 26) throw new IOException("Truncated BMP");
+            if (s32le(data, 14) == 12) return new long[]{u16le(data, 18), u16le(data, 20)};
+            return new long[]{s32le(data, 18), Math.abs((long) s32le(data, 22))};
+        }
+        if (ImageLoader.isGif(data)) {
+            if (data.length < 10) throw new IOException("Truncated GIF");
+            return new long[]{u16le(data, 6), u16le(data, 8)};
+        }
+        return null;
     }
 
     static int argb(int a, int r, int g, int b) {
