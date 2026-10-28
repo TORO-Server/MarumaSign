@@ -46,7 +46,7 @@ public final class GltfScene {
     private final float[][] weights;
     private final float[] local;
     private final float[] global;
-    private float posedTime = Float.NaN;
+    private double posedTime = Double.NaN;
     private float[] restBounds;
 
     // 材質の動的プロパティ
@@ -278,8 +278,9 @@ public final class GltfScene {
 
     /**
      * 指定した時刻 (秒) の姿勢にする。アニメーションは繰り返す。
+     * 時刻は double で受け取り、繰り返しの中の時刻にしてから float にする (float のままだと、何時間も経つと刻みが粗くなり、動きがかくつく)。
      */
-    public void pose(float time) {
+    public void pose(double time) {
         if (time == posedTime) return;
         posedTime = time;
 
@@ -301,7 +302,7 @@ public final class GltfScene {
 
         if (model.animations.length > 0) {
             final GltfModel.Animation animation = model.animations[0];
-            final float t = animation.duration > 0 ? time % animation.duration : 0f;
+            final float t = animation.duration > 0 ? (float) (time % animation.duration) : 0f;
             for (GltfModel.Channel channel : animation.channels) {
                 apply(channel, t);
             }
@@ -515,7 +516,7 @@ public final class GltfScene {
      * @param colors    頂点ごとの色 (ARGB) の出力先。それぞれ vertexCount 以上の長さ
      */
     public void emit(float[] placement, float[][] vertices, int[][] colors) {
-        if (Float.isNaN(posedTime)) pose(0);
+        if (Double.isNaN(posedTime)) pose(0);
         for (int i = 0; i < cursor.length; i++) cursor[i] = 0;
         for (int row = 0; row < 3; row++) {
             for (int column = 0; column < 3; column++) {

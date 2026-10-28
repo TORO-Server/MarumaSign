@@ -138,7 +138,7 @@ public final class GltfRuntimeCheck {
     }
 
     // 指定した時刻の姿勢で、変換なしで出力した頂点 (x, y, z, u, v)。最初のまとまりの index 番目
-    private static float[] vertex(GltfScene scene, float time, int index) {
+    private static float[] vertex(GltfScene scene, double time, int index) {
         scene.pose(time);
         final GltfScene.Group[] groups = scene.groups();
         final float[][] vertices = new float[groups.length][];
@@ -151,12 +151,12 @@ public final class GltfRuntimeCheck {
         return Arrays.copyOfRange(vertices[0], index * GltfScene.STRIDE, index * GltfScene.STRIDE + GltfScene.STRIDE);
     }
 
-    private static float[] position(GltfScene scene, float time) {
+    private static float[] position(GltfScene scene, double time) {
         return Arrays.copyOf(vertex(scene, time, 0), 3);
     }
 
     // 最初の頂点の色 (ARGB)
-    private static int color(GltfScene scene, float time) {
+    private static int color(GltfScene scene, double time) {
         scene.pose(time);
         final GltfScene.Group[] groups = scene.groups();
         final float[][] vertices = new float[groups.length][];
@@ -214,6 +214,9 @@ public final class GltfRuntimeCheck {
         check(near(position(scene, 0.5f), 1.5f, 0, 0), "linear at 0.5: " + Arrays.toString(position(scene, 0.5f)));
         check(near(position(scene, 1.5f), 2, 1, 0), "linear at 1.5: " + Arrays.toString(position(scene, 1.5f)));
         check(near(position(scene, 2.5f), 1.5f, 0, 0), "animation loops after the last key: " + Arrays.toString(position(scene, 2.5f)));
+        // 何時間も経っても、繰り返しの中の時刻が正しい (float の時刻では 1e7 秒で刻みが 1 秒になり、0.5 秒が失われる)
+        check(near(position(scene, 10_000_000.5), 1.5f, 0, 0), "animation time stays exact after a long time: "
+                + Arrays.toString(position(scene, 10_000_000.5)));
 
         final GltfScene late = animated("translation", "LINEAR", new float[]{1, 2}, "VEC3", new float[]{3, 0, 0, 5, 0, 0});
         check(near(position(late, 0.5f), 4, 0, 0), "before the first key, the first value is held: " + Arrays.toString(position(late, 0.5f)));

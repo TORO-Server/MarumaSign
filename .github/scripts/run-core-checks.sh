@@ -109,6 +109,9 @@ check structureFuzz 3600 -Xmx2g -Xss512k marumasa.marumasa_sign.core.structure.S
 check structureMeshFuzz 3600 -Xmx2g -Xss512k -Dfuzz.mesh=true marumasa.marumasa_sign.core.structure.StructureFuzz "$structure_fuzz" \
   src/test/resources/structure "$root/tools/verify/test-structure.nbt"
 # 3D モデル (glTF / GLB とテクスチャ) とスプラットの、直した不具合の試験と、壊したファイルのファジング
+# 3D モデルのアニメーション、スプラットの色、入力欄、看板の文字、設定ファイル、すべての言語のファイル
+check runtimeLogicCheck 300 -Xmx1g -Xss512k marumasa.marumasa_sign.core.RuntimeLogicCheck
+check langCheck 120 -Xmx256m marumasa.marumasa_sign.core.LangCheck
 check gltfRegressionCheck 600 -Xmx1g -Xss512k marumasa.marumasa_sign.core.gltf.GltfRegressionCheck
 check splatRegressionCheck 600 -Xmx1g -Xss512k marumasa.marumasa_sign.core.splat.SplatRegressionCheck
 check gltfFuzz 3600 -Xmx1g -Xss512k -Dfuzz.strict=true marumasa.marumasa_sign.core.gltf.GltfFuzz "$gltf_fuzz" \

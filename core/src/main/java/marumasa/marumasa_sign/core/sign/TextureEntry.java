@@ -90,8 +90,8 @@ public final class TextureEntry {
     }
 
     // 読み込んでからの時間 (秒)。アニメーションの時刻に使う
-    float modelTime() {
-        return (Clock.millis() - loadedAt) / 1000f;
+    double modelTime() {
+        return (Clock.millis() - loadedAt) / 1000.0;
     }
 
     void setMedia(MediaSession media) {

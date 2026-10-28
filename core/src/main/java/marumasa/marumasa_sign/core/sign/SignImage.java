@@ -55,7 +55,7 @@ public final class SignImage {
         float[][] vertices;
         int[][] colors;
         Batch[] batches;
-        int frame = -1;
+        long frame = -1;
     }
 
     public final SignSpec spec;
@@ -457,9 +457,9 @@ public final class SignImage {
         }
 
         // 動かないモデルは 1 回だけ計算する
-        final int frame = model.isAnimated() ? (int) (texture.modelTime() * MODEL_FRAME_RATE) : 0;
+        final long frame = model.isAnimated() ? (long) (texture.modelTime() * MODEL_FRAME_RATE) : 0;
         if (cache.frame != frame) {
-            model.pose(frame / MODEL_FRAME_RATE);
+            model.pose(frame / (double) MODEL_FRAME_RATE);
             model.emit(cache.placement, cache.vertices, cache.colors);
             cache.frame = frame;
             for (Batch batch : cache.batches) batch.revision++;
