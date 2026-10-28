@@ -126,7 +126,20 @@ public final class JpegReader {
      */
     public static Image decode(byte[] data, int scale, long maxPixels, int colorTransform) throws IOException {
         if (scale != 1 && scale != 2 && scale != 4 && scale != 8) scale = 1;
-        return new JpegReader(data).read(scale, maxPixels, colorTransform);
+        try {
+            return new JpegReader(data).read(scale, maxPixels, colorTransform);
+        } catch (EndOfData e) {
+            throw new IOException("Truncated JPEG data", e);
+        }
+    }
+
+    // 見出しの途中でデータが終わった (壊れたファイル)。decode で IOException にする
+    private static final class EndOfData extends RuntimeException {
+        private static final long serialVersionUID = 1L;
+
+        EndOfData() {
+            super("End of data", null, false, false);
+        }
     }
 
     /**
@@ -183,7 +196,7 @@ public final class JpegReader {
     }
 
     private int u16(int p) {
-        if (p + 1 >= data.length) throw new ArrayIndexOutOfBoundsException("End of data");
+        if (p + 1 >= data.length) throw new EndOfData();
         return ((data[p] & 0xFF) << 8) | (data[p + 1] & 0xFF);
     }
 
