@@ -2,332 +2,291 @@ package marumasa.marumasa_sign.core.texture;
 
 /**
  * Basis Universal の UASTC (LDR 4x4) のブロックを RGBA に展開する。
- * Basis Universal (https://github.com/BinomialLLC/basis_universal, Apache License 2.0) の
- * transcoder (unpack_uastc) の処理と表を Java に書き直したもの。
- * ライセンスの全文は jar の marumasa_sign/licenses/basis_universal.txt にある。
+ * 「UASTC LDR 4x4 Texture Specification」(Binomial, パブリックドメイン) のブロックの並びと表、
+ * および Khronos Data Format Specification の ASTC の節 (端点と重みの復元、補間) に沿って書いたもの。
  */
 final class Uastc {
 
-    private static final int TOTAL_MODES = 19;
+    private static final int MODE_COUNT = 19;
     private static final int MODE_SOLID_COLOR = 8;
 
-    private static final int[] HUFF_CODE_SIZES = {4, 6, 5, 5, 5, 5, 5, 5, 5, 5, 3, 2, 3, 5, 5, 7, 6, 6, 4, 7};
-    // 先頭の 7 ビットからモードを引く表
-    private static final int[] HUFF_MODES = {
-            11, 0, 10, 3, 11, 15, 12, 7, 11, 18, 10, 5, 11, 14, 12, 9, 11, 0, 10, 4, 11, 16, 12, 8, 11, 18, 10, 6, 11, 2, 12, 13,
-            11, 0, 10, 3, 11, 17, 12, 7, 11, 18, 10, 5, 11, 14, 12, 9, 11, 0, 10, 4, 11, 1, 12, 8, 11, 18, 10, 6, 11, 2, 12, 13,
-            11, 0, 10, 3, 11, 19, 12, 7, 11, 18, 10, 5, 11, 14, 12, 9, 11, 0, 10, 4, 11, 16, 12, 8, 11, 18, 10, 6, 11, 2, 12, 13,
-            11, 0, 10, 3, 11, 17, 12, 7, 11, 18, 10, 5, 11, 14, 12, 9, 11, 0, 10, 4, 11, 1, 12, 8, 11, 18, 10, 6, 11, 2, 12, 13
+    // モードのハフマン符号 {符号, ビット数}。最初のビットが最下位。19 番は将来のために空けてある
+    private static final int[][] MODE_CODES = {
+            {0x1, 4}, {0x35, 6}, {0x1D, 5}, {0x3, 5}, {0x13, 5}, {0xB, 5}, {0x1B, 5}, {0x7, 5},
+            {0x17, 5}, {0xF, 5}, {0x2, 3}, {0x0, 2}, {0x6, 3}, {0x1F, 5}, {0xD, 5}, {0x5, 7},
+            {0x15, 6}, {0x25, 6}, {0x9, 4}, {0x45, 7}
     };
 
+    // モードごとの値 (仕様の「UASTC Mode Description Tables」)
     private static final int[] WEIGHT_BITS = {4, 2, 3, 2, 2, 3, 2, 2, 0, 2, 4, 2, 3, 1, 2, 4, 2, 2, 5};
-    private static final int[] ENDPOINT_RANGES = {19, 20, 8, 7, 12, 20, 18, 12, 0, 8, 13, 13, 19, 20, 20, 20, 20, 20, 11};
+    private static final int[] ENDPOINT_RANGE = {19, 20, 8, 7, 12, 20, 18, 12, 0, 8, 13, 13, 19, 20, 20, 20, 20, 20, 11};
     private static final int[] SUBSETS = {1, 1, 2, 3, 2, 1, 1, 2, 0, 2, 1, 1, 1, 1, 1, 1, 2, 1, 1};
     private static final int[] PLANES = {1, 1, 1, 1, 1, 1, 2, 1, 0, 1, 1, 2, 1, 2, 1, 1, 1, 2, 1};
-    private static final int[] COMPS = {3, 3, 3, 3, 3, 3, 3, 3, 4, 4, 4, 4, 4, 4, 4, 2, 2, 2, 3};
-    private static final int[] TOTAL_HINT_BITS = {15, 15, 15, 15, 15, 15, 15, 15, 0, 23, 17, 17, 17, 23, 23, 23, 23, 23, 15};
+    private static final int[] COMPONENTS = {3, 3, 3, 3, 3, 3, 3, 3, 4, 4, 4, 4, 4, 4, 4, 2, 2, 2, 3};
+    private static final int[] HAS_ETC1_BIAS = {1, 1, 1, 1, 1, 1, 1, 1, 0, 1, 0, 0, 0, 1, 1, 1, 1, 1, 1};
+    private static final int[] HAS_BC1_HINT1 = {1, 1, 1, 1, 1, 1, 1, 1, 0, 1, 0, 0, 0, 1, 1, 1, 1, 1, 1};
+    private static final int[] HAS_ALPHA = {0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0};
 
-    // ASTC の値の範囲ごとの、ビット・3 進・5 進の数
-    private static final int[][] BISE_RANGES = {
-            {1, 0, 0}, {0, 1, 0}, {2, 0, 0}, {0, 0, 1}, {1, 1, 0}, {3, 0, 0}, {1, 0, 1}, {2, 1, 0},
-            {4, 0, 0}, {2, 0, 1}, {3, 1, 0}, {5, 0, 0}, {3, 0, 1}, {4, 1, 0}, {6, 0, 0}, {4, 0, 1},
-            {5, 1, 0}, {7, 0, 0}, {5, 0, 1}, {6, 1, 0}, {8, 0, 0}
-    };
-    // 3 進・5 進を含む範囲の端点の復元に使う値 (ASTC の仕様から)
-    private static final String[] UNQUANT_B = {"", "", "", "", "000000000", "", "000000000", "b000b0bb0", "", "b0000bb00",
-            "cb000cbcb", "", "cb0000cbc", "dcb000dcb", "", "dcb0000dc", "edcb000ed", "", "edcb0000e", "fedcb000f", ""};
-    private static final int[] UNQUANT_C = {0, 0, 0, 0, 204, 0, 113, 93, 0, 54, 44, 0, 26, 22, 0, 13, 11, 0, 6, 5, 0};
-    // [範囲][符号化された値] -> 0 - 255 の端点
-    private static final int[][] UNQUANT = new int[21][];
-
-    private static final int[][] WEIGHTS = {
-            null, {0, 64}, {0, 21, 43, 64}, {0, 9, 18, 27, 37, 46, 55, 64},
-            {0, 4, 8, 12, 17, 21, 25, 29, 35, 39, 43, 47, 52, 56, 60, 64},
-            {0, 2, 4, 6, 8, 10, 12, 14, 16, 18, 20, 22, 24, 26, 28, 30, 34, 36, 38, 40, 42, 44, 46, 48, 50, 52, 54, 56, 58, 60, 62, 64}
+    // ASTC の値の範囲 (BISE) ごとの {ビット数, 3 進の桁があるか, 5 進の桁があるか}
+    private static final int[][] RANGES = {
+            {1, 0, 0}, {0, 1, 0}, {2, 0, 0}, {0, 0, 1}, {1, 1, 0}, {3, 0, 0}, {1, 0, 1},
+            {2, 1, 0}, {4, 0, 0}, {2, 0, 1}, {3, 1, 0}, {5, 0, 0}, {3, 0, 1}, {4, 1, 0},
+            {6, 0, 0}, {4, 0, 1}, {5, 1, 0}, {7, 0, 0}, {5, 0, 1}, {6, 1, 0}, {8, 0, 0}
     };
 
-    private static final int[][] PATTERNS2 = {
-            {0, 0, 1, 1, 0, 0, 1, 1, 0, 0, 1, 1, 0, 0, 1, 1}, {0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1}, {1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0}, {0, 0, 0, 1, 0, 0, 1, 1, 0, 0, 1, 1, 0, 1, 1, 1},
-            {1, 1, 1, 1, 1, 1, 1, 0, 1, 1, 1, 0, 1, 1, 0, 0}, {0, 0, 1, 1, 0, 1, 1, 1, 0, 1, 1, 1, 1, 1, 1, 1}, {1, 1, 1, 0, 1, 1, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0}, {1, 1, 1, 1, 1, 1, 1, 0, 1, 1, 0, 0, 1, 0, 0, 0},
-            {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 1, 1}, {1, 1, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0}, {0, 0, 0, 0, 0, 0, 0, 1, 0, 1, 1, 1, 1, 1, 1, 1}, {1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 1, 0, 0, 0},
-            {1, 1, 1, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0}, {1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0}, {0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1}, {1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0},
-            {1, 0, 0, 0, 1, 1, 1, 0, 1, 1, 1, 1, 1, 1, 1, 1}, {1, 1, 1, 1, 1, 1, 1, 1, 0, 1, 1, 1, 0, 0, 0, 1}, {0, 1, 1, 1, 0, 0, 1, 1, 0, 0, 0, 1, 0, 0, 0, 0}, {0, 0, 1, 1, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0},
-            {0, 0, 0, 0, 1, 0, 0, 0, 1, 1, 0, 0, 1, 1, 1, 0}, {1, 1, 1, 1, 1, 1, 1, 1, 0, 1, 1, 1, 0, 0, 1, 1}, {1, 0, 0, 0, 1, 1, 0, 0, 1, 1, 0, 0, 1, 1, 1, 0}, {0, 0, 1, 1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 0},
-            {1, 1, 1, 1, 0, 1, 1, 1, 0, 1, 1, 1, 0, 0, 1, 1}, {0, 1, 1, 0, 0, 1, 1, 0, 0, 1, 1, 0, 0, 1, 1, 0}, {1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1}, {1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0},
-            {1, 1, 1, 1, 0, 0, 0, 0, 1, 1, 1, 1, 0, 0, 0, 0}, {1, 0, 0, 1, 0, 0, 1, 1, 0, 1, 1, 0, 1, 1, 0, 0}
+    // 分け方 (仕様の表の写し)。数字が画素ごとの部分の番号
+    private static final String[] PATTERNS2 = {
+            "0011001100110011", "0001000100010001", "1000100010001000", "0001001100110111",
+            "1111111011101100", "0011011101111111", "1110110010000000", "1111111011001000",
+            "0000000000010011", "1100100000000000", "0000000101111111", "1111111111101000",
+            "1110100000000000", "1111111100000000", "0000111111111111", "1111111111110000",
+            "1000111011111111", "1111111101110001", "0111001100010000", "0011000100000000",
+            "0000100011001110", "1111111101110011", "1000110011001110", "0011000100010000",
+            "1111011101110011", "0110011001100110", "1111000000001111", "1010101010101010",
+            "1111000011110000", "1001001101101100"
     };
-    private static final int[][] PATTERNS3 = {
-            {0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 2, 2, 1, 1, 2, 2}, {1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 2, 2, 2, 2}, {1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 2, 2, 2, 2}, {1, 1, 1, 1, 2, 2, 2, 2, 0, 0, 0, 0, 0, 0, 0, 0},
-            {1, 1, 2, 0, 1, 1, 2, 0, 1, 1, 2, 0, 1, 1, 2, 0}, {0, 1, 1, 2, 0, 1, 1, 2, 0, 1, 1, 2, 0, 1, 1, 2}, {0, 2, 1, 1, 0, 2, 1, 1, 0, 2, 1, 1, 0, 2, 1, 1}, {2, 0, 0, 0, 2, 0, 0, 0, 2, 1, 1, 1, 2, 1, 1, 1},
-            {2, 0, 1, 2, 2, 0, 1, 2, 2, 0, 1, 2, 2, 0, 1, 2}, {1, 1, 1, 1, 0, 0, 0, 0, 2, 2, 2, 2, 1, 1, 1, 1}, {0, 0, 2, 2, 0, 0, 1, 1, 0, 0, 1, 1, 0, 0, 2, 2}
+    private static final String[] PATTERNS3 = {
+            "0000000011221122", "1111111100002222", "1111000000002222", "1111222200000000",
+            "1120112011201120", "0112011201120112", "0211021102110211", "2000200021112111",
+            "2012201220122012", "1111000022221111", "0022001100110022"
     };
-    // モード 7 (BC7 の 3 つの分け方のうち 2 つを ASTC で表したもの)
-    private static final int[][] PATTERNS2_MODE7 = {
-            {0, 0, 0, 0, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0}, {0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1, 0}, {1, 1, 0, 0, 1, 1, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0}, {0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 1, 1, 0, 0, 1, 1},
-            {1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 1, 1, 1, 1}, {0, 1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0}, {0, 0, 0, 1, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1}, {0, 1, 1, 1, 0, 0, 1, 1, 0, 0, 1, 1, 0, 0, 1, 1},
-            {1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 0, 0}, {0, 1, 1, 1, 0, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0}, {0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 0, 1, 1, 1, 0}, {1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 0, 0},
-            {0, 1, 1, 1, 0, 0, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0}, {0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1}, {1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 1, 1, 0}, {1, 1, 0, 0, 1, 1, 0, 0, 1, 1, 0, 0, 1, 0, 0, 0},
-            {1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 1, 0, 0, 0}, {0, 0, 1, 1, 0, 1, 1, 0, 1, 1, 0, 0, 1, 0, 0, 0}, {1, 1, 1, 1, 0, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0}
+    // モード 7 の分け方 (BC7 の 3 つの分け方のうち、2 つの部分だけを使うもの)
+    private static final String[] PATTERNS2_MODE7 = {
+            "0000111100000000", "0010001000100010", "1100110010000000", "0000000100110011",
+            "1111111100001111", "0100010001000100", "0001001111111111", "0111001100110011",
+            "1100000000111100", "0111011100000000", "0000000011101110", "1100000000001100",
+            "0111001100000000", "0000000111111111", "1111111111110110", "1100110011001000",
+            "1111111110001000", "0011011011001000", "1111011100000000"
     };
-    // 分け方ごとの、各部分の最初の画素 (重みが 1 ビット少ない)
-    private static final int[][] ANCHORS2 = {
-            {0, 2}, {0, 3}, {1, 0}, {0, 3}, {7, 0}, {0, 2}, {3, 0}, {7, 0},
-            {0, 11}, {2, 0}, {0, 7}, {11, 0}, {3, 0}, {8, 0}, {0, 4}, {12, 0},
-            {1, 0}, {8, 0}, {0, 1}, {0, 2}, {0, 4}, {8, 0}, {1, 0}, {0, 2},
-            {4, 0}, {0, 1}, {4, 0}, {1, 0}, {4, 0}, {1, 0}
-    };
-    private static final int[][] ANCHORS3 = {
-            {0, 8, 10}, {8, 0, 12}, {4, 0, 12}, {8, 0, 4}, {3, 0, 2}, {0, 1, 3}, {0, 2, 1}, {1, 9, 0}, {1, 2, 0}, {4, 0, 8}, {0, 6, 2}
-    };
-    private static final int[][] ANCHORS2_MODE7 = {
-            {0, 4}, {0, 2}, {2, 0}, {0, 7}, {8, 0}, {0, 1}, {0, 3}, {0, 1}, {2, 0}, {0, 1}, {0, 8}, {2, 0}, {0, 1}, {0, 7}, {12, 0}, {2, 0}, {9, 0}, {0, 2}, {4, 0}
-    };
+
+    // 3 進の桁 (5 つまで)、5 進の桁 (3 つまで) をまとめた値を表すのに足りる最小のビット数
+    private static final int[] TRIT_GROUP_BITS = {0, 2, 4, 5, 7, 8};
+    private static final int[] QUINT_GROUP_BITS = {0, 3, 5, 7};
+
+    // [範囲][値] -> 0 - 255 の端点。範囲に収まらない値 (壊れたデータでだけ現れる) は 0 のままにしておく
+    private static final int[][] ENDPOINT_VALUES = new int[RANGES.length][];
+    // [重みのビット数][値] -> 0 - 64 の重み
+    private static final int[][] WEIGHT_VALUES = new int[6][];
+    // 先頭の 7 ビット -> モード (使わない符号は MODE_COUNT 以上)
+    private static final int[] MODE_LOOKUP = new int[128];
+    // モードごとの、変換の手がかりのビット数 (展開には使わないので読み飛ばす)
+    private static final int[] HINT_BITS = new int[MODE_COUNT];
 
     static {
-        for (int range = 0; range < 21; range++) {
-            final int bits = BISE_RANGES[range][0];
-            final int trits = BISE_RANGES[range][1];
-            final int quints = BISE_RANGES[range][2];
-            if ((trits != 0 || quints != 0) && UNQUANT_C[range] == 0) continue;
-            final int levels = (1 + 2 * trits + 4 * quints) << bits;
-            UNQUANT[range] = new int[256];
-            for (int value = 0; value < levels; value++) {
-                UNQUANT[range][value] = unquantEndpoint(value & ((1 << bits) - 1), value >> bits, range);
+        for (int x = 0; x < 128; x++) {
+            MODE_LOOKUP[x] = MODE_COUNT;
+            for (int mode = 0; mode < MODE_CODES.length; mode++) {
+                if ((x & ((1 << MODE_CODES[mode][1]) - 1)) == MODE_CODES[mode][0]) MODE_LOOKUP[x] = mode;
             }
+        }
+        for (int range = 0; range < RANGES.length; range++) {
+            final int bits = RANGES[range][0];
+            final int levels = (RANGES[range][1] != 0 ? 3 : RANGES[range][2] != 0 ? 5 : 1) << bits;
+            // 端点に使わない、ビットのない範囲は作らない
+            if (bits == 0) continue;
+            ENDPOINT_VALUES[range] = new int[256];
+            for (int value = 0; value < levels; value++) {
+                ENDPOINT_VALUES[range][value] = unquantizeEndpoint(range, value);
+            }
+        }
+        for (int bits = 1; bits <= 5; bits++) {
+            WEIGHT_VALUES[bits] = new int[1 << bits];
+            for (int value = 0; value < (1 << bits); value++) {
+                // 6 ビットになるまで上位のビットを繰り返し、32 を超えたら 1 を足す
+                int w = 0;
+                for (int filled = 0; filled < 6; filled += bits) w = (w << bits) | value;
+                final int extra = (((6 + bits - 1) / bits) * bits) - 6;
+                w >>= extra;
+                if (w > 32) w++;
+                WEIGHT_VALUES[bits][value] = w;
+            }
+        }
+        for (int mode = 0; mode < MODE_COUNT; mode++) {
+            if (mode == MODE_SOLID_COLOR) continue;
+            HINT_BITS[mode] = 1 + HAS_BC1_HINT1[mode] + 1 + 1 + 3 + 3 + HAS_ETC1_BIAS[mode] * 5 + HAS_ALPHA[mode] * 8;
         }
     }
 
     private Uastc() {
     }
 
-    // ASTC の仕様にある、端点の値を 0 - 255 に戻す計算
-    private static int unquantEndpoint(int packedBits, int packedTq, int range) {
-        final int bits = BISE_RANGES[range][0];
-        final int trits = BISE_RANGES[range][1];
-        final int quints = BISE_RANGES[range][2];
-        if (trits == 0 && quints == 0) {
-            int value = 0;
-            int bitsLeft = 8;
-            while (bitsLeft > 0) {
-                int v = packedBits;
-                final int n = Math.min(bitsLeft, bits);
-                if (n < bits) v >>= (bits - n);
-                value |= v << (bitsLeft - n);
-                bitsLeft -= n;
-            }
-            return value;
+    // ASTC の、端点の値を 0 - 255 に戻す計算
+    private static int unquantizeEndpoint(int range, int value) {
+        final int bits = RANGES[range][0];
+        final boolean trit = RANGES[range][1] != 0;
+        final boolean quint = RANGES[range][2] != 0;
+        if (!trit && !quint) {
+            // ビットだけの値は、上位のビットを繰り返して 8 ビットにする
+            int result = 0;
+            for (int filled = 0; filled < 8; filled += bits) result = (result << bits) | value;
+            return (result >> ((((8 + bits - 1) / bits) * bits) - 8)) & 0xFF;
         }
-        final int a = (packedBits & 1) != 0 ? 511 : 0;
-        final int c = UNQUANT_C[range];
-        final String pattern = UNQUANT_B[range];
+        final int d = value >> bits;
+        final int low = value & ((1 << bits) - 1);
+        final int a = (low & 1) != 0 ? 0x1FF : 0;
+        // B は、値の下位ビット (a, b, c, ...) を仕様の並びで置いた 9 ビット
+        final String pattern;
+        final int c;
+        switch (bits * 2 + (trit ? 0 : 1)) {
+            case 2: pattern = "000000000"; c = 204; break;
+            case 3: pattern = "000000000"; c = 113; break;
+            case 4: pattern = "b000b0bb0"; c = 93; break;
+            case 5: pattern = "b0000bb00"; c = 54; break;
+            case 6: pattern = "cb000cbcb"; c = 44; break;
+            case 7: pattern = "cb0000cbc"; c = 26; break;
+            case 8: pattern = "dcb000dcb"; c = 22; break;
+            case 9: pattern = "dcb0000dc"; c = 13; break;
+            case 10: pattern = "edcb000ed"; c = 11; break;
+            case 11: pattern = "edcb0000e"; c = 6; break;
+            case 12: pattern = "fedcb000f"; c = 5; break;
+            default: return 0;
+        }
         int b = 0;
         for (int i = 0; i < 9; i++) {
-            b <<= 1;
             final char ch = pattern.charAt(i);
-            if (ch != '0') b |= (packedBits >> (ch - 'a')) & 1;
+            b = (b << 1) | (ch == '0' ? 0 : (low >> (ch - 'a')) & 1);
         }
-        int value = packedTq * c + b;
-        value ^= a;
-        return (a & 0x80) | (value >> 2);
+        int unq = d * c + b;
+        unq ^= a;
+        return (a & 0x80) | (unq >> 2);
     }
 
+    // ASTC の補間。端点を 16 ビットに広げてから重みで混ぜ、上位 8 ビットを使う
     private static int interpolate(int low, int high, int weight, boolean srgb) {
-        if (srgb) {
-            low = (low << 8) | 0x80;
-            high = (high << 8) | 0x80;
-        } else {
-            low = (low << 8) | low;
-            high = (high << 8) | high;
-        }
+        low = srgb ? (low << 8) | 0x80 : (low << 8) | low;
+        high = srgb ? (high << 8) | 0x80 : (high << 8) | high;
         return ((low * (64 - weight) + high * weight + 32) >> 6) >> 8;
     }
 
-    // 下位ビットから順に読む (ブロックの外は 0)
-    private static int bits(byte[] data, int pos, int[] offset, int count) {
-        int result = 0;
-        for (int i = 0; i < count; i++) {
-            final int bit = offset[0] + i;
-            if (bit < 128) result |= ((data[pos + (bit >> 3)] >> (bit & 7)) & 1) << i;
+    // ブロックの中を、下位のビットから順に読む
+    private static final class Reader {
+        private final long lo;
+        private final long hi;
+        int position;
+
+        Reader(byte[] data, int pos) {
+            long l = 0, h = 0;
+            for (int i = 7; i >= 0; i--) {
+                l = (l << 8) | (data[pos + i] & 0xFFL);
+                h = (h << 8) | (data[pos + 8 + i] & 0xFFL);
+            }
+            lo = l;
+            hi = h;
         }
-        offset[0] += count;
-        return result;
+
+        int read(int count) {
+            int result = 0;
+            for (int i = 0; i < count; i++) {
+                final int bit = position + i;
+                // ブロックの外 (128 ビット目以降) は 0 として読む
+                final long word = bit < 64 ? lo : bit < 128 ? hi : 0;
+                result |= (int) ((word >>> (bit & 63)) & 1) << i;
+            }
+            position += count;
+            return result;
+        }
     }
 
     /**
      * 16 バイトのブロックを展開して、16 画素分の ARGB を行ごとに書く。不正なブロックなら false。
      */
     static boolean decode(byte[] data, int pos, boolean srgb, int[] out) {
-        final int mode = HUFF_MODES[data[pos] & 127];
-        if (mode >= TOTAL_MODES) return false;
-        final int[] offset = {HUFF_CODE_SIZES[mode]};
+        final int mode = MODE_LOOKUP[data[pos] & 0x7F];
+        if (mode >= MODE_COUNT) return false;
+        final Reader in = new Reader(data, pos);
+        in.position = MODE_CODES[mode][1];
 
         if (mode == MODE_SOLID_COLOR) {
-            final int r = bits(data, pos, offset, 8);
-            final int g = bits(data, pos, offset, 8);
-            final int b = bits(data, pos, offset, 8);
-            final int a = bits(data, pos, offset, 8);
-            java.util.Arrays.fill(out, (a << 24) | (r << 16) | (g << 8) | b);
+            final int r = in.read(8);
+            final int g = in.read(8);
+            final int b = in.read(8);
+            final int a = in.read(8);
+            java.util.Arrays.fill(out, 0, 16, (a << 24) | (r << 16) | (g << 8) | b);
             return true;
         }
+        in.position += HINT_BITS[mode];
 
-        // ほかの形式に変換するときの手がかりは使わない
-        offset[0] += TOTAL_HINT_BITS[mode];
-
-        int subsets = 1;
-        int commonPattern = 0;
-        if (mode == 2 || mode == 4 || mode == 7 || mode == 9 || mode == 16) {
-            commonPattern = bits(data, pos, offset, 5);
-            subsets = 2;
-        } else if (mode == 3) {
-            commonPattern = bits(data, pos, offset, 4);
-            subsets = 3;
+        // 分け方
+        final int subsets = SUBSETS[mode];
+        String pattern = null;
+        if (subsets > 1) {
+            final int index = in.read(subsets == 3 ? 4 : 5);
+            final String[] table = subsets == 3 ? PATTERNS3 : mode == 7 ? PATTERNS2_MODE7 : PATTERNS2;
+            if (index >= table.length) return false;
+            pattern = table[index];
         }
-        int[] pattern = null;
-        int[] anchors = {0, 0, 0};
-        if (subsets == 3) {
-            if (commonPattern >= PATTERNS3.length) return false;
-            pattern = PATTERNS3[commonPattern];
-            anchors = ANCHORS3[commonPattern];
-        } else if (subsets == 2) {
-            if (mode == 7) {
-                if (commonPattern >= PATTERNS2_MODE7.length) return false;
-                pattern = PATTERNS2_MODE7[commonPattern];
-                anchors = ANCHORS2_MODE7[commonPattern];
-            } else {
-                if (commonPattern >= PATTERNS2.length) return false;
-                pattern = PATTERNS2[commonPattern];
-                anchors = ANCHORS2[commonPattern];
+        // 2 つ目の重みで補間するチャンネル
+        final int planes = PLANES[mode];
+        int dualChannel = -1;
+        if (planes == 2) dualChannel = mode == 17 ? 3 : in.read(2);
+
+        // 端点。3 進または 5 進の桁をまとめた値が先に、そのあとに各値の下位ビットが並ぶ
+        final int components = COMPONENTS[mode];
+        final int valueCount = components * 2 * subsets;
+        final int range = ENDPOINT_RANGE[mode];
+        final int bits = RANGES[range][0];
+        final int base = RANGES[range][1] != 0 ? 3 : RANGES[range][2] != 0 ? 5 : 0;
+        final int perGroup = base == 3 ? 5 : 3;
+        final int groups = base == 0 ? 0 : (valueCount + perGroup - 1) / perGroup;
+        final int[] packed = new int[groups];
+        for (int g = 0; g < groups; g++) {
+            final int digits = Math.min(perGroup, valueCount - g * perGroup);
+            packed[g] = in.read(base == 3 ? TRIT_GROUP_BITS[digits] : QUINT_GROUP_BITS[digits]);
+        }
+        final int[] endpoint = new int[valueCount];
+        final int[] table = ENDPOINT_VALUES[range];
+        for (int i = 0; i < valueCount; i++) {
+            int value = in.read(bits);
+            if (base != 0) {
+                int group = packed[i / perGroup];
+                for (int k = i % perGroup; k > 0; k--) group /= base;
+                value |= (group % base) << bits;
             }
+            endpoint[i] = table[value];
         }
 
-        int planes = 1;
-        int ccs = -1;
-        if (mode == 6 || mode == 11 || mode == 13) {
-            ccs = bits(data, pos, offset, 2);
-            planes = 2;
-        } else if (mode == 17) {
-            ccs = 3;
-            planes = 2;
-        }
-
-        // 端点 (3 進や 5 進の桁をまとめた部分が先に、そのあとに各値の下位ビット)
-        final int comps = COMPS[mode];
+        // 重み。各部分で最初に現れる画素 (2 面のときは画素 0 の 2 つ) は 1 ビット少ない
         final int weightBits = WEIGHT_BITS[mode];
-        final int totalValues = comps * 2 * subsets;
-        final int range = ENDPOINT_RANGES[mode];
-        final int epBits = BISE_RANGES[range][0];
-        final int epTrits = BISE_RANGES[range][1];
-        final int epQuints = BISE_RANGES[range][2];
-        int totalTqs = 0, bundleSize = 0, mul = 0;
-        if (epTrits != 0) {
-            totalTqs = (totalValues + 4) / 5;
-            bundleSize = 5;
-            mul = 3;
-        } else if (epQuints != 0) {
-            totalTqs = (totalValues + 2) / 3;
-            bundleSize = 3;
-            mul = 5;
-        }
-        final int[] tqValues = new int[8];
-        for (int i = 0; i < totalTqs; i++) {
-            int numBits = epTrits != 0 ? 8 : 7;
-            if (i == totalTqs - 1) {
-                final int remaining = totalValues - (totalTqs - 1) * bundleSize;
-                if (epTrits != 0) {
-                    if (remaining == 1) numBits = 2;
-                    else if (remaining == 2) numBits = 4;
-                    else if (remaining == 3) numBits = 5;
-                    else if (remaining == 4) numBits = 7;
-                } else {
-                    if (remaining == 1) numBits = 3;
-                    else if (remaining == 2) numBits = 5;
-                }
-            }
-            tqValues[i] = bits(data, pos, offset, numBits);
-        }
-        final int[] endpoints = new int[18];
-        int accum = 0, accumRemaining = 0, nextTq = 0;
-        for (int i = 0; i < totalValues; i++) {
-            int value = bits(data, pos, offset, epBits);
-            if (totalTqs != 0) {
-                if (accumRemaining == 0) {
-                    accum = tqValues[nextTq++];
-                    accumRemaining = bundleSize;
-                }
-                final int v = accum % mul;
-                accum /= mul;
-                accumRemaining--;
-                value |= v << epBits;
-            }
-            endpoints[i] = value;
-        }
-
-        // 重み (各部分の最初の画素は 1 ビット少ない)
-        final int[] weights = new int[32];
+        final int[] weight = new int[32];
+        final int[] weightTable = WEIGHT_VALUES[weightBits];
         if (planes == 2) {
-            weights[0] = bits(data, pos, offset, weightBits - 1);
-            weights[1] = bits(data, pos, offset, weightBits - 1);
-            for (int i = 2; i < 32; i++) weights[i] = bits(data, pos, offset, weightBits);
+            for (int i = 0; i < 32; i++) weight[i] = weightTable[in.read(i < 2 ? weightBits - 1 : weightBits)];
         } else {
+            int seen = 0;
             for (int i = 0; i < 16; i++) {
-                final boolean anchor = i == anchors[0] || (subsets > 1 && i == anchors[1]) || (subsets > 2 && i == anchors[2]);
-                weights[i] = bits(data, pos, offset, anchor ? weightBits - 1 : weightBits);
+                final int subset = pattern == null ? 0 : pattern.charAt(i) - '0';
+                final boolean anchor = (seen & (1 << subset)) == 0;
+                seen |= 1 << subset;
+                weight[i] = weightTable[in.read(anchor ? weightBits - 1 : weightBits)];
             }
         }
 
-        // 端点を 0 - 255 にして、重みごとの色を作る
-        final int[] unquant = UNQUANT[range];
-        if (unquant == null) return false;
-        final int compsUsed = Math.min(4, comps);
-        final int levels = 1 << weightBits;
-        final int[] table = WEIGHTS[weightBits];
-        final int[][][] colors = new int[subsets][levels][4];
+        // 部分ごとの端点 (RGBA)。LA のモードは L を RGB に使う
+        final int[] low = new int[12];
+        final int[] high = new int[12];
         for (int s = 0; s < subsets; s++) {
-            final int[] low = new int[4];
-            final int[] high = new int[4];
-            if (compsUsed == 2) {
-                final int l0 = unquant[endpoints[s * 4]];
-                final int l1 = unquant[endpoints[s * 4 + 1]];
-                final int a0 = unquant[endpoints[s * 4 + 2]];
-                final int a1 = unquant[endpoints[s * 4 + 3]];
-                low[0] = low[1] = low[2] = l0;
-                high[0] = high[1] = high[2] = l1;
-                low[3] = a0;
-                high[3] = a1;
-            } else {
-                for (int c = 0; c < 4; c++) {
-                    if (c < compsUsed) {
-                        low[c] = unquant[endpoints[s * compsUsed * 2 + c * 2]];
-                        high[c] = unquant[endpoints[s * compsUsed * 2 + c * 2 + 1]];
-                    } else {
-                        low[c] = high[c] = 255;
-                    }
-                }
-            }
-            for (int l = 0; l < levels; l++) {
-                for (int c = 0; c < 4; c++) {
-                    colors[s][l][c] = (compsUsed == 2 || c < compsUsed) ? interpolate(low[c], high[c], table[l], srgb) : 255;
+            final int e = s * components * 2;
+            for (int c = 0; c < 4; c++) {
+                final int source = components == 2 ? (c == 3 ? 1 : 0) : c;
+                if (source < components) {
+                    low[s * 4 + c] = endpoint[e + source * 2];
+                    high[s * 4 + c] = endpoint[e + source * 2 + 1];
+                } else {
+                    low[s * 4 + c] = 255;
+                    high[s * 4 + c] = 255;
                 }
             }
         }
 
         for (int i = 0; i < 16; i++) {
-            final int r, g, b, a;
-            if (planes == 1) {
-                final int[] c = colors[pattern == null ? 0 : pattern[i]][weights[i]];
-                r = c[0];
-                g = c[1];
-                b = c[2];
-                a = c[3];
-            } else {
-                final int[] c0 = colors[0][weights[i * 2]];
-                final int[] c1 = colors[0][weights[i * 2 + 1]];
-                r = ccs == 0 ? c1[0] : c0[0];
-                g = ccs == 1 ? c1[1] : c0[1];
-                b = ccs == 2 ? c1[2] : c0[2];
-                a = ccs == 3 ? c1[3] : c0[3];
+            final int s = pattern == null ? 0 : pattern.charAt(i) - '0';
+            int argb = 0;
+            for (int c = 0; c < 4; c++) {
+                final int w = planes == 2 ? weight[i * 2 + (c == dualChannel ? 1 : 0)] : weight[i];
+                final int value = interpolate(low[s * 4 + c], high[s * 4 + c], w, srgb);
+                argb |= value << (c == 3 ? 24 : 16 - c * 8);
             }
-            out[i] = (a << 24) | (r << 16) | (g << 8) | b;
+            out[i] = argb;
         }
         return true;
     }
