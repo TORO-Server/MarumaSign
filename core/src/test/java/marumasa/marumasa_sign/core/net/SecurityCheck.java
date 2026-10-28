@@ -98,7 +98,7 @@ public final class SecurityCheck {
                 "http://0.0.0.0/", "http://10.1.2.3/", "http://172.16.0.1/", "http://172.31.255.255/", "http://192.168.0.1/",
                 "http://169.254.169.254/latest/meta-data/", "http://100.64.0.1/", "http://198.18.0.1/", "http://224.0.0.1/",
                 "http://[fd00::1]/", "http://[fe80::1]/", "http://[::ffff:192.168.0.1]/", "http://printer.local/",
-                "http://router.lan/", "http://nas.home.arpa/", "file:///C:/Windows/win.ini", "ftp://example.com/a.png",
+                "http://router.lan/", "http://nas.home.arpa/", "http://printer.local./", "http://localhost../", "file:///C:/Windows/win.ini", "ftp://example.com/a.png",
                 "jar:http://example.com/a.jar!/a.png", "gopher://example.com/", "", "http:///a.png",
         };
         for (String url : blocked) check("blocked: " + url, !UrlPolicy.isAllowed(url));

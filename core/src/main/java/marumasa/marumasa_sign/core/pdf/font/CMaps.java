@@ -1,5 +1,6 @@
 package marumasa.marumasa_sign.core.pdf.font;
 
+import marumasa.marumasa_sign.core.pdf.Strict;
 import marumasa.marumasa_sign.core.pdf.cos.Keyword;
 import marumasa.marumasa_sign.core.pdf.cos.Lexer;
 import marumasa.marumasa_sign.core.pdf.cos.PdfName;
@@ -56,6 +57,7 @@ public final class CMaps {
         try {
             result = load(name, depth);
         } catch (IOException | RuntimeException e) {
+            Strict.check(e);
             result = null;
         }
         CACHE.put(name, result);

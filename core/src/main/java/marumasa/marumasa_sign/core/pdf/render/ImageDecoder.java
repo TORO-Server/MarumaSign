@@ -1,5 +1,6 @@
 package marumasa.marumasa_sign.core.pdf.render;
 
+import marumasa.marumasa_sign.core.pdf.Strict;
 import marumasa.marumasa_sign.core.image.jpeg.JpegReader;
 import marumasa.marumasa_sign.core.pdf.color.ColorSpaces;
 import marumasa.marumasa_sign.core.pdf.color.DeviceSpaces;
@@ -300,6 +301,7 @@ final class ImageDecoder {
         try {
             return decode(mask, resources, targetWidth, targetHeight, false);
         } catch (IOException | RuntimeException e) {
+            Strict.check(e);
             return null;
         }
     }
@@ -335,6 +337,7 @@ final class ImageDecoder {
             for (int i = 0; i < f.length; i++) f[i] = (float) values[i];
             matteRgb = space.toRgb(f);
         } catch (IOException | RuntimeException e) {
+            Strict.check(e);
             return;
         }
         final int mw = mask.getWidth(), mh = mask.getHeight();

@@ -74,7 +74,9 @@ public final class SecurityHandler {
 
         final byte[] o = bytes(encrypt.string("O"));
         final byte[] u = bytes(encrypt.string("U"));
-        final int p = encrypt.integer("P", 0);
+        // /P は 32 ビットの値。符号なしで書かれたもの (4294967292 など) も、下位 32 ビットとして読む
+        final Object pValue = encrypt.get("P");
+        final int p = pValue instanceof Number ? (int) (long) ((Number) pValue).doubleValue() : 0;
         final boolean encryptMetadata = encrypt.bool("EncryptMetadata", true);
         final byte[] key;
         if (r >= 5) {

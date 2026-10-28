@@ -1,5 +1,6 @@
 package marumasa.marumasa_sign.core.pdf.font;
 
+import marumasa.marumasa_sign.core.pdf.Strict;
 import marumasa.marumasa_sign.core.pdf.cos.PdfArray;
 import marumasa.marumasa_sign.core.pdf.cos.PdfDict;
 import marumasa.marumasa_sign.core.pdf.cos.PdfStream;
@@ -86,6 +87,7 @@ public abstract class PdfFont {
         try {
             path = createPath(character);
         } catch (RuntimeException e) {
+            Strict.check(e);
             path = new GeneralPath();
         }
         if (path == null) path = new GeneralPath();
@@ -140,6 +142,7 @@ public abstract class PdfFont {
                         return Type1Font.parse(java.util.Arrays.copyOf(data, length1),
                                 java.util.Arrays.copyOfRange(data, length1, length1 + length2));
                     } catch (RuntimeException e) {
+                        Strict.check(e);
                         // Length1 / Length2 が間違っていることがある。全体から探す
                     }
                 }
@@ -158,6 +161,7 @@ public abstract class PdfFont {
                 return new CffFont(new FontBytes(data), null);
             }
         } catch (IOException | RuntimeException e) {
+            Strict.check(e);
             // 壊れたフォント: 代わりを使う
         }
         return null;

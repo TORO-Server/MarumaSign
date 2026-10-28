@@ -1,5 +1,6 @@
 package marumasa.marumasa_sign.core.pdf.render;
 
+import marumasa.marumasa_sign.core.pdf.Strict;
 import marumasa.marumasa_sign.core.pdf.color.ColorSpaces;
 import marumasa.marumasa_sign.core.pdf.color.DeviceSpaces;
 import marumasa.marumasa_sign.core.pdf.color.PdfColorSpace;
@@ -185,6 +186,7 @@ public final class PageRenderer {
                 // ストリームの境目で語がつながらないように
                 out.write('\n');
             } catch (IOException | RuntimeException e) {
+                Strict.check(e);
                 // 読めないストリームは飛ばす
             }
         }
@@ -231,10 +233,11 @@ public final class PageRenderer {
             tick();
             try {
                 execute(parser.operator(), parser.operands(), parser.inlineImage());
-            } catch (LimitReached e) {
+            } catch (LimitReached | Strict.UnexpectedFailure e) {
                 throw e;
             } catch (IOException | RuntimeException e) {
-                // 1 つの命令の失敗 (壊れた引数など) では止めない
+                // 1 つの命令の失敗 (壊れた引数など) では止めない (試験の厳しい動作では、想定外の例外を外に出す)
+                Strict.check(e);
             }
         }
     }
@@ -677,6 +680,7 @@ public final class PageRenderer {
         try {
             return new Color(space.toRgb(color));
         } catch (RuntimeException e) {
+            Strict.check(e);
             return Color.BLACK;
         }
     }
@@ -738,6 +742,7 @@ public final class PageRenderer {
         try {
             outline = stroke.createStrokedShape(pageShape);
         } catch (RuntimeException e) {
+            Strict.check(e);
             return;
         }
         canvas.paint(new Canvas.Painter() {
@@ -1156,6 +1161,7 @@ public final class PageRenderer {
             try {
                 result = ImageDecoder.decode(stream, resources, targetWidth, targetHeight);
             } catch (IOException | RuntimeException e) {
+                Strict.check(e);
                 return;
             }
             if (images.size() > 16) images.clear();
@@ -1283,6 +1289,7 @@ public final class PageRenderer {
         try {
             shading = Shading.create(value, resources);
         } catch (IOException | RuntimeException e) {
+            Strict.check(e);
             return;
         }
         if (shading.space.isNone()) return;
@@ -1327,6 +1334,7 @@ public final class PageRenderer {
                 final Shading shading = Shading.create(dict.get("Shading"), resources);
                 return shading.space.isNone() ? null : new ShadingPaint(shading, toPage);
             } catch (IOException | RuntimeException e) {
+                Strict.check(e);
                 return null;
             }
         }
@@ -1337,6 +1345,7 @@ public final class PageRenderer {
             try {
                 uncoloredColor = new Color(base.toRgb(color));
             } catch (RuntimeException e) {
+                Strict.check(e);
                 return null;
             }
         }
@@ -1453,10 +1462,11 @@ public final class PageRenderer {
             if (annotation == null) continue;
             try {
                 annotation(annotation);
-            } catch (LimitReached e) {
+            } catch (LimitReached | Strict.UnexpectedFailure e) {
                 throw e;
             } catch (RuntimeException e) {
                 // 壊れた注釈は飛ばす
+                Strict.check(e);
             }
         }
     }

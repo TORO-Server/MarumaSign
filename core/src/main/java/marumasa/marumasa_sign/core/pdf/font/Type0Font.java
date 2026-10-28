@@ -1,5 +1,6 @@
 package marumasa.marumasa_sign.core.pdf.font;
 
+import marumasa.marumasa_sign.core.pdf.Strict;
 import marumasa.marumasa_sign.core.pdf.cos.PdfArray;
 import marumasa.marumasa_sign.core.pdf.cos.PdfDict;
 import marumasa.marumasa_sign.core.pdf.cos.PdfName;
@@ -235,6 +236,7 @@ final class Type0Font extends PdfFont {
         try {
             gid = computeGid(character);
         } catch (RuntimeException e) {
+            Strict.check(e);
             gid = 0;
         }
         if (gidCache.size() < 65536) gidCache.put(character, gid);
@@ -278,6 +280,7 @@ final class Type0Font extends PdfFont {
                 try {
                     toUnicode = CMaps.parse(stream.decode(4 * 1024 * 1024), true);
                 } catch (IOException | RuntimeException e) {
+                    Strict.check(e);
                     toUnicode = null;
                 }
             }

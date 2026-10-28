@@ -7,7 +7,7 @@ import java.awt.Graphics2D;
 /**
  * 数値の入力欄。右端のボタンとマウスホイールでも値を増減できる。
  */
-public class NumberField extends TextField {
+public final class NumberField extends TextField {
 
     private static final int SPIN_WIDTH = 15;
 

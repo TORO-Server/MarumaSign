@@ -83,8 +83,11 @@ public final class UrlPolicy {
     }
 
     private static boolean isLocalName(String host) {
-        final String name = host.toLowerCase(Locale.ROOT);
-        return name.equals("localhost") || name.endsWith(".localhost") || name.endsWith(".local") || name.endsWith(".internal")
+        // 最後の点 (localhost. や printer.local. の書き方) を除いてから比べる。除かないと、名前で止められず、
+        // 名前を引けない環境では通してしまう
+        String name = host.toLowerCase(Locale.ROOT);
+        while (name.endsWith(".")) name = name.substring(0, name.length() - 1);
+        return name.isEmpty() || name.equals("localhost") || name.endsWith(".localhost") || name.endsWith(".local") || name.endsWith(".internal")
                 || name.endsWith(".lan") || name.endsWith(".home.arpa");
     }
 

@@ -1,5 +1,6 @@
 package marumasa.marumasa_sign.core.pdf.cos;
 
+import marumasa.marumasa_sign.core.pdf.Strict;
 import marumasa.marumasa_sign.core.pdf.crypt.SecurityHandler;
 
 import java.io.IOException;
@@ -466,6 +467,7 @@ public final class PdfDocument implements Resolver {
         try {
             value = load(number);
         } catch (IOException | RuntimeException e) {
+            Strict.check(e);
             value = null;
         } finally {
             loading.remove(number);

@@ -138,7 +138,7 @@ final class PsdDecoder {
             case 16:
                 return FormatUtil.to8(FormatUtil.u16be(plane, p), 65535);
             case 32:
-                return FormatUtil.clamp8((int) Math.round(Float.intBitsToFloat(FormatUtil.s32be(plane, p)) * 255));
+                return FormatUtil.clamp8(Math.round(Float.intBitsToFloat(FormatUtil.s32be(plane, p)) * 255));
             default:
                 return ((plane[y * rowBytes + (x >> 3)] >> (7 - (x & 7))) & 1) != 0 ? 255 : 0;
         }

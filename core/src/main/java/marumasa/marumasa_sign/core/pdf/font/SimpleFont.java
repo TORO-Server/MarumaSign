@@ -1,5 +1,6 @@
 package marumasa.marumasa_sign.core.pdf.font;
 
+import marumasa.marumasa_sign.core.pdf.Strict;
 import marumasa.marumasa_sign.core.pdf.cos.PdfArray;
 import marumasa.marumasa_sign.core.pdf.cos.PdfDict;
 import marumasa.marumasa_sign.core.pdf.cos.PdfName;
@@ -201,6 +202,7 @@ final class SimpleFont extends PdfFont {
         try {
             gid = computeGid(c);
         } catch (RuntimeException e) {
+            Strict.check(e);
             gid = 0;
         }
         gids[c] = Math.max(0, gid);

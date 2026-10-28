@@ -1,5 +1,6 @@
 package marumasa.marumasa_sign.core.pdf.render;
 
+import marumasa.marumasa_sign.core.pdf.Strict;
 import marumasa.marumasa_sign.core.pdf.cos.PdfArray;
 import marumasa.marumasa_sign.core.pdf.cos.PdfDict;
 import marumasa.marumasa_sign.core.pdf.cos.PdfDocument;
@@ -41,6 +42,7 @@ public final class DocumentCache {
             fonts.put(dict, font);
             return font;
         } catch (IOException | RuntimeException e) {
+            Strict.check(e);
             brokenFonts.put(dict, Boolean.TRUE);
             return null;
         }

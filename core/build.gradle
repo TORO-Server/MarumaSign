@@ -89,6 +89,28 @@ tasks.register('formatFuzz', JavaExec) {
     args = providers.gradleProperty('imageFuzzArgs').getOrElse('').tokenize(' ')
 }
 
+// PDF の読み込みと描画 (core/pdf) の試験: 部品、試験用の PDF、悪意のある PDF (輪、爆弾、深い入れ子など)。
+// メモリとスタックを小さくして、使い切りや深すぎる再帰を見つける
+tasks.register('pdfEngineCheck', JavaExec) {
+    classpath = sourceSets.test.runtimeClasspath
+    mainClass = 'marumasa.marumasa_sign.core.pdf.PdfCheck'
+    javaLauncher = javaToolchains.launcherFor(java.toolchain)
+    maxHeapSize = '512m'
+    jvmArgs '-Xss512k'
+}
+
+// 壊した PDF を読ませて、想定外の例外や長い時間にならないかを確かめる。
+// 引数は -PpdfFuzzArgs="回数 ファイルまたはフォルダ..." (ファイルを渡さなければ試験用の PDF を種にする)。乱数の種は -PfuzzSeed で決められる
+tasks.register('pdfFuzz', JavaExec) {
+    classpath = sourceSets.test.runtimeClasspath
+    mainClass = 'marumasa.marumasa_sign.core.pdf.PdfFuzz'
+    javaLauncher = javaToolchains.launcherFor(java.toolchain)
+    maxHeapSize = '768m'
+    jvmArgs '-Xss512k'
+    args = providers.gradleProperty('pdfFuzzArgs').getOrElse('300').tokenize(' ')
+    if (providers.gradleProperty('fuzzSeed').isPresent()) systemProperty 'fuzz.seed', providers.gradleProperty('fuzzSeed').get()
+}
+
 // ダウンロードしたファイルを残しておく仕組み (DownloadCache) を、手元の HTTP サーバーで確かめる
 tasks.register('downloadCacheCheck', JavaExec) {
     classpath = sourceSets.test.runtimeClasspath

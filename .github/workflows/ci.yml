@@ -11,14 +11,21 @@ on:
       - 'LICENSE'
   workflow_dispatch:
 
-permissions:
-  contents: read
-
 concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
+
+permissions:
+  contents: read
+  security-events: write
 
 jobs:
   # 対象を組に分けて並べてビルドする (build.yml)
   build:
     uses: ./.github/workflows/build.yml
+
+  # 不具合を探す検査 (ライブラリを使っていないこと、試験、ファジング、静的解析)。quality.yml
+  quality:
+    uses: ./.github/workflows/quality.yml
+    with:
+      mode: quick

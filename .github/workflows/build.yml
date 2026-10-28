@@ -115,6 +115,10 @@ jobs:
       - name: Check that FFmpeg is not bundled
         run: bash .github/scripts/check-no-ffmpeg.sh dist/build/libs
 
+      # ライブラリ (第三者のクラス) を jar に入れない
+      - name: Check that only MarumaSign's own files are bundled
+        run: bash .github/scripts/check-jar-contents.sh dist/build/libs
+
       - name: Upload build output
         uses: actions/upload-artifact@v7
         with:

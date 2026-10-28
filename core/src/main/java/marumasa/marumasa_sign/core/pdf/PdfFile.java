@@ -58,6 +58,7 @@ public final class PdfFile {
             return new PdfFile(new PdfDocument(content), content.length);
         } catch (RuntimeException | StackOverflowError e) {
             // 想定外の例外も、読めない PDF として扱う
+            Strict.check(e);
             throw new IOException("Not a readable PDF", e);
         }
     }
@@ -126,6 +127,7 @@ public final class PdfFile {
         try {
             image = PageRenderer.render(cache, page, scale, RENDER_TIMEOUT);
         } catch (RuntimeException | StackOverflowError e) {
+            Strict.check(e);
             throw new IOException("Failed to draw page " + (index + 1), e);
         }
         final int width = image.getWidth();
