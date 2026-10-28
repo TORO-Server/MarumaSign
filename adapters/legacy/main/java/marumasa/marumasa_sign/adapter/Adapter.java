@@ -8,9 +8,9 @@ import net.minecraft.client.gui.inventory.GuiEditSign;
 import net.minecraft.client.renderer.tileentity.TileEntityRendererDispatcher;
 import net.minecraft.client.settings.KeyBinding;
 import net.minecraft.tileentity.TileEntitySign;
-import org.apache.commons.lang3.ArrayUtils;
 
 import java.lang.reflect.Field;
+import java.util.Arrays;
 import java.util.Map;
 
 /**
@@ -38,7 +38,9 @@ public final class Adapter {
 
         // キーバインド登録 (48 は B キー)
         openMenu = new KeyBinding("MarumaSign", 48, "key.categories.misc");
-        mc.gameSettings.keyBindings = ArrayUtils.add(mc.gameSettings.keyBindings, openMenu);
+        final KeyBinding[] bindings = Arrays.copyOf(mc.gameSettings.keyBindings, mc.gameSettings.keyBindings.length + 1);
+        bindings[bindings.length - 1] = openMenu;
+        mc.gameSettings.keyBindings = bindings;
         // 保存されているキーの割り当てを反映する
         final String saved = OptionsFile.read(Mc.gameDirectory(), "key_MarumaSign");
         if (saved != null) {

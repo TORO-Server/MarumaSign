@@ -2,22 +2,19 @@ package marumasa.marumasa_sign.core.pdf;
 
 import marumasa.marumasa_sign.core.image.ArgbPixels;
 import marumasa.marumasa_sign.core.image.DecodedImage;
-import org.apache.pdfbox.io.MemoryUsageSetting;
-import org.apache.pdfbox.pdmodel.PDDocument;
-import org.apache.pdfbox.pdmodel.PDPage;
-import org.apache.pdfbox.pdmodel.common.PDRectangle;
-import org.apache.pdfbox.rendering.ImageType;
-import org.apache.pdfbox.rendering.PDFRenderer;
+import marumasa.marumasa_sign.core.pdf.cos.PdfDocument;
+import marumasa.marumasa_sign.core.pdf.render.DocumentCache;
+import marumasa.marumasa_sign.core.pdf.render.PageRenderer;
 
 import java.awt.image.BufferedImage;
 import java.io.File;
 import java.io.IOException;
+import java.nio.file.Files;
 
 /**
  * PDF ファイル 1 つ。ページを画像にする。
- * PDF の読み込みと描画には PDFBox を使う (配布する jar の中では別のパッケージに移してある)。
+ * PDF の読み込み (cos) と描画 (render) は、ライブラリを使わずにこの Mod の中で行う。
  * 1 つのファイルを同時に複数のスレッドから描かないよう、操作はすべて同期する。
- * 埋め込まれていないフォントの代わりは、SystemFonts の一覧から探す (PDFBox の標準の一覧は、作るのに時間がかかるため)。
  */
 public final class PdfFile {
 
@@ -26,23 +23,21 @@ public final class PdfFile {
     // 読み込む PDF の大きさの上限
     public static final int MAX_SIZE = 64 * 1024 * 1024;
 
-    private final PDDocument document;
-    private final PDFRenderer renderer;
+    // 1 ページを描く時間の上限 (ミリ秒)。超えたら、そこまでに描いた絵を使う
+    private static final long RENDER_TIMEOUT = 20000;
+
+    private PdfDocument document;
+    private DocumentCache cache;
     private final int pageCount;
     // ファイルの大きさ (バイト)
     private final long size;
 
-    private PdfFile(PDDocument document, long size) throws IOException {
+    private PdfFile(PdfDocument document, long size) throws IOException {
         this.document = document;
+        this.cache = new DocumentCache(document);
         this.size = size;
-        this.pageCount = document.getNumberOfPages();
-        if (pageCount <= 0) {
-            document.close();
-            throw new IOException("The PDF has no pages");
-        }
-        this.renderer = new PDFRenderer(document);
-        // 大きな画像は、表示する大きさに合わせて間引いて読む (速く、使うメモリも少ない)
-        renderer.setSubsamplingAllowed(true);
+        this.pageCount = document.pages().size();
+        if (pageCount <= 0) throw new IOException("The PDF has no pages");
     }
 
     // 先頭のバイト列が PDF らしいかどうか
@@ -57,32 +52,19 @@ public final class PdfFile {
         return false;
     }
 
-    // PDF の中の圧縮されたデータを展開するのに使ってよいメモリの上限。
-    // 小さなファイルが展開すると何 GB にもなる (圧縮爆弾) PDF で、ゲームのメモリを使い切らないようにする
-    private static final long MAX_SCRATCH = 256L * 1024 * 1024;
-
-    private static MemoryUsageSetting memory() {
-        return MemoryUsageSetting.setupMainMemoryOnly(MAX_SCRATCH);
-    }
-
     public static PdfFile open(byte[] content) throws IOException {
-        SystemFonts.install();
+        if (content.length > MAX_SIZE) throw new IOException("Content size exceeds the limit of " + MAX_SIZE + " bytes.");
         try {
-            return new PdfFile(PDDocument.load(content, "", null, null, memory()), content.length);
-        } catch (RuntimeException e) {
-            // 壊れたファイルでは、読み込みの途中で想定外の例外が出ることがある
+            return new PdfFile(new PdfDocument(content), content.length);
+        } catch (RuntimeException | StackOverflowError e) {
+            // 想定外の例外も、読めない PDF として扱う
             throw new IOException("Not a readable PDF", e);
         }
     }
 
     public static PdfFile open(File file) throws IOException {
         if (file.length() > MAX_SIZE) throw new IOException("Content size exceeds the limit of " + MAX_SIZE + " bytes.");
-        SystemFonts.install();
-        try {
-            return new PdfFile(PDDocument.load(file, memory()), file.length());
-        } catch (RuntimeException e) {
-            throw new IOException("Not a readable PDF", e);
-        }
+        return open(Files.readAllBytes(file.toPath()));
     }
 
     public int pageCount() {
@@ -134,14 +116,16 @@ public final class PdfFile {
      * @param index 0 から始まるページ番号
      */
     public synchronized DecodedImage render(int index, int size) throws IOException {
-        final PDPage page = document.getPage(index);
-        final PDRectangle box = page.getCropBox();
-        final float longest = Math.max(box.getWidth(), box.getHeight());
-        final float scale = longest > 0 ? size / longest : 1f;
+        if (document == null) throw new IOException("The PDF is closed");
+        if (index < 0 || index >= pageCount) throw new IOException("No page " + (index + 1));
+        final PdfDocument.Page page = document.pages().get(index);
+        final double[] box = cropBox(page);
+        final double longest = Math.max(box[2] - box[0], box[3] - box[1]);
+        final double scale = longest > 0 ? size / longest : 1;
         final BufferedImage image;
         try {
-            image = renderer.renderImage(index, scale, ImageType.RGB);
-        } catch (RuntimeException e) {
+            image = PageRenderer.render(cache, page, scale, RENDER_TIMEOUT);
+        } catch (RuntimeException | StackOverflowError e) {
             throw new IOException("Failed to draw page " + (index + 1), e);
         }
         final int width = image.getWidth();
@@ -150,11 +134,18 @@ public final class PdfFile {
         return new DecodedImage(width, height, new int[][]{ArgbPixels.read(image)}, new int[]{1}, 0);
     }
 
+    // ページの切り抜く範囲 (CropBox と MediaBox の重なり)
+    private static double[] cropBox(PdfDocument.Page page) {
+        final double[] media = page.mediaBox != null ? page.mediaBox : new double[]{0, 0, 612, 792};
+        final double[] crop = page.cropBox;
+        if (crop == null) return media;
+        final double[] r = {Math.max(crop[0], media[0]), Math.max(crop[1], media[1]), Math.min(crop[2], media[2]), Math.min(crop[3], media[3])};
+        return r[2] > r[0] && r[3] > r[1] ? r : media;
+    }
+
     public synchronized void close() {
-        try {
-            document.close();
-        } catch (IOException e) {
-            // 閉じられなくても、メモリ上のファイルなので問題はない
-        }
+        // メモリ上のファイルなので、参照を捨てるだけでよい
+        document = null;
+        cache = null;
     }
 }

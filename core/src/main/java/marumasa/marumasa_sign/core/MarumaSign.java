@@ -6,7 +6,6 @@ import marumasa.marumasa_sign.core.sign.SignManager;
 import marumasa.marumasa_sign.core.sign.SignSpec;
 import marumasa.marumasa_sign.core.sign.SignText;
 import marumasa.marumasa_sign.core.ui.UiRoot;
-import org.apache.logging.log4j.LogManager;
 
 /**
  * Minecraft のバージョンに依存しない、MarumaSign の本体。
@@ -16,7 +15,7 @@ public final class MarumaSign {
     // ModのID
     public static final String MOD_ID = "marumasa_sign";
     // ロガー。記録する文字は無害にしてから書く (SafeLog)
-    public static final SafeLog LOGGER = new SafeLog(LogManager.getLogger("MarumaSign"));
+    public static final SafeLog LOGGER = new SafeLog("MarumaSign");
 
     private static Platform platform;
     private static Config config;

@@ -1,24 +1,6 @@
-package marumasa.marumasa_sign.core.pdf;
+package marumasa.marumasa_sign.core.pdf.font;
 
 import marumasa.marumasa_sign.core.MarumaSign;
-import org.apache.fontbox.FontBoxFont;
-import org.apache.fontbox.ttf.OTFParser;
-import org.apache.fontbox.ttf.TTFParser;
-import org.apache.fontbox.ttf.TrueTypeCollection;
-import org.apache.fontbox.ttf.TrueTypeFont;
-import org.apache.fontbox.type1.Type1Font;
-import org.apache.fontbox.util.autodetect.FontDirFinder;
-import org.apache.fontbox.util.autodetect.MacFontDirFinder;
-import org.apache.fontbox.util.autodetect.OS400FontDirFinder;
-import org.apache.fontbox.util.autodetect.UnixFontDirFinder;
-import org.apache.fontbox.util.autodetect.WindowsFontDirFinder;
-import org.apache.pdfbox.pdmodel.font.CIDSystemInfo;
-import org.apache.pdfbox.pdmodel.font.FontFormat;
-import org.apache.pdfbox.pdmodel.font.FontInfo;
-import org.apache.pdfbox.pdmodel.font.FontMapper;
-import org.apache.pdfbox.pdmodel.font.FontMappers;
-import org.apache.pdfbox.pdmodel.font.FontProvider;
-import org.apache.pdfbox.pdmodel.font.PDPanoseClassification;
 
 import java.io.File;
 import java.io.FileInputStream;
@@ -26,7 +8,8 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.io.RandomAccessFile;
 import java.lang.ref.SoftReference;
-import java.lang.reflect.Method;
+import java.nio.MappedByteBuffer;
+import java.nio.channels.FileChannel;
 import java.nio.charset.Charset;
 import java.nio.file.FileVisitOption;
 import java.nio.file.FileVisitResult;
@@ -37,6 +20,7 @@ import java.nio.file.attribute.BasicFileAttributes;
 import java.util.ArrayList;
 import java.util.EnumSet;
 import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -48,45 +32,48 @@ import java.util.concurrent.Future;
 import java.util.concurrent.ThreadFactory;
 
 /**
- * パソコンに入っているフォントの一覧。PDF に埋め込まれていないフォントの代わりを探すのに使う。
+ * パソコンに入っているフォントの一覧と、PDF に埋め込まれていないフォントの代わりを選ぶ規則。
  * <p>
- * PDFBox の標準の一覧は、初めて使うときにすべてのフォントファイルを最後まで読んで (ハッシュを求めるため)、
- * フォントの多いパソコンでは 1 分近くかかる。ここでは、代わりを選ぶのに使う表 (name, OS/2, head と、CFF の先頭) だけを
- * 読んで、同じ内容の一覧を作る。フォントの中身は、実際に使うときに PDFBox で読む。
+ * 一覧を作るときは、代わりを選ぶのに使う表 (name、OS/2、head と、CFF の先頭) だけを読む。
+ * 読んだ結果はファイルの大きさと更新日時と一緒に保存しておき、次からは変わったファイルだけを読む。
+ * フォントの中身は、実際に使うときに読む (大きなファイルはメモリに読み込まず、ファイルを割り当てて読む)。
+ * <p>
+ * 代わりの選び方は、PDF の読み手 (Apache PDFBox 2.0 の FontMapperImpl) の規則に合わせている:
+ * PostScript 名で探し、なければ別名 (Arial と Helvetica など) で探し、なければフォントの性質 (固定幅、セリフ、太字、斜体) から
+ * 標準 14 フォントの代わりを選ぶ。CJK のフォントは、文字の集まり (Adobe-Japan1 など) と太さで選ぶ。
  */
-final class SystemFonts extends FontProvider {
+public final class SystemFonts {
 
     private static final Charset UTF_16BE = Charset.forName("UTF-16BE");
     private static final Charset ISO_8859_1 = Charset.forName("ISO-8859-1");
     // name 表の、読む大きさの上限 (壊れたファイルで大量に読まないように)
     private static final int MAX_NAME_RECORDS = 4096;
+    // メモリに読み込む Type 1 フォント (.pfb) の大きさの上限
+    private static final int MAX_TYPE1_SIZE = 16 * 1024 * 1024;
 
-    private static boolean installed;
+    private static SystemFonts instance;
 
     private final List<Info> fonts = new ArrayList<>();
+    // 小文字の PostScript 名 (と、ハイフンを除いたもの) からフォント
+    private final Map<String, Info> byName = new LinkedHashMap<>();
 
     /**
-     * PDFBox が代わりのフォントを探すときに、この一覧を使うようにする。何度呼んでもよい。
-     * うまくいかなければ PDFBox の標準の一覧のまま (遅いが、表示はできる)。
+     * パソコンのフォントの一覧 (初めて使うときに作る)。
      */
-    static synchronized void install() {
-        if (installed) return;
-        installed = true;
-        try {
+    public static synchronized SystemFonts get() {
+        if (instance == null) {
             final long start = System.nanoTime();
-            final File cache = MarumaSign.platform() == null ? null
-                    : new File(MarumaSign.platform().gameDirectory(), "marumasign/pdf-fonts.cache");
-            final SystemFonts provider = create(cache);
-            // 標準の FontMapper は公開されていないクラスなので、公開されているメソッドを reflection で呼ぶ
-            final FontMapper mapper = FontMappers.instance();
-            final Method setProvider = mapper.getClass().getMethod("setProvider", FontProvider.class);
-            setProvider.setAccessible(true);
-            setProvider.invoke(mapper, provider);
-            MarumaSign.LOGGER.info("Found " + provider.fonts.size() + " system fonts for PDF in "
+            File cache = null;
+            try {
+                cache = MarumaSign.platform() == null ? null : new File(MarumaSign.platform().gameDirectory(), "marumasign/pdf-fonts.cache");
+            } catch (RuntimeException e) {
+                cache = null;
+            }
+            instance = create(cache);
+            MarumaSign.LOGGER.info("Found " + instance.fonts.size() + " system fonts for PDF in "
                     + (System.nanoTime() - start) / 1000000 + " ms");
-        } catch (Exception | LinkageError e) {
-            MarumaSign.LOGGER.warn("Could not set up the system fonts for PDF: " + e);
         }
+        return instance;
     }
 
     /**
@@ -96,36 +83,258 @@ final class SystemFonts extends FontProvider {
      */
     static SystemFonts create(File cache) {
         final SystemFonts provider = new SystemFonts();
-        provider.scan(findFiles(), cache);
+        try {
+            provider.scan(findFiles(), cache);
+        } catch (RuntimeException e) {
+            MarumaSign.LOGGER.warn("Could not list the system fonts for PDF: " + e);
+        }
+        for (Info info : provider.fonts) {
+            provider.byName.put(info.postScriptName.toLowerCase(Locale.ENGLISH), info);
+            provider.byName.put(info.postScriptName.replace("-", "").toLowerCase(Locale.ENGLISH), info);
+        }
         return provider;
     }
 
-    @Override
-    public String toDebugString() {
-        return fonts.size() + " fonts";
+    List<Info> fonts() {
+        return fonts;
     }
 
-    @Override
-    public List<? extends FontInfo> getFontInfo() {
-        return fonts;
+    // ---------- 代わりの選び方 ----------
+
+    // 標準 14 フォントの代わり (よくあるパソコンのフォントの名前)
+    private static final Map<String, String[]> SUBSTITUTES = new HashMap<>();
+
+    static {
+        final String[][] table = {
+                {"Courier", "CourierNew", "CourierNewPSMT", "LiberationMono", "NimbusMonL-Regu", "NimbusMonoPS-Regular", "DejaVuSansMono"},
+                {"Courier-Bold", "CourierNewPS-BoldMT", "CourierNew-Bold", "LiberationMono-Bold", "NimbusMonL-Bold", "NimbusMonoPS-Bold", "DejaVuSansMono-Bold"},
+                {"Courier-Oblique", "CourierNewPS-ItalicMT", "CourierNew-Italic", "LiberationMono-Italic", "NimbusMonL-ReguObli", "NimbusMonoPS-Italic", "DejaVuSansMono-Oblique"},
+                {"Courier-BoldOblique", "CourierNewPS-BoldItalicMT", "CourierNew-BoldItalic", "LiberationMono-BoldItalic", "NimbusMonL-BoldObli", "NimbusMonoPS-BoldItalic", "DejaVuSansMono-BoldOblique"},
+                {"Helvetica", "ArialMT", "Arial", "LiberationSans", "NimbusSanL-Regu", "NimbusSans-Regular", "DejaVuSans"},
+                {"Helvetica-Bold", "Arial-BoldMT", "Arial-Bold", "LiberationSans-Bold", "NimbusSanL-Bold", "NimbusSans-Bold", "DejaVuSans-Bold"},
+                {"Helvetica-Oblique", "Arial-ItalicMT", "Arial-Italic", "Helvetica-Italic", "LiberationSans-Italic", "NimbusSanL-ReguItal", "NimbusSans-Italic", "DejaVuSans-Oblique"},
+                {"Helvetica-BoldOblique", "Arial-BoldItalicMT", "Helvetica-BoldItalic", "LiberationSans-BoldItalic", "NimbusSanL-BoldItal", "NimbusSans-BoldItalic", "DejaVuSans-BoldOblique"},
+                {"Times-Roman", "TimesNewRomanPSMT", "TimesNewRoman", "TimesNewRomanPS", "LiberationSerif", "NimbusRomNo9L-Regu", "NimbusRoman-Regular", "DejaVuSerif"},
+                {"Times-Bold", "TimesNewRomanPS-BoldMT", "TimesNewRomanPS-Bold", "TimesNewRoman-Bold", "LiberationSerif-Bold", "NimbusRomNo9L-Medi", "NimbusRoman-Bold", "DejaVuSerif-Bold"},
+                {"Times-Italic", "TimesNewRomanPS-ItalicMT", "TimesNewRomanPS-Italic", "TimesNewRoman-Italic", "LiberationSerif-Italic", "NimbusRomNo9L-ReguItal", "NimbusRoman-Italic", "DejaVuSerif-Italic"},
+                {"Times-BoldItalic", "TimesNewRomanPS-BoldItalicMT", "TimesNewRomanPS-BoldItalic", "TimesNewRoman-BoldItalic", "LiberationSerif-BoldItalic", "NimbusRomNo9L-MediItal", "NimbusRoman-BoldItalic", "DejaVuSerif-BoldItalic"},
+                {"Symbol", "Symbol", "SymbolMT", "StandardSymL", "StandardSymbolsPS"},
+                {"ZapfDingbats", "ZapfDingbatsITCbyBT-Regular", "ZapfDingbatsITC", "Dingbats", "D050000L", "MS-Gothic", "DejaVuSans"}};
+        for (String[] row : table) SUBSTITUTES.put(row[0].toLowerCase(Locale.ENGLISH), java.util.Arrays.copyOfRange(row, 1, row.length));
+    }
+
+    private Info info(Format format, String postScriptName) {
+        final int plus = postScriptName.indexOf('+');
+        if (plus >= 0) postScriptName = postScriptName.substring(plus + 1);
+        final Info info = byName.get(postScriptName.toLowerCase(Locale.ENGLISH));
+        return info != null && (format == null || info.format == format) ? info : null;
+    }
+
+    private static String[] substitutes(String postScriptName) {
+        String key = postScriptName.replace(" ", "");
+        // 標準 14 フォントの別名 (Arial,Bold など) は、正式な名前の代わりを使う
+        final String standard = FontData.standard14Name(key);
+        if (standard != null) key = standard;
+        final String[] result = SUBSTITUTES.get(key.toLowerCase(Locale.ENGLISH));
+        return result == null ? new String[0] : result;
+    }
+
+    // 名前で探す (名前のままと、ハイフンを除いたもの、決まった代わり、Windows の書き方 (Arial,Bold) を直したもの)
+    private FontProgram find(Format format, String postScriptName) {
+        if (postScriptName == null || postScriptName.isEmpty()) return null;
+        FontProgram font = load(info(format, postScriptName));
+        if (font != null) return font;
+        font = load(info(format, postScriptName.replace("-", "")));
+        if (font != null) return font;
+        for (String substitute : substitutes(postScriptName)) {
+            font = load(info(format, substitute));
+            if (font != null) return font;
+        }
+        font = load(info(format, postScriptName.replace(",", "-")));
+        if (font != null) return font;
+        String base = postScriptName;
+        if (base.contains(",")) {
+            base = base.substring(0, base.indexOf(','));
+            font = load(info(format, base));
+            if (font != null) return font;
+        }
+        return load(info(format, base + "-Regular"));
+    }
+
+    private static FontProgram load(Info info) {
+        return info == null ? null : info.font();
+    }
+
+    /**
+     * 名前で探す。形式は Type 1、TrueType、OpenType の順に試す。見つからなければ null。
+     *
+     * @param trueTypeFirst TrueType を先に試す (PDF のフォントが TrueType のとき)
+     */
+    public FontProgram findByName(String postScriptName, boolean trueTypeFirst) {
+        final Format[] order = trueTypeFirst ? new Format[]{Format.TTF, Format.OTF, Format.PFB} : new Format[]{Format.PFB, Format.TTF, Format.OTF};
+        for (Format format : order) {
+            final FontProgram font = find(format, postScriptName);
+            if (font != null) return font;
+        }
+        return null;
+    }
+
+    /**
+     * フォントの性質から、標準 14 フォントのどれかの代わりを選ぶ名前。
+     */
+    public static String fallbackName(String fontName, boolean hasDescriptor, boolean fixedPitch, boolean serif, boolean italic) {
+        if (!hasDescriptor) return "Times-Roman";
+        final String lower = fontName == null ? "" : fontName.toLowerCase(Locale.ENGLISH);
+        final boolean bold = lower.contains("bold") || lower.contains("black") || lower.contains("heavy");
+        if (fixedPitch) {
+            return "Courier" + (bold && italic ? "-BoldOblique" : bold ? "-Bold" : italic ? "-Oblique" : "");
+        }
+        if (serif) {
+            return "Times" + (bold && italic ? "-BoldItalic" : bold ? "-Bold" : italic ? "-Italic" : "-Roman");
+        }
+        return "Helvetica" + (bold && italic ? "-BoldOblique" : bold ? "-Bold" : italic ? "-Oblique" : "");
+    }
+
+    /**
+     * 最後の手段: よくある欧文のフォント。なければ、Unicode の文字の対応を持つ最初のフォント。それもなければ null。
+     */
+    public synchronized FontProgram lastResort() {
+        for (String name : new String[]{"LiberationSans", "ArialMT", "Arial", "DejaVuSans", "Helvetica", "NimbusSans-Regular",
+                "FreeSans", "NotoSans-Regular", "Roboto-Regular", "SegoeUI", "Verdana"}) {
+            final FontProgram font = findByName(name, true);
+            if (font != null) return font;
+        }
+        for (Info info : fonts) {
+            if (info.format == Format.PFB) continue;
+            final FontProgram font = info.font();
+            if (font instanceof TrueTypeFont && ((TrueTypeFont) font).unicodeLookup('A') > 0) return font;
+        }
+        return null;
+    }
+
+    /**
+     * CJK の CID フォントの代わり: 名前で探し、なければ文字の集まり (Adobe-Japan1 など) を持つフォントから、太さが近いものを選ぶ。
+     *
+     * @param weight     FontDescriptor の FontWeight (なければ 0)
+     * @param panose     FontDescriptor の Style の Panose (なければ null)
+     * @param fontFamily FontDescriptor の FontFamily (なければ null)
+     */
+    public FontProgram findCid(String baseFont, int weight, byte[] panose, String fontFamily, String registry, String ordering) {
+        FontProgram font = find(Format.OTF, baseFont);
+        if (font == null) font = find(Format.TTF, baseFont);
+        if (font != null) return font;
+        if (registry == null || ordering == null) return null;
+        final String collection = registry + "-" + ordering;
+        if (!collection.equals("Adobe-GB1") && !collection.equals("Adobe-CNS1") && !collection.equals("Adobe-Japan1")
+                && !collection.equals("Adobe-Korea1")) {
+            return null;
+        }
+        final boolean barcode = probablyBarcode(baseFont, fontFamily);
+        Info best = null;
+        double bestScore = Double.NEGATIVE_INFINITY;
+        for (Info info : byName.values()) {
+            if (!isCharSetMatch(info, registry, ordering)) continue;
+            double score = 0;
+            if (panose != null && panose.length >= 10 && info.panose != null) {
+                final int family = panose[0], infoFamily = info.panose[0];
+                if (family == infoFamily) {
+                    if (family == 0 && (info.postScriptName.toLowerCase(Locale.ENGLISH).contains("barcode")
+                            || info.postScriptName.startsWith("Code")) && !barcode) continue;
+                    final int serif = panose[1], infoSerif = info.panose[1];
+                    if (serif == infoSerif) score += 2;
+                    else if (serif >= 2 && serif <= 5 && infoSerif >= 2 && infoSerif <= 5) score += 1;
+                    else if (serif >= 11 && serif <= 13 && infoSerif >= 11 && infoSerif <= 13) score += 1;
+                    else if (serif != 0 && infoSerif != 0) score -= 1;
+                    int infoWeight = info.panose[2];
+                    final int weightClass = info.weightClassAsPanose();
+                    if (Math.abs(infoWeight - weightClass) > 2) infoWeight = weightClass;
+                    if (panose[2] == infoWeight) score += 2;
+                    else if (panose[2] > 1 && infoWeight > 1) score += 1 - Math.abs(panose[2] - infoWeight) * 0.5;
+                }
+            } else if (weight > 0 && info.weightClass > 0) {
+                score += 1 - (Math.abs(weight - info.weightClass) / 100.0) * 0.5;
+            }
+            // 同じ点数なら、一覧の先のもの (毎回同じ結果になるように)
+            if (score > bestScore) {
+                final FontProgram candidate = info.font();
+                if (candidate == null) continue;
+                best = info;
+                bestScore = score;
+            }
+        }
+        return best == null ? null : best.font();
+    }
+
+    private static boolean probablyBarcode(String fontName, String fontFamily) {
+        final String family = fontFamily == null ? "" : fontFamily;
+        final String name = fontName == null ? "" : fontName;
+        return family.startsWith("Code") || family.toLowerCase(Locale.ENGLISH).contains("barcode")
+                || name.startsWith("Code") || name.toLowerCase(Locale.ENGLISH).contains("barcode");
+    }
+
+    private static boolean isCharSetMatch(Info info, String registry, String ordering) {
+        if (info.ros != null) return info.ros[0].equals(registry) && info.ros[1].equals(ordering);
+        long range = info.codePageRange();
+        final long japanese = 1 << 17, simplified = 1 << 18, wansung = 1 << 19, traditional = 1 << 20, johab = 1 << 21;
+        // このフォントは韓国語だけを持つが、ほかの言語の印も付いている
+        if ("MalgunGothic-Semilight".equals(info.postScriptName)) range &= ~(japanese | simplified | traditional);
+        switch (ordering) {
+            case "GB1":
+                return (range & simplified) != 0;
+            case "CNS1":
+                return (range & traditional) != 0;
+            case "Japan1":
+                return (range & japanese) != 0;
+            case "Korea1":
+                return (range & wansung) != 0 || (range & johab) != 0;
+            default:
+                return false;
+        }
+    }
+
+    // フォントのあるフォルダ (OS ごと)
+    private static List<File> fontDirectories() {
+        final String os = System.getProperty("os.name", "");
+        final String home = System.getProperty("user.home", "");
+        final List<File> directories = new ArrayList<>();
+        if (os.startsWith("Windows")) {
+            String windows = System.getenv("WINDIR");
+            if (windows == null) windows = System.getenv("SystemRoot");
+            if (windows == null) windows = "C:\\Windows";
+            directories.add(new File(windows, "Fonts"));
+            final String local = System.getenv("LOCALAPPDATA");
+            if (local != null) directories.add(new File(local, "Microsoft\\Windows\\Fonts"));
+        } else if (os.startsWith("Mac")) {
+            directories.add(new File(home, "Library/Fonts"));
+            directories.add(new File("/Library/Fonts"));
+            directories.add(new File("/System/Library/Fonts"));
+            directories.add(new File("/Network/Library/Fonts"));
+        } else {
+            directories.add(new File(home, ".fonts"));
+            directories.add(new File(home, ".local/share/fonts"));
+            directories.add(new File("/usr/local/fonts"));
+            directories.add(new File("/usr/local/share/fonts"));
+            directories.add(new File("/usr/share/fonts"));
+            directories.add(new File("/usr/X11R6/lib/X11/fonts"));
+        }
+        final List<File> existing = new ArrayList<>();
+        for (File directory : directories) {
+            if (directory.isDirectory()) existing.add(directory);
+        }
+        return existing;
     }
 
     /**
      * パソコンのフォントファイルを、大きさと更新日時と一緒に探す。
-     * PDFBox の FontFileFinder と同じフォルダを同じ順にたどり、同じ条件のファイルを同じ順に返す。
-     * FontFileFinder はファイルごとにフォルダかどうかを問い合わせ (6000 個ほどで 1 秒)、大きさなどもあとで別に調べる必要があるが、
-     * ここではフォルダの一覧を読むときに一緒に得られる情報を使う (同じ数で 40 ms ほど)。
+     * ファイルごとにフォルダかどうかを問い合わせると時間がかかる (6000 個ほどで 1 秒) ので、
+     * フォルダの一覧を読むときに一緒に得られる情報を使う (同じ数で 40 ms ほど)。
      */
     static List<CachedFile> findFiles() {
-        final String os = System.getProperty("os.name", "");
-        final FontDirFinder finder = os.startsWith("Windows") ? new WindowsFontDirFinder()
-                : os.startsWith("Mac") ? new MacFontDirFinder()
-                : os.startsWith("OS/400") ? new OS400FontDirFinder() : new UnixFontDirFinder();
         final List<CachedFile> files = new ArrayList<>();
-        for (File directory : finder.find()) {
+        for (File directory : fontDirectories()) {
             final Path root = directory.toPath();
             try {
-                // FontFileFinder と同じく、リンクの先もたどる
+                // リンクの先もたどる (フォントの管理ソフトがリンクを置くことがある)
                 Files.walkFileTree(root, EnumSet.of(FileVisitOption.FOLLOW_LINKS), Integer.MAX_VALUE, new SimpleFileVisitor<Path>() {
                     @Override
                     public FileVisitResult preVisitDirectory(Path path, BasicFileAttributes attributes) {
@@ -169,7 +378,7 @@ final class SystemFonts extends FontProvider {
         final List<CachedFile> scanned = new ArrayList<>();
         boolean changed = cached.size() != files.size();
         // 前に読んだ結果がないか、変わったファイルは読み直す。ファイルを開くたびに待ち時間があるので (ウイルス対策の検査など)、
-        // いくつかのスレッドで同時に読む。一覧の順番は PDFBox と同じにしたいので、結果はファイルの順に並べる
+        // いくつかのスレッドで同時に読む。代わりを選ぶ結果が毎回同じになるよう、結果はファイルの順に並べる
         final List<Future<List<Info>>> reads = new ArrayList<>();
         ExecutorService readers = null;
         try {
@@ -220,7 +429,7 @@ final class SystemFonts extends FontProvider {
                         Thread.currentThread().interrupt();
                         return;
                     } catch (ExecutionException e) {
-                        // 読めないフォントは、PDFBox の一覧でも除かれる
+                        // 読めないフォントは一覧に入れない
                         found = new ArrayList<>();
                     }
                     for (Info info : found) {
@@ -249,7 +458,7 @@ final class SystemFonts extends FontProvider {
                 addType1(file);
             }
         } catch (IOException | RuntimeException e) {
-            // 読めないフォントは、PDFBox の一覧でも除かれる
+            // 読めないフォントは一覧に入れない
         }
     }
 
@@ -338,9 +547,9 @@ final class SystemFonts extends FontProvider {
     }
 
     /**
-     * 1 つのフォントを一覧に加える。PDFBox の TTFParser / OTFParser が読めないもの、名前のないものは除く。
+     * 1 つのフォントを一覧に加える。輪郭や文字の対応の表が足りないもの、名前のないものは除く。
      *
-     * @param openType OTFParser で読まれるか (拡張子が .otf か、集合の中で "OTTO" で始まるもの)
+     * @param openType CFF の輪郭を持つ OpenType として扱うか (拡張子が .otf か、集合の中で "OTTO" で始まるもの)
      */
     private void addFont(RandomAccessFile in, File file, long start, boolean openType, boolean collection) throws IOException {
         final int version = readInt(in, start);
@@ -352,7 +561,7 @@ final class SystemFonts extends FontProvider {
             final String tag = new String(directory, o, 4, ISO_8859_1);
             tables.put(tag, new long[]{u32(directory, o + 8), u32(directory, o + 12)});
         }
-        // PDFBox が必ず要る表
+        // 文字を描くのに必ず要る表
         for (String tag : new String[]{"head", "hhea", "maxp", "post", "name", "hmtx", "cmap"}) {
             if (!tables.containsKey(tag)) return;
         }
@@ -385,7 +594,7 @@ final class SystemFonts extends FontProvider {
             }
         }
 
-        CIDSystemInfo ros = null;
+        String[] ros = null;
         if (postScript && hasCff) {
             try {
                 ros = cffRos(in, tables.get("CFF "));
@@ -393,16 +602,16 @@ final class SystemFonts extends FontProvider {
                 // ROS が分からなくても、名前で探すことはできる
             }
         }
-        fonts.add(new Info(file, collection, postScript ? FontFormat.OTF : FontFormat.TTF, name, ros,
+        fonts.add(new Info(file, collection, postScript ? Format.OTF : Format.TTF, name, ros,
                 weightClass, familyClass, codePage1, codePage2, macStyle, panose));
     }
 
-    // PDFBox は "|" を含む名前のフォントを除く。保存の形に合わない、改行やタブを含むものも除く
+    // 保存の形に合わない、"|"、改行、タブを含む名前のフォントは除く
     private static boolean usableName(String name) {
         return name != null && name.indexOf('|') < 0 && name.indexOf('\t') < 0 && name.indexOf('\n') < 0 && name.indexOf('\r') < 0;
     }
 
-    // name 表の PostScript 名。PDFBox と同じく、Mac の英語、Windows の英語 (米国) の順に探す
+    // name 表の PostScript 名。Mac の英語、Windows の英語 (米国) の順に探す
     private static String postScriptName(RandomAccessFile in, long[] table) throws IOException {
         final long base = table[0];
         final int count = readShort(in, base + 2);
@@ -427,7 +636,7 @@ final class SystemFonts extends FontProvider {
     }
 
     // CFF の先頭の辞書にある ROS (CID フォントの文字の集まり)。CID フォントでなければ null
-    private static CIDSystemInfo cffRos(RandomAccessFile in, long[] table) throws IOException {
+    private static String[] cffRos(RandomAccessFile in, long[] table) throws IOException {
         final long base = table[0];
         final int headerSize = in.length() > base + 2 ? read(in, base + 2, 1)[0] & 0xFF : 0;
         final long[] names = index(in, base + headerSize);
@@ -445,7 +654,7 @@ final class SystemFonts extends FontProvider {
                     final String registry = sid(in, strings, operands.get(0).intValue());
                     final String ordering = sid(in, strings, operands.get(1).intValue());
                     if (registry == null || ordering == null) return null;
-                    return new CIDSystemInfo(registry, ordering, operands.get(2).intValue());
+                    return new String[]{registry, ordering, Integer.toString(operands.get(2).intValue())};
                 }
                 operands.clear();
                 i += 2;
@@ -531,7 +740,7 @@ final class SystemFonts extends FontProvider {
         while (to < text.length() && " \t\r\n/[]{}()<>%".indexOf(text.charAt(to)) < 0) to++;
         final String name = text.substring(from, to);
         if (name.isEmpty() || !usableName(name)) return;
-        fonts.add(new Info(file, false, FontFormat.PFB, name, null, -1, -1, 0, 0, -1, null));
+        fonts.add(new Info(file, false, Format.PFB, name, null, -1, -1, 0, 0, -1, null));
     }
 
     // ---------- ファイルの読み取り ----------
@@ -562,18 +771,22 @@ final class SystemFonts extends FontProvider {
 
     // ---------- 一覧の 1 項目 ----------
 
-    static final class Info extends FontInfo {
+    enum Format {TTF, OTF, PFB}
+
+    static final class Info {
         final File file;
         private final boolean collection;
-        private final FontFormat format;
-        private final String postScriptName;
-        private final CIDSystemInfo ros;
-        private final int weightClass, familyClass, codePage1, codePage2, macStyle;
-        private final PDPanoseClassification panose;
+        final Format format;
+        final String postScriptName;
+        // CFF の ROS {Registry, Ordering, Supplement} (CID フォントでなければ null)
+        final String[] ros;
+        final int weightClass, familyClass, codePage1, codePage2, macStyle;
+        final byte[] panose;
         // 読んだフォント。メモリが足りなくなれば捨て、また読む
-        private SoftReference<FontBoxFont> loaded;
+        private SoftReference<FontProgram> loaded;
+        private boolean broken;
 
-        Info(File file, boolean collection, FontFormat format, String postScriptName, CIDSystemInfo ros,
+        Info(File file, boolean collection, Format format, String postScriptName, String[] ros,
              int weightClass, int familyClass, int codePage1, int codePage2, int macStyle, byte[] panose) {
             this.file = file;
             this.collection = collection;
@@ -585,18 +798,17 @@ final class SystemFonts extends FontProvider {
             this.codePage1 = codePage1;
             this.codePage2 = codePage2;
             this.macStyle = macStyle;
-            this.panose = panose != null ? new PDPanoseClassification(panose) : null;
+            this.panose = panose;
         }
 
         // 前に読んだ結果として保存する項目
         String[] fields() {
             final StringBuilder panoseText = new StringBuilder();
             if (panose != null) {
-                for (byte b : panose.getBytes()) panoseText.append(String.format(Locale.ROOT, "%02x", b & 0xFF));
+                for (byte b : panose) panoseText.append(String.format(Locale.ROOT, "%02x", b & 0xFF));
             }
             return new String[]{collection ? "1" : "0", format.name(), postScriptName,
-                    ros == null ? "" : ros.getRegistry(), ros == null ? "" : ros.getOrdering(),
-                    ros == null ? "" : Integer.toString(ros.getSupplement()),
+                    ros == null ? "" : ros[0], ros == null ? "" : ros[1], ros == null ? "" : ros[2],
                     Integer.toString(weightClass), Integer.toString(familyClass),
                     Integer.toString(codePage1), Integer.toString(codePage2), Integer.toString(macStyle),
                     panoseText.toString()};
@@ -606,14 +818,13 @@ final class SystemFonts extends FontProvider {
         static Info parse(File file, String[] fields) {
             if (fields.length != 12) return null;
             try {
-                final CIDSystemInfo ros = fields[3].isEmpty() ? null
-                        : new CIDSystemInfo(fields[3], fields[4], Integer.parseInt(fields[5]));
+                final String[] ros = fields[3].isEmpty() ? null : new String[]{fields[3], fields[4], fields[5]};
                 byte[] panose = null;
                 if (fields[11].length() == 20) {
                     panose = new byte[10];
                     for (int i = 0; i < 10; i++) panose[i] = (byte) Integer.parseInt(fields[11].substring(2 * i, 2 * i + 2), 16);
                 }
-                return new Info(file, fields[0].equals("1"), FontFormat.valueOf(fields[1]), fields[2], ros,
+                return new Info(file, fields[0].equals("1"), Format.valueOf(fields[1]), fields[2], ros,
                         Integer.parseInt(fields[6]), Integer.parseInt(fields[7]), Integer.parseInt(fields[8]),
                         Integer.parseInt(fields[9]), Integer.parseInt(fields[10]), panose);
             } catch (IllegalArgumentException e) {
@@ -621,88 +832,70 @@ final class SystemFonts extends FontProvider {
             }
         }
 
-        @Override
-        public String getPostScriptName() {
-            return postScriptName;
+        long codePageRange() {
+            return ((long) codePage2 << 32) | (codePage1 & 0xFFFFFFFFL);
         }
 
-        @Override
-        public FontFormat getFormat() {
-            return format;
+        // usWeightClass を Panose の太さ (2 から 10) にしたもの。分からなければ 0
+        int weightClassAsPanose() {
+            switch (weightClass) {
+                case 100: return 2;
+                case 200: return 3;
+                case 300: return 4;
+                case 400: return 5;
+                case 500: return 6;
+                case 600: return 7;
+                case 700: return 8;
+                case 800: return 9;
+                case 900: return 10;
+                default: return 0;
+            }
         }
 
-        @Override
-        public CIDSystemInfo getCIDSystemInfo() {
-            return ros;
-        }
-
-        @Override
-        public synchronized FontBoxFont getFont() {
-            final FontBoxFont cached = loaded == null ? null : loaded.get();
+        synchronized FontProgram font() {
+            if (broken) return null;
+            final FontProgram cached = loaded == null ? null : loaded.get();
             if (cached != null) return cached;
             try {
-                final FontBoxFont font = load();
+                final FontProgram font = load();
                 if (font != null) loaded = new SoftReference<>(font);
+                else broken = true;
                 return font;
             } catch (IOException | RuntimeException e) {
+                broken = true;
                 MarumaSign.LOGGER.warn("Could not load font " + postScriptName + " from " + file + ": " + e);
                 return null;
             }
         }
 
-        private FontBoxFont load() throws IOException {
-            if (format == FontFormat.PFB) {
-                try (InputStream input = new FileInputStream(file)) {
-                    return Type1Font.createWithPFB(input);
-                }
+        private FontProgram load() throws IOException {
+            if (format == Format.PFB) {
+                if (file.length() > MAX_TYPE1_SIZE) return null;
+                return Type1Font.parse(Files.readAllBytes(file.toPath()));
             }
-            if (collection) {
-                // 集合は、使っている間ファイルを開いたままにする必要がある (PDFBox の標準の一覧と同じ)
-                final TrueTypeCollection ttc = new TrueTypeCollection(file);
-                final TrueTypeFont font;
+            // 大きなフォントもあるので、メモリには読み込まずファイルを割り当てる
+            final MappedByteBuffer buffer;
+            try (RandomAccessFile in = new RandomAccessFile(file, "r"); FileChannel channel = in.getChannel()) {
+                if (channel.size() > Integer.MAX_VALUE) return null;
+                buffer = channel.map(FileChannel.MapMode.READ_ONLY, 0, channel.size());
+            }
+            final FontBytes bytes = new FontBytes(buffer, 0, buffer.capacity());
+            if (!collection) return new TrueTypeFont(bytes, 0);
+            final int count = (int) Math.min(bytes.u32(8), 1024);
+            for (int i = 0; i < count; i++) {
                 try {
-                    font = ttc.getFontByName(postScriptName);
-                } catch (IOException | RuntimeException e) {
-                    ttc.close();
-                    throw e;
+                    final TrueTypeFont font = new TrueTypeFont(bytes, bytes.u32(12 + 4L * i));
+                    if (postScriptName.equals(font.postScriptName())) return font;
+                } catch (FontBytes.FontFormatError e) {
+                    // 集合の中の、読めないフォント
                 }
-                if (font == null) {
-                    ttc.close();
-                    throw new IOException("Font not found in the collection");
-                }
-                return font;
             }
-            return format == FontFormat.OTF ? new OTFParser(false, true).parse(file) : new TTFParser(false, true).parse(file);
+            return null;
         }
 
         @Override
-        public int getFamilyClass() {
-            return familyClass;
-        }
-
-        @Override
-        public int getWeightClass() {
-            return weightClass;
-        }
-
-        @Override
-        public int getCodePageRange1() {
-            return codePage1;
-        }
-
-        @Override
-        public int getCodePageRange2() {
-            return codePage2;
-        }
-
-        @Override
-        public int getMacStyle() {
-            return macStyle;
-        }
-
-        @Override
-        public PDPanoseClassification getPanose() {
-            return panose;
+        public String toString() {
+            return postScriptName + " (" + file + ")";
         }
     }
 }

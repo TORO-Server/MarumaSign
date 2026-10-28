@@ -2,29 +2,7 @@ plugins {
     id 'java-library'
 }
 
-repositories {
-    mavenCentral()
-}
-
-configurations {
-    // 配布する jar に、パッケージ名を変えて同梱するライブラリ (dist の shadeCore で取り込む)
-    bundled {
-        transitive = false
-    }
-}
-
-dependencies {
-    // 1.7.10 に同梱されている版。これより新しい API は使わない
-    compileOnly 'org.apache.logging.log4j:log4j-api:2.0-beta9'
-    testImplementation 'org.apache.logging.log4j:log4j-api:2.0-beta9'
-
-    // PDF の読み込みと描画。Java 6 以降で動く 2.0 系を使う。
-    // ログの出力先 (Commons Logging) は同梱せず、marumasa.marumasa_sign.lib.logging の代わりのクラスに付け替える
-    bundled 'org.apache.pdfbox:pdfbox:2.0.37'
-    bundled 'org.apache.pdfbox:fontbox:2.0.37'
-    compileOnly 'org.apache.pdfbox:pdfbox:2.0.37'
-    testImplementation 'org.apache.pdfbox:pdfbox:2.0.37'
-}
+// ライブラリは使わない (JDK の標準の機能だけで書く)。依存するものを足さないこと (CI の dependency-free の検査で確かめる)
 
 // Minecraft を起動せずに画面の見た目を PNG に書き出す
 tasks.register('uiPreview', JavaExec) {
@@ -109,14 +87,6 @@ tasks.register('formatFuzz', JavaExec) {
     javaLauncher = javaToolchains.launcherFor(java.toolchain)
     maxHeapSize = '1g'
     args = providers.gradleProperty('imageFuzzArgs').getOrElse('').tokenize(' ')
-}
-
-// PDF の代わりのフォントを探す一覧 (SystemFonts) が、PDFBox の標準の一覧と同じになるかを確かめる (フォントが多いと 1 分ほどかかる)
-tasks.register('fontListCheck', JavaExec) {
-    classpath = sourceSets.test.runtimeClasspath
-    mainClass = 'marumasa.marumasa_sign.core.pdf.FontListCheck'
-    javaLauncher = javaToolchains.launcherFor(java.toolchain)
-    maxHeapSize = '2g'
 }
 
 // ダウンロードしたファイルを残しておく仕組み (DownloadCache) を、手元の HTTP サーバーで確かめる
