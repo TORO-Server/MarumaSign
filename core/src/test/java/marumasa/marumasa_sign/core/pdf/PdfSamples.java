@@ -176,6 +176,19 @@ final class PdfSamples {
                 stream("", "/CIDInit /ProcSet findresource begin 12 dict begin begincmap /CMapName /U def "
                         + "1 begincodespacerange <0000> <FFFF> endcodespacerange 1 beginbfchar <0010> <0049> endbfchar "
                         + "endcmap CMapName currentdict /CMap defineresource pop end end"))});
+        // 埋め込まれていない、知らない名前の CID フォントは、性質 (ここではセリフ) の近い標準のフォントで描く: l の下にセリフがある
+        samples.add(new String[]{"type0-fallback", page("<< /Font << /F1 5 0 R >> >>", "0 g BT /F1 150 Tf 60 40 Td <0001> Tj ET",
+                "<< /Type /Font /Subtype /Type0 /BaseFont /FooBook /Encoding /Identity-H /DescendantFonts [6 0 R] /ToUnicode 7 0 R >>",
+                "<< /Type /Font /Subtype /CIDFontType2 /BaseFont /FooBook /CIDSystemInfo << /Registry (Adobe) /Ordering (Identity) /Supplement 0 >> "
+                        + "/FontDescriptor << /Type /FontDescriptor /FontName /FooBook /Flags 34 /FontBBox [0 -200 1000 900] /ItalicAngle 0 "
+                        + "/Ascent 900 /Descent -200 /CapHeight 700 /StemV 80 >> /DW 500 >>",
+                stream("", "/CIDInit /ProcSet findresource begin 12 dict begin begincmap /CMapName /U def "
+                        + "1 begincodespacerange <0000> <FFFF> endcodespacerange 1 beginbfchar <0001> <006C> endbfchar "
+                        + "endcmap CMapName currentdict /CMap defineresource pop end end"))});
+        // 傾いていない画像は、掛かる画素の外側の境目まで広げる: 端の画素も塗り、画素の中心に掛からない細い画像も消えない
+        samples.add(new String[]{"image-snap", page("<< /XObject << /Im 5 0 R >> >>",
+                "q 49.8 0 0 50.3 20.6 30.6 cm /Im Do Q q 49.8 0 0 0.3 20.6 10.6 cm /Im Do Q",
+                stream("/Type /XObject /Subtype /Image /Width 1 /Height 1 /ColorSpace /DeviceGray /BitsPerComponent 8", latin1(new byte[]{0})))});
         // OpenType に入った、CID の決まっていない CFF を使う CIDFontType0 の CIDToGIDMap (CID 1 を、四角のグリフ 2 にする)
         samples.add(new String[]{"cff-cidtogidmap", page("<< /Font << /F1 5 0 R >> >>", "0 g BT /F1 100 Tf 50 50 Td <0001> Tj ET",
                 "<< /Type /Font /Subtype /Type0 /BaseFont /T /Encoding /Identity-H /DescendantFonts [6 0 R] >>",

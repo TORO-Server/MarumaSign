@@ -393,6 +393,22 @@ public final class PdfCheck {
                 expect(stem, "ToUnicode is not preferred to the standard glyph order");
                 break;
             }
+            case "type0-fallback": {
+                // l の下の端 (画素の y = 158) のセリフは、縦棒 (13 画素ほど) より広い
+                int dark = 0;
+                for (int x = 30; x < 140; x++) dark += gray(image, x, 158) < 128 ? 1 : 0;
+                expect(dark > 25, "fallback for a serif CID font has no serif: " + dark);
+                break;
+            }
+            case "image-snap":
+                // 画像 (x = 20.6 から 70.4、画素の y = 119.1 から 169.4) は、x = 20 から 70、y = 119 から 169 の画素を塗る
+                for (int x : new int[]{20, 70}) expect(gray(image, x, 140) < 8, "image edge is not snapped at x = " + x + ": " + gray(image, x, 140));
+                for (int y : new int[]{119, 169}) expect(gray(image, 40, y) < 8, "image edge is not snapped at y = " + y + ": " + gray(image, 40, y));
+                expect(gray(image, 19, 140) > 247 && gray(image, 71, 140) > 247 && gray(image, 40, 118) > 247 && gray(image, 40, 170) > 247,
+                        "image is too large");
+                // 高さ 0.3 の画像 (画素の y = 189.1 から 189.4) は、y = 189 の 1 画素
+                expect(gray(image, 40, 189) < 8, "thin image is lost: " + gray(image, 40, 189));
+                break;
             case "cff-cidtogidmap":
                 // CID 1 は CIDToGIDMap で四角のグリフ 2 (ページの 50 から 150)
                 expect(gray(image, 100, 100) < 30, "CIDToGIDMap of an OpenType CFF font is ignored");
