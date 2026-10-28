@@ -37,6 +37,9 @@ final class Sprite {
     // 次の絵との間を混ぜるかどうか
     final boolean interpolate;
     final boolean missing;
+    // 全体の透明度の扱い (まだ調べていなければ -1)。看板の絵 (アニメーションで 512 x 512 が数百枚) を、
+    // 同じ URL の看板の数だけ調べ直さないように覚えておく
+    private volatile int wholeTransparency = -1;
 
     private Sprite(String id, int width, int height, int[][] frames, int[] sequence, int[] times, boolean interpolate, boolean missing) {
         this.id = id;
@@ -169,6 +172,14 @@ final class Sprite {
      * 範囲 (0 - 1) の透明度の扱い。アニメーションするものはすべての絵を見る (Minecraft の SpriteContents.computeTransparency と同じ)。
      */
     int transparency(float u0, float v0, float u1, float v1) {
+        final boolean whole = Math.min(u0, u1) <= 0 && Math.min(v0, v1) <= 0 && Math.max(u0, u1) >= 1 && Math.max(v0, v1) >= 1;
+        if (whole && wholeTransparency >= 0) return wholeTransparency;
+        final int result = computeTransparency(u0, v0, u1, v1);
+        if (whole) wholeTransparency = result;
+        return result;
+    }
+
+    private int computeTransparency(float u0, float v0, float u1, float v1) {
         final int x0 = Math.max(0, (int) Math.floor(Math.min(u0, u1) * width));
         final int y0 = Math.max(0, (int) Math.floor(Math.min(v0, v1) * height));
         final int x1 = Math.min(width, (int) Math.ceil(Math.max(u0, u1) * width));

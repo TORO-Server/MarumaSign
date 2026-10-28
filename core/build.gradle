@@ -190,7 +190,8 @@ tasks.register('structureCheck', JavaExec) {
 }
 
 // 壊した構造物のファイルを読ませて、想定外の例外や長い時間にならないかを確かめる。
-// 引数は -PfuzzArgs="回数 ファイルまたはフォルダ..." で渡す。-PfuzzMesh を付けると、3D モデルにするところまで確かめる
+// 引数は -PfuzzArgs="回数 ファイルまたはフォルダ..." で渡す (ファイルを渡さなければ src/test/resources/structure)。
+// -PfuzzMesh を付けると、3D モデルにするところまで確かめる。-PfuzzSeed=数 で乱数の種を決められる
 tasks.register('structureFuzz', JavaExec) {
     classpath = sourceSets.test.runtimeClasspath
     mainClass = 'marumasa.marumasa_sign.core.structure.StructureFuzz'
@@ -198,8 +199,20 @@ tasks.register('structureFuzz', JavaExec) {
     maxHeapSize = '4g'
     args = providers.gradleProperty('fuzzArgs').getOrElse('').tokenize(' ')
     if (providers.gradleProperty('fuzzMesh').isPresent()) systemProperty 'fuzz.mesh', 'true'
+    if (providers.gradleProperty('fuzzSeed').isPresent()) systemProperty 'fuzz.seed', providers.gradleProperty('fuzzSeed').get()
+    jvmArgs '-Xss512k'
     if (providers.gradleProperty('assetJar').isPresent()) systemProperty 'marumasign.assetJar', providers.gradleProperty('assetJar').get()
     systemProperty 'marumasign.gameDir', layout.buildDirectory.dir('structure-game').get().asFile.path
+}
+
+// 構造物のファイルの読み込みで直した不具合が戻っていないか、種のファイル (src/test/resources/structure) が正しく読めるかを確かめる。
+// Minecraft の jar もネットワークも使わない
+tasks.register('structureRegressionCheck', JavaExec) {
+    classpath = sourceSets.test.runtimeClasspath
+    mainClass = 'marumasa.marumasa_sign.core.structure.StructureRegressionCheck'
+    javaLauncher = javaToolchains.launcherFor(java.toolchain)
+    maxHeapSize = '2g'
+    jvmArgs '-Xss512k'
 }
 
 // 構造物の中にある MarumaSign の看板を、悪用を含めて確かめる。-PassetJar は structureCheck と同じ

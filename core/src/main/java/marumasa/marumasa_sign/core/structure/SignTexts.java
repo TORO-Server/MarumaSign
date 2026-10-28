@@ -479,17 +479,24 @@ final class SignTexts {
                 }
             }
         }
-        flatten(component, null, false, runs);
+        // 読む文字の数の残り (MAX_TEXT から減らしていく)
+        final int[] left = {MAX_TEXT};
+        flatten(component, null, false, runs, left);
         return runs;
     }
 
-    private static void flatten(Object value, Integer color, boolean bold, List<Run> runs) {
+    private static void flatten(Object value, Integer color, boolean bold, List<Run> runs, int[] left) {
+        // 読み終えたら、残りの要素は見ない (空の文字をたくさん並べたデータで、時間がかからないように)
+        if (left[0] <= 0) return;
         if (value instanceof String) {
-            addLegacy((String) value, color, bold, runs);
+            addLegacy((String) value, color, bold, runs, left);
         } else if (value instanceof List) {
             final List<?> list = (List<?>) value;
             // リストの最初の要素の書式は、残りの要素にも引き継がれる
-            for (Object item : list) flatten(item, color, bold, runs);
+            for (Object item : list) {
+                if (left[0] <= 0) break;
+                flatten(item, color, bold, runs, left);
+            }
         } else if (value instanceof Map) {
             final Map<?, ?> map = (Map<?, ?>) value;
             final Object colorValue = map.get("color");
@@ -499,20 +506,19 @@ final class SignTexts {
                     : boldValue instanceof Number ? ((Number) boldValue).intValue() != 0 : bold;
             final Integer used = own != null ? own : color;
             final Object text = map.containsKey("text") ? map.get("text") : map.get("");
-            if (text instanceof String) addLegacy((String) text, used, ownBold, runs);
-            else if (map.get("translate") instanceof String) addLegacy((String) map.get("translate"), used, ownBold, runs);
-            flatten(map.get("extra"), used, ownBold, runs);
+            if (text instanceof String) addLegacy((String) text, used, ownBold, runs, left);
+            else if (map.get("translate") instanceof String) addLegacy((String) map.get("translate"), used, ownBold, runs, left);
+            flatten(map.get("extra"), used, ownBold, runs, left);
         } else if (value instanceof Number || value instanceof Boolean) {
-            addLegacy(String.valueOf(value), color, bold, runs);
+            addLegacy(String.valueOf(value), color, bold, runs, left);
         }
     }
 
-    // § の書式記号を読みながら加える
-    private static void addLegacy(String text, Integer color, boolean bold, List<Run> runs) {
-        int total = 0;
-        for (Run run : runs) total += run.text.length();
-        if (total >= MAX_TEXT) return;
-        if (text.length() > MAX_TEXT - total) text = text.substring(0, MAX_TEXT - total);
+    // § の書式記号を読みながら加える。left は読む文字の数の残り (書式記号も数える)
+    private static void addLegacy(String text, Integer color, boolean bold, List<Run> runs, int[] left) {
+        if (left[0] <= 0) return;
+        if (text.length() > left[0]) text = text.substring(0, left[0]);
+        left[0] -= text.length();
         Integer current = color;
         boolean currentBold = bold;
         final StringBuilder builder = new StringBuilder();

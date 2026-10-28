@@ -16,6 +16,8 @@ public final class Structure {
     static final int MAX_CELLS = 16 * 1024 * 1024;
     // 1 辺の長さの上限
     static final int MAX_EDGE = 1 << 16;
+    // ブロックの状態の種類の数の上限 (番号を char で持つため)
+    static final int MAX_PALETTE = Character.MAX_VALUE;
 
     public enum Source {
         // Java 版の、名前で書かれたブロック (1.13 以降)
@@ -153,11 +155,11 @@ public final class Structure {
         return (y * sizeZ + z) * sizeX + x;
     }
 
-    // パレットに加えて番号を返す
-    int paletteId(BlockState state) {
+    // パレットに加えて番号を返す。番号は char で持つので、数が上限を超える (壊れたファイル) なら IOException
+    int paletteId(BlockState state) throws IOException {
         final Integer existing = paletteIndex.get(state);
         if (existing != null) return existing;
-        if (palette.size() >= Character.MAX_VALUE) throw new IllegalStateException("Too many block states");
+        if (palette.size() >= MAX_PALETTE) throw new IOException("Too many block states");
         final int id = palette.size();
         palette.add(state);
         paletteIndex.put(state, id);
@@ -171,7 +173,7 @@ public final class Structure {
         blocks[index(x / step, y / step, z / step)] = (char) paletteId;
     }
 
-    void set(int x, int y, int z, BlockState state) {
+    void set(int x, int y, int z, BlockState state) throws IOException {
         set(x, y, z, paletteId(state));
     }
 
@@ -182,6 +184,8 @@ public final class Structure {
     }
 
     void addEntity(String id, double x, double y, double z, Map<String, Object> nbt) {
+        // NaN や無限大の位置 (壊れたファイル) のものは持たない。描くのは上限の数までなので、それより多くは持たない
+        if (Double.isNaN(x + y + z) || Double.isInfinite(x + y + z) || entities.size() >= SpecialModels.MAX_ENTITIES) return;
         entities.add(new Entity(id, x, y, z, nbt));
     }
 
