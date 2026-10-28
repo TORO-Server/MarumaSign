@@ -52,6 +52,15 @@ public final class ImageLoader {
         void onMedia();
 
         void onFailed();
+
+        /**
+         * まだ結果が要るかどうか。読み込みの順番を待っている間に看板が消された (メモリを空けるために消した、
+         * 長く見えなかった、キャッシュを消したなど) ものは false を返す。読み込み始める前に確かめ、false なら読まずに捨てる。
+         * 読み込みのスレッドから呼ぶ。
+         */
+        default boolean isWanted() {
+            return true;
+        }
     }
 
     // 静止画の大きさの上限
@@ -129,7 +138,8 @@ public final class ImageLoader {
                         // 読み終えたら、待っている次の読み込みを続けて始める (次の tick を待たない)
                         Request current = request;
                         while (current != null) {
-                            load(current);
+                            // 待っている間に要らなくなったものは読まない (見えている看板の読み込みを後回しにしないように)
+                            if (current.callback.isWanted()) load(current);
                             current = activeDownloads.get() <= ImageLoader.this.maxThreads ? queue.poll() : null;
                         }
                     } finally {
@@ -187,6 +197,8 @@ public final class ImageLoader {
                     return 0;
                 }
             });
+            // ダウンロードしている間に要らなくなったものは、時間のかかる読み込み (デコードや 3D モデルの準備) をしない
+            if (!request.callback.isWanted()) return;
             if (content == null) {
                 // FFmpeg を探すのには時間がかかることがあるので、メインスレッドに渡す前にここで済ませておく
                 Ffmpeg.isAvailable();

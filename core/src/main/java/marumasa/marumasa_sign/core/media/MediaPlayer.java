@@ -289,7 +289,9 @@ public final class MediaPlayer {
         final ProcessBuilder builder = new ProcessBuilder(command);
         FilteringProxy.apply(builder, url);
         final Process started = Ffmpeg.start(builder.redirectErrorStream(false));
-        process = started;
+        // 起動している間に止められていたら、ここで止める (stop は、まだこのプロセスを知らない。止めないと、
+        // 誰も読まない映像の接続に書き込もうとして止まったまま、いつまでも残る)
+        track(started);
         started.getOutputStream().close();
         final StringBuilder errors = new StringBuilder();
         drain(started.getErrorStream(), errors);

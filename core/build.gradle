@@ -188,6 +188,14 @@ tasks.register('signLimitsCheck', JavaExec) {
     maxHeapSize = '3g'
 }
 
+// 看板の読み込みの流れ (ダウンロード、残しておく仕組み、順番待ち、テクスチャ、メモリの上限、動画) で直した不具合を確かめる
+tasks.register('runtimeRegressionCheck', JavaExec) {
+    classpath = sourceSets.test.runtimeClasspath
+    mainClass = 'marumasa.marumasa_sign.core.RuntimeRegressionCheck'
+    javaLauncher = javaToolchains.launcherFor(java.toolchain)
+    maxHeapSize = '2g'
+}
+
 // 看板に表示するファイルの、ダウンロードと読み込みの時間を測る。引数は -PloadBenchArgs="回数 ファイル..." で渡す
 tasks.register('loadBenchmark', JavaExec) {
     classpath = sourceSets.test.runtimeClasspath

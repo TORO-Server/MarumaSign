@@ -30,6 +30,8 @@ final class MediaSession {
     private MediaPlayer player;
     private boolean ready;
     private boolean failed;
+    // 片付けた (close) 後は、看板が残っていて描かれても、再生をやり直さない
+    private boolean closed;
     private long lastUsed = System.currentTimeMillis();
     // 再生してよいか。同時に再生する数の上限の中に入っていれば true (SignManager が決める)
     private boolean allowed;
@@ -59,7 +61,7 @@ final class MediaSession {
     }
 
     void start() {
-        if (player != null || failed) return;
+        if (player != null || failed || closed) return;
         final MediaPlayer started = new MediaPlayer(url, new MediaPlayer.Listener() {
             @Override
             public void onReady(final int videoWidth, final int videoHeight) {
@@ -88,6 +90,7 @@ final class MediaSession {
     }
 
     private void ready(int videoWidth, int videoHeight) {
+        if (closed) return;
         // 再開したときは、前と同じ大きさならテクスチャをそのまま使う
         if (ready && videoWidth == width && videoHeight == height) return;
         if (videoWidth > 0) {
@@ -200,6 +203,8 @@ final class MediaSession {
     }
 
     void close() {
+        closed = true;
+        allowed = false;
         if (player != null) {
             player.stop();
             player = null;

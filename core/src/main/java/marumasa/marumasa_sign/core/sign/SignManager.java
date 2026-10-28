@@ -241,6 +241,12 @@ public final class SignManager {
                     }
                 });
             }
+
+            @Override
+            public boolean isWanted() {
+                // 順番を待つ間に消されていれば (evict、clearCache)、読み込まない。textures はどのスレッドからも読める
+                return textures.get(url) == created;
+            }
         });
         return created;
     }
@@ -254,8 +260,8 @@ public final class SignManager {
             fail(url, entry);
             return;
         }
+        final Object[] frames = new Object[count];
         try {
-            final Object[] frames = new Object[count];
             final int[] frameEnd = new int[count];
             int time = 0;
             for (int i = 0; i < count; i++) {
@@ -269,6 +275,11 @@ public final class SignManager {
         } catch (RuntimeException | Error e) {
             // スケジュールされたタスクの中の例外は呼び出し元で捨てられるため、ここで記録する
             MarumaSign.LOGGER.error("Failed to register texture: " + url, e);
+            // 途中のフレームで失敗しても、それまでに作ったテクスチャは消す (fail の後は、このエントリが持たないので消されない)
+            for (Object texture : frames) {
+                MarumaSign.releaseTexture(platform, texture);
+            }
+            entry.setBytes(0);
             fail(url, entry);
         }
     }
@@ -355,8 +366,16 @@ public final class SignManager {
             @Override
             public void onReady(int width, int height) {
                 if (textures.get(url) != entry) return;
-                // 映像のフレーム (この中と GPU の 2 つ分)
-                entry.setBytes(8L * width * height);
+                // 映像のフレーム (この中と GPU の 2 つ分)。画像と同じく上限の中に収め、収まらなければ再生しない
+                final long bytes = 8L * width * height;
+                if (bytes > 0 && !makeRoom(entry, bytes)) {
+                    holder[0].close();
+                    sessions.remove(holder[0]);
+                    entry.setMedia(null);
+                    fail(url, entry);
+                    return;
+                }
+                entry.setBytes(bytes);
                 if (width > 0) {
                     // テクスチャは再生の側が持っているので、ここでは所有しない
                     entry.set(TextureEntry.LOADED, width, height, new Object[]{holder[0].texture()}, new int[]{1}, 0, false);
