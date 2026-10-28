@@ -17,9 +17,9 @@ seed="${FUZZ_SEED:-$(date +%s)}"
 failed=()
 
 if [ "$mode" = "long" ]; then
-  pdf_fuzz=40000; image_fuzz=3000; structure_fuzz=3000
+  pdf_fuzz=40000; image_fuzz=3000; structure_fuzz=3000; webp_fuzz=30000; decoder_fuzz_seconds=300
 else
-  pdf_fuzz=3000; image_fuzz=300; structure_fuzz=200
+  pdf_fuzz=3000; image_fuzz=300; structure_fuzz=200; webp_fuzz=3000; decoder_fuzz_seconds=20
 fi
 
 echo "mode=$mode seed=$seed"
@@ -94,12 +94,10 @@ check structureFuzz 3600 -Xmx2g -Xss512k marumasa.marumasa_sign.core.structure.S
   "$root/tools/verify/test-structure.nbt"
 check dracoCheck 900 -Xmx1g -Xss512k marumasa.marumasa_sign.core.gltf.DracoCheck
 check splatCheck 900 -Xmx2g -Xss512k marumasa.marumasa_sign.core.splat.SplatCheck
-# 独自の実装に置き換えたデコーダの試験 (クラスがあるものだけ)
-for extra in texture.WebpCheck texture.TextureDecodersCheck gltf.MeshoptCheck texture.BptcCheck texture.BasisCheck; do
-  if [ -f "$out/test/marumasa/marumasa_sign/core/${extra//./\/}.class" ]; then
-    check "${extra##*.}" 1800 -Xmx1g -Xss512k "marumasa.marumasa_sign.core.$extra"
-  fi
-done
+# 仕様書から書き直したデコーダの試験 (libwebp などの結果との比較と、壊したデータ)
+check webpCheck 1800 -Xmx2g -Xss512k marumasa.marumasa_sign.core.texture.WebpCheck "$webp_fuzz"
+check meshoptCheck 1800 -Xmx1g -Xss512k marumasa.marumasa_sign.core.gltf.meshopt.MeshoptCheck "$decoder_fuzz_seconds"
+check compressedTextureCheck 1800 -Xmx1g -Xss512k marumasa.marumasa_sign.core.texture.CompressedTextureCheck "$decoder_fuzz_seconds"
 
 if [ "${#failed[@]}" -gt 0 ]; then
   echo "::error::Failed checks: ${failed[*]} (seed=$seed)"

@@ -420,10 +420,6 @@ PDF の表示に使う表 (`core/src/main/resources/marumasa_sign/pdf`) は、`t
 | ライブラリ | ライセンス | 使っているところ |
 | --- | --- | --- |
 | [openize-drako-java](https://github.com/openize-com/openize-drako-java) | MIT | Draco の展開 (`core/gltf/draco`) |
-| [meshoptimizer](https://github.com/zeux/meshoptimizer) | MIT | meshopt の展開 (`core/gltf/meshopt`) |
-| [TwelveMonkeys ImageIO](https://github.com/haraldk/TwelveMonkeys) | BSD 3-Clause | WebP の展開 (`core/texture/webp`) |
-| [bcdec](https://github.com/iOrange/bcdec) | MIT | BC6H と BC7 の展開 (`core/texture/Bptc.java`) |
-| [Basis Universal](https://github.com/BinomialLLC/basis_universal) | Apache 2.0 | KTX2 の ETC1S と UASTC の展開 (`core/texture/BasisEtc1s.java`, `Uastc.java`) |
 | [minecraft-data](https://github.com/PrismarineJS/minecraft-data) | MIT | 構造物の、古いブロックの番号と統合版のブロックの対応表 (`marumasa_sign/structure/legacy.txt.gz`, `bedrock.txt.gz`) |
 | [Adobe Glyph List](https://github.com/adobe-type-tools/agl-aglfn) | BSD 3-Clause | PDF のグリフの名前と Unicode の対応 (`marumasa_sign/pdf/glyphlist.txt.gz`) |
 | [Adobe CMap resources](https://github.com/adobe-type-tools/cmap-resources) | BSD 3-Clause | PDF の日本語・中国語・韓国語の定義済みの CMap (`marumasa_sign/pdf/cmaps.bin.gz`) |
@@ -432,6 +428,9 @@ PDF の表示に使う表 (`core/src/main/resources/marumasa_sign/pdf`) は、`t
 
 配布する jar には、ライブラリ (第三者のコード) を同梱していません。PDF の読み込みと描画 (`core/pdf`)、記録 (`SafeLog`)、
 配布物の組み立て (`dist` のパッケージ名の書き換え) は、それぞれ Apache PDFBox 2.0、Log4j、ASM を参考にした独自の実装です。
+WebP、meshopt、BC6H / BC7、KTX2 の ETC1S / UASTC の展開は、それぞれの仕様書 (RFC 6386、RFC 9649、KHR_meshopt_compression、
+Khronos Data Format Specification、KTX 2.0) から書いた独自の実装です (以前は TwelveMonkeys ImageIO、meshoptimizer、bcdec、
+Basis Universal を移植していました)。
 参考にしたライブラリにあった次の問題は、独自の実装では起きないようにしています。
 
 - PDF の中の ICC プロファイルをネイティブの LCMS に渡すこと (細工したプロファイルによるメモリ破壊の危険) → 渡さない
