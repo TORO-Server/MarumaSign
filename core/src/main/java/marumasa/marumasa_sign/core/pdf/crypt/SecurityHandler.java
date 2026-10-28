@@ -68,6 +68,9 @@ public final class SecurityHandler {
         } else {
             throw new IOException("Unsupported encryption version " + v);
         }
+        // RC4 と AES-128 の鍵は 40 から 128 ビットで、8 の倍数 (仕様の範囲の外の値は、範囲に収める)。
+        // 収めないと、鍵の長さが MD5 の長さ (16 バイト) を超えて、鍵を作るときに範囲外を読む
+        if (v < 5) length = Math.max(40, Math.min(128, length - length % 8));
         if (length < 40 || length > 256 || length % 8 != 0) length = 128;
         // 文字列もストリームも暗号化しない指定 (埋め込まれたファイルだけを暗号化したもの) なら、パスワードは要らない
         if (streamMethod == Method.NONE && stringMethod == Method.NONE) return new SecurityHandler(new byte[0], Method.NONE, Method.NONE);

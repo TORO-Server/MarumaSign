@@ -241,7 +241,9 @@ public final class JpegReader {
             final int length = u16(position);
             if (length < 2) throw new IOException("Bad marker length");
             final int segment = position + 2;
-            final int end = Math.min(data.length, position + length);
+            // 区切りの中身がデータの終わりを越えるものは壊れている (中身を読むときに、終わりより先を読まないように)
+            if ((long) position + length > data.length) throw new IOException("Truncated JPEG segment");
+            final int end = position + length;
             switch (marker) {
                 case 0xDB:
                     readQuantTables(segment, end);
@@ -254,7 +256,7 @@ public final class JpegReader {
                 case 0xC2:
                     if (frameRead) throw new IOException("Multiple frames");
                     progressive = marker == 0xC2;
-                    readFrame(segment, maxPixels, scale);
+                    readFrame(segment, end, maxPixels, scale);
                     frameRead = true;
                     break;
                 case 0xC3:
@@ -269,7 +271,7 @@ public final class JpegReader {
                     if (!frameRead) throw new IOException("Scan before frame");
                     position = end;
                     try {
-                        readScan(segment);
+                        readScan(segment, end);
                         anyScan = true;
                     } catch (IOException | RuntimeException e) {
                         // 壊れたデータ: 読めたところまでを使う
@@ -310,7 +312,7 @@ public final class JpegReader {
             final int info = data[p++] & 0xFF;
             final int id = info & 15;
             final boolean sixteen = (info >> 4) != 0;
-            if (id > 3) throw new IOException("Bad quantization table");
+            if (id > 3 || p + (sixteen ? 128 : 64) > end) throw new IOException("Bad quantization table");
             final int[] table = new int[64];
             for (int k = 0; k < 64; k++) {
                 if (sixteen) {
@@ -343,7 +345,8 @@ public final class JpegReader {
         }
     }
 
-    private void readFrame(int p, long maxPixels, int scale) throws IOException {
+    private void readFrame(int p, int end, long maxPixels, int scale) throws IOException {
+        if (p + 6 > end || p + 6 + 3 * (data[p + 5] & 0xFF) > end) throw new IOException("Bad JPEG frame header");
         precision = data[p] & 0xFF;
         if (precision != 8 && precision != 12) throw new IOException("Unsupported JPEG precision " + precision);
         height = u16(p + 1);
@@ -382,9 +385,10 @@ public final class JpegReader {
 
     // ---------- スキャン ----------
 
-    private void readScan(int p) throws IOException {
+    private void readScan(int p, int end) throws IOException {
+        if (p >= end) throw new IOException("Bad scan");
         final int count = data[p] & 0xFF;
-        if (count < 1 || count > 4) throw new IOException("Bad scan");
+        if (count < 1 || count > 4 || p + 4 + 2 * count > end) throw new IOException("Bad scan");
         final Component[] scan = new Component[count];
         for (int i = 0; i < count; i++) {
             final int id = data[p + 1 + 2 * i] & 0xFF;
