@@ -61,24 +61,43 @@ public final class SplatLoader {
         final String ext = extension(name);
         try {
             if (PlyReader.isPly(content, content.length) || ".ply".equals(ext)) {
-                return PlyReader.load(content);
+                return validate(PlyReader.load(content));
             }
             if (SpzReader.isSpz(content, content.length) || ".spz".equals(ext)) {
-                return SpzReader.load(content);
+                return validate(SpzReader.load(content));
             }
             if (SogReader.isSog(content, content.length, ext) || ".sog".equals(ext)) {
-                return SogReader.load(content);
+                return validate(SogReader.load(content));
             }
             if (".ksplat".equals(ext)) {
-                return KsplatReader.load(content);
+                return validate(KsplatReader.load(content));
             }
             if (".splat".equals(ext)) {
-                return loadSplat(content);
+                return validate(loadSplat(content));
             }
         } catch (RuntimeException e) {
             throw new IOException("Invalid splat data: " + e, e);
         }
         throw new IOException("Not a Gaussian splatting file");
+    }
+
+    /**
+     * 読み込んだ結果を確かめる。位置と大きさが有限でない分布があれば IOException にする。
+     * 形式によっては、有限の値を組み合わせた計算 (範囲の最小と最大の補間など) で無限大になることがあり、
+     * そのまま描くと並べ替えや大きさの計算 (restBounds) が壊れる。
+     */
+    static SplatCloud validate(SplatCloud cloud) throws IOException {
+        final int count = cloud.count;
+        if (count < 0 || count > MAX_SPLATS || cloud.positions.length < count * 3 || cloud.scales.length < count * 3
+                || cloud.rotations.length < count * 4 || cloud.opacities.length < count || cloud.colors.length < count * 3) {
+            throw new IOException("Invalid splat data");
+        }
+        for (int i = 0; i < count * 3; i++) {
+            if (!Float.isFinite(cloud.positions[i]) || !Float.isFinite(cloud.scales[i])) {
+                throw new IOException("Non-finite splat position or scale");
+            }
+        }
+        return cloud;
     }
 
     // 名前の拡張子を、小文字にして "." 付きで返す。URL のクエリやフラグメントは無視する。なければ ""
@@ -208,7 +227,8 @@ public final class SplatLoader {
     // 表面積そのものを使うと、巨大な背景の分布ばかりが選ばれる
     static float importance(float opacity, float sx, float sy, float sz) {
         final float area = sx * sy + sy * sz + sz * sx;
-        if (area <= 0f || opacity <= 0f) return 0f;
+        // NaN も 0 にする (並べ替えたときに、選ぶ数が足りなくならないように)
+        if (!(area > 0f) || !(opacity > 0f)) return 0f;
         return opacity * (float) Math.sqrt(area);
     }
 

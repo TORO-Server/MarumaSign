@@ -106,6 +106,11 @@ public final class DdsDecoder {
             }
         }
 
+        // どの形式でも 4x4 のブロックごとに 8 バイト以上 (1 ピクセルに 0.5 バイト以上) 要る。
+        // 展開した結果を入れる領域は、データがそれだけあることを確かめてから確保する (幅と高さだけを大きく書いた小さなファイルで、メモリを使い切らせないように)
+        if ((long) offset + (long) ((width + 3) / 4) * ((height + 3) / 4) * 8 > data.length) {
+            throw new IOException("DDS data truncated");
+        }
         final int[] argb = new int[width * height];
 
         if (dxgiFormat != 0) {
@@ -578,7 +583,10 @@ public final class DdsDecoder {
     private static void decodeUncompressed(byte[] data, int offset, int width, int height,
                                            int rgbBitCount, int rMask, int gMask, int bMask, int aMask,
                                            boolean hasAlpha, boolean luminance, int[] out) throws IOException {
-        if (rgbBitCount <= 0 || rgbBitCount > 32) throw new IOException("Unsupported DDS bit count: " + rgbBitCount);
+        // 1 ピクセルを 1 バイトずつ読むので、8 の倍数でないビット数 (1 ピクセルが 1 バイトより小さい形式) は読めない
+        if (rgbBitCount != 8 && rgbBitCount != 16 && rgbBitCount != 24 && rgbBitCount != 32) {
+            throw new IOException("Unsupported DDS bit count: " + rgbBitCount);
+        }
         if (luminance && rgbBitCount < 32 && (rMask >>> rgbBitCount) != 0) {
             // 画素より広いマスクが書かれていることがある。明るさは下位のビット、透明度は残りのビットとみなす
             final int lumaBits = (aMask != 0 && hasAlpha) ? rgbBitCount / 2 : rgbBitCount;

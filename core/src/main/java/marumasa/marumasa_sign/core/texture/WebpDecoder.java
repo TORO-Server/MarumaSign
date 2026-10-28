@@ -52,6 +52,13 @@ public final class WebpDecoder {
      * 1 枚の画像として読む。アニメーションなら、最初のフレームを描いたキャンバスを返す。
      */
     public static BufferedImage decode(byte[] data) throws IOException {
+        return decode(data, Long.MAX_VALUE);
+    }
+
+    /**
+     * 1 枚の画像として読む。幅と高さの積が maxPixels を超える画像は、展開する前に IOException にする。
+     */
+    public static BufferedImage decode(byte[] data, long maxPixels) throws IOException {
         if (!isWebp(data)) throw new IOException("Not a WebP image");
         try {
             final Container container = new Container(data);
@@ -65,6 +72,7 @@ public final class WebpDecoder {
                 width = size[0];
                 height = size[1];
                 checkSize(width, height, MAX_SIZE);
+                if ((long) width * height > maxPixels) throw new IOException("WebP image exceeds safety limits: " + width + "x" + height);
                 argb = decodeBitstream(data, chunk, null, width, height);
             } else if (first == VP8X) {
                 final Chunk vp8x = container.read(12);
@@ -73,6 +81,7 @@ public final class WebpDecoder {
                 width = 1 + u24(data, vp8x.start + 4);
                 height = 1 + u24(data, vp8x.start + 7);
                 checkSize(width, height, MAX_SIZE);
+                if ((long) width * height > maxPixels) throw new IOException("WebP image exceeds safety limits: " + width + "x" + height);
                 if ((flags & 0x02) != 0) {
                     argb = readAnimation(data, container, vp8x.next, width, height, true).frames[0];
                 } else {

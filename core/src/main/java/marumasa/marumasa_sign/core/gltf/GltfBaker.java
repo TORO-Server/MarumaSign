@@ -152,6 +152,9 @@ final class GltfBaker {
     private static final float MAX_FLAT = 0.02f;
     // 面の継ぎ目に色がにじまないように、面の外側へ色を広げる回数
     private static final int DILATION = 6;
+    // 塗る三角形を決めるときにたどる点の数の上限 (テクスチャの点の数の何倍か)。
+    // テクスチャの上で細長い三角形 (囲む四角形が大きい) をとても多く並べられると、焼き込みが終わらなくなる
+    private static final int MAX_RASTER_WORK = 32;
 
     // 1 つの層
     private static final class Layer {
@@ -191,6 +194,9 @@ final class GltfBaker {
     private final Triangle scratch = new Triangle();
     // scan の結果
     private int inside, overlap;
+    // これまでにたどった点の数と、その上限
+    private long work;
+    private final long workLimit;
 
     // 三角形 1 枚の、テクスチャの上での位置と、面の向き
     private final class Triangle {
@@ -275,6 +281,7 @@ final class GltfBaker {
         this.input = input;
         this.width = width;
         this.height = height;
+        this.workLimit = Math.max(1L << 26, (long) MAX_RASTER_WORK * width * height);
     }
 
     /**
@@ -392,6 +399,8 @@ final class GltfBaker {
                 }
             }
             if (chosen < 0) return false;
+            // 時間がかかりすぎるなら焼き込まない (焼き込まずに描く)
+            if (work > workLimit) return false;
             if (chosen == layers.size()) layers.add(new Layer(width * height));
             surface.layers[triangle] = chosen;
             raster(surface, triangle, layers.get(chosen), base + triangle + 1);
@@ -470,6 +479,7 @@ final class GltfBaker {
         final int maxX = Math.min(width - 1, (int) Math.ceil(Math.max(xa, Math.max(xb, xc)) - 0.5f));
         final int minY = Math.max(0, (int) Math.floor(Math.min(ya, Math.min(yb, yc)) - 0.5f));
         final int maxY = Math.min(height - 1, (int) Math.ceil(Math.max(ya, Math.max(yb, yc)) - 0.5f));
+        if (maxX >= minX && maxY >= minY) work += (long) (maxX - minX + 1) * (maxY - minY + 1);
         // 辺の上の点を取りこぼさないための余裕
         final float tolerance = 0.5f / Math.max(1f, Math.abs(area)) * (Math.abs(xb - xa) + Math.abs(xc - xa)
                 + Math.abs(yb - ya) + Math.abs(yc - ya));

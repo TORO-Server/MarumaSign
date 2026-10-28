@@ -39,6 +39,26 @@ tasks.register('dracoCheck', JavaExec) {
     javaLauncher = javaToolchains.launcherFor(java.toolchain)
 }
 
+// 壊した glTF / GLB と KTX2 / DDS を読ませて、想定外の例外や長い時間、メモリの使い切りにならないかを確かめる。
+// 引数は -PgltfFuzzArgs="回数 ファイルまたはフォルダ..." で渡す (ファイルを省くと src/test/resources/gltf を種にする)
+tasks.register('gltfFuzz', JavaExec) {
+    classpath = sourceSets.test.runtimeClasspath
+    mainClass = 'marumasa.marumasa_sign.core.gltf.GltfFuzz'
+    javaLauncher = javaToolchains.launcherFor(java.toolchain)
+    maxHeapSize = '1g'
+    jvmArgs '-Xss512k'
+    args = providers.gradleProperty('gltfFuzzArgs').getOrElse('2000').tokenize(' ')
+}
+
+// 3D モデルとテクスチャの読み込みで直した不具合が、もう一度起きないことを確かめる
+tasks.register('gltfRegressionCheck', JavaExec) {
+    classpath = sourceSets.test.runtimeClasspath
+    mainClass = 'marumasa.marumasa_sign.core.gltf.GltfRegressionCheck'
+    javaLauncher = javaToolchains.launcherFor(java.toolchain)
+    maxHeapSize = '1g'
+    jvmArgs '-Xss512k'
+}
+
 // WebP デコーダの単体テスト・安全性検査を実行する。壊したデータを読ませる回数は -PwebpFuzz=回数 で変えられる (既定は 3000)
 tasks.register('webpCheck', JavaExec) {
     classpath = sourceSets.test.runtimeClasspath
@@ -210,6 +230,26 @@ tasks.register('nestedSignCheck', JavaExec) {
     maxHeapSize = '4g'
     if (providers.gradleProperty('assetJar').isPresent()) systemProperty 'marumasign.assetJar', providers.gradleProperty('assetJar').get()
     systemProperty 'marumasign.gameDir', layout.buildDirectory.dir('structure-game').get().asFile.path
+}
+
+// 壊したガウシアンスプラッティングのファイルを読ませて、想定外の例外や長い時間、メモリの使い切りにならないかを確かめる。
+// 引数は -PsplatFuzzArgs="回数 ファイルまたはフォルダ..." で渡す (ファイルを省くと src/test/resources/splat を種にする)
+tasks.register('splatFuzz', JavaExec) {
+    classpath = sourceSets.test.runtimeClasspath
+    mainClass = 'marumasa.marumasa_sign.core.splat.SplatFuzz'
+    javaLauncher = javaToolchains.launcherFor(java.toolchain)
+    maxHeapSize = '1g'
+    jvmArgs '-Xss512k'
+    args = providers.gradleProperty('splatFuzzArgs').getOrElse('5000').tokenize(' ')
+}
+
+// ガウシアンスプラッティングの読み込みで直した不具合が、もう一度起きないことを確かめる
+tasks.register('splatRegressionCheck', JavaExec) {
+    classpath = sourceSets.test.runtimeClasspath
+    mainClass = 'marumasa.marumasa_sign.core.splat.SplatRegressionCheck'
+    javaLauncher = javaToolchains.launcherFor(java.toolchain)
+    maxHeapSize = '1g'
+    jvmArgs '-Xss512k'
 }
 
 // ガウシアンスプラッティングのデコーダの動作と安全性を確認する。
