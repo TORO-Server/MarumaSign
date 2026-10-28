@@ -16,6 +16,7 @@ import java.util.concurrent.TimeUnit;
 /**
  * 動画と音声の再生に使う FFmpeg の実行ファイルを探す。
  * 探す順番: システムプロパティ marumasign.ffmpeg、ゲームフォルダの marumasign/ffmpeg、PATH、よくあるインストール先。
+ * システムプロパティ marumasign.ffmpeg を none にすると、FFmpeg を使わない。
  */
 public final class Ffmpeg {
 
@@ -114,6 +115,8 @@ public final class Ffmpeg {
     private static void search() {
         if (searched) return;
         searched = true;
+        // marumasign.ffmpeg=none なら、FFmpeg を使わない (パソコンに入っていても)
+        if ("none".equalsIgnoreCase(System.getProperty("marumasign.ffmpeg", ""))) return;
         try {
             searchDirectories();
         } catch (RuntimeException e) {

@@ -3,6 +3,7 @@ package marumasa.marumasa_sign.core.media;
 import marumasa.marumasa_sign.core.MarumaSign;
 import marumasa.marumasa_sign.core.net.FilteringProxy;
 import marumasa.marumasa_sign.core.net.UrlPolicy;
+import marumasa.marumasa_sign.core.util.Clock;
 
 import javax.sound.sampled.AudioFormat;
 import javax.sound.sampled.AudioSystem;
@@ -207,7 +208,7 @@ public final class MediaPlayer {
         startWatchdog();
         long wait = RECONNECT_MILLIS;
         while (!stopped) {
-            final long started = System.currentTimeMillis();
+            final long started = Clock.millis();
             lastDataNanos = System.nanoTime();
             try {
                 play(info, frameRate);
@@ -217,9 +218,9 @@ public final class MediaPlayer {
             } finally {
                 closeAttempt();
             }
-            if (System.currentTimeMillis() - started > STABLE_MILLIS) wait = RECONNECT_MILLIS;
-            final long until = System.currentTimeMillis() + wait;
-            while (!stopped && System.currentTimeMillis() < until) {
+            if (Clock.millis() - started > STABLE_MILLIS) wait = RECONNECT_MILLIS;
+            final long until = Clock.millis() + wait;
+            while (!stopped && Clock.millis() < until) {
                 sleep(100);
             }
             wait = Math.min(MAX_RECONNECT_MILLIS, wait * 2);

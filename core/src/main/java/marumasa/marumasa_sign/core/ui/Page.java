@@ -1,5 +1,6 @@
 package marumasa.marumasa_sign.core.ui;
 
+import marumasa.marumasa_sign.core.util.Clock;
 import java.awt.Graphics2D;
 import java.io.File;
 import java.util.ArrayList;
@@ -95,7 +96,7 @@ public abstract class Page {
             setFocus(null);
             return;
         }
-        final long now = System.currentTimeMillis();
+        final long now = Clock.millis();
         final boolean doubleClick = target == lastClickWidget && now - lastClickTime < DOUBLE_CLICK_MILLIS;
         lastClickTime = doubleClick ? 0 : now;
         lastClickWidget = target;

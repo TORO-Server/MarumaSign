@@ -2,6 +2,7 @@ package marumasa.marumasa_sign.core.sign;
 
 import marumasa.marumasa_sign.core.gltf.GltfScene;
 import marumasa.marumasa_sign.core.splat.SplatScene;
+import marumasa.marumasa_sign.core.util.Clock;
 
 import java.util.Arrays;
 
@@ -80,8 +81,8 @@ public final class SignImage {
 
     // PDF のページ送りの操作。なければ null
     private final PdfControls controls;
-    // 最後に看板として引かれた時刻 (System.currentTimeMillis)。SignManager が、使われていないものを消すのに使う
-    volatile long lastUsed = System.currentTimeMillis();
+    // 最後に看板として引かれた時刻 (Clock.millis。経った時間を測るためのもの)。SignManager が、使われていないものを消すのに使う
+    volatile long lastUsed = Clock.millis();
 
     SignImage(SignSpec spec, TextureEntry texture, PdfControls controls) {
         this.spec = spec;

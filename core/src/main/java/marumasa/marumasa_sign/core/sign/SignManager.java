@@ -8,8 +8,9 @@ import marumasa.marumasa_sign.core.gltf.TextureAnimation;
 import marumasa.marumasa_sign.core.image.DecodedImage;
 import marumasa.marumasa_sign.core.image.ImageLoader;
 import marumasa.marumasa_sign.core.media.Ffmpeg;
-import marumasa.marumasa_sign.core.splat.SplatScene;
 import marumasa.marumasa_sign.core.pdf.PdfFile;
+import marumasa.marumasa_sign.core.splat.SplatScene;
+import marumasa.marumasa_sign.core.util.Clock;
 
 import java.awt.BasicStroke;
 import java.awt.Color;
@@ -59,7 +60,7 @@ public final class SignManager {
         final TextureEntry entry;
         final GltfModel model;
         final Object[] textures;
-        final long start = System.currentTimeMillis();
+        final long start = Clock.millis();
 
         AnimatedModel(String url, TextureEntry entry, GltfModel model, Object[] textures) {
             this.url = url;
@@ -112,7 +113,7 @@ public final class SignManager {
     }
 
     private static void touch(SignImage image) {
-        image.lastUsed = System.currentTimeMillis();
+        image.lastUsed = Clock.millis();
         image.textureEntry().touch();
     }
 
@@ -126,7 +127,7 @@ public final class SignManager {
         }
         if (total <= MAX_BYTES) return true;
         final List<Map.Entry<String, TextureEntry>> idle = new ArrayList<Map.Entry<String, TextureEntry>>();
-        final long now = System.currentTimeMillis();
+        final long now = Clock.millis();
         for (Map.Entry<String, TextureEntry> item : textures.entrySet()) {
             final TextureEntry entry = item.getValue();
             if (entry != keep && entry.bytes() > 0 && now - entry.lastUsed() > IDLE_MILLIS) idle.add(item);
@@ -454,7 +455,7 @@ public final class SignManager {
                 animated.remove(i);
                 continue;
             }
-            final long tick = (System.currentTimeMillis() - item.start) / 50;
+            final long tick = (Clock.millis() - item.start) / 50;
             for (TextureAnimation animation : item.model.textureAnimations()) {
                 final int[] pixels = animation.update(tick);
                 if (pixels == null) continue;
@@ -489,7 +490,7 @@ public final class SignManager {
 
     // 長く描かれていないものを消す
     private void evictUnused() {
-        final long now = System.currentTimeMillis();
+        final long now = Clock.millis();
         for (Map.Entry<String, TextureEntry> item : textures.entrySet()) {
             if (now - item.getValue().lastUsed() > UNUSED_MILLIS) evict(item.getKey(), item.getValue());
         }

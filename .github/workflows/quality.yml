@@ -68,6 +68,10 @@ jobs:
           java-version: '25'
           distribution: 'temurin'
 
+      # 動画と音声の試験 (再生の数の上限、止めたときの後片付け、通信の行き先の確認) に使う
+      - name: Install FFmpeg
+        run: sudo apt-get update -q && sudo apt-get install -y -q ffmpeg
+
       - name: Run core checks
         env:
           MODE: ${{ inputs.mode || (github.event_name == 'schedule' && 'long') || 'quick' }}

@@ -17,9 +17,9 @@ seed="${FUZZ_SEED:-$(date +%s)}"
 failed=()
 
 if [ "$mode" = "long" ]; then
-  pdf_fuzz=40000; image_fuzz=3000; structure_fuzz=20000; webp_fuzz=30000; decoder_fuzz_seconds=300; font_fuzz=100000; gltf_fuzz=200000; splat_fuzz=300000; svg_fuzz=30000
+  pdf_fuzz=40000; image_fuzz=3000; structure_fuzz=20000; webp_fuzz=30000; decoder_fuzz_seconds=300; font_fuzz=100000; gltf_fuzz=200000; splat_fuzz=300000; svg_fuzz=30000; image_ffmpeg_fuzz=300
 else
-  pdf_fuzz=3000; image_fuzz=300; structure_fuzz=1000; webp_fuzz=3000; decoder_fuzz_seconds=20; font_fuzz=5000; gltf_fuzz=3000; splat_fuzz=20000; svg_fuzz=1000
+  pdf_fuzz=3000; image_fuzz=300; structure_fuzz=1000; webp_fuzz=3000; decoder_fuzz_seconds=20; font_fuzz=5000; gltf_fuzz=3000; splat_fuzz=20000; svg_fuzz=1000; image_ffmpeg_fuzz=30
 fi
 
 echo "mode=$mode seed=$seed"
@@ -88,12 +88,18 @@ check downloadCacheCheck 600 -Xmx512m marumasa.marumasa_sign.core.net.DownloadCa
 # メモリと再生の数の上限
 check signLimitsCheck 1200 -Xmx3g marumasa.marumasa_sign.core.SignLimitsCheck
 # 画像、構造物、3D モデル、スプラットの読み込み (壊したファイルを含む)
+# 看板の読み込みと後片付け (止めた読み込み、途中で切れたダウンロード、壊れた保存、動画のメモリの上限など)
+check runtimeRegressionCheck 600 -Xmx2g marumasa.marumasa_sign.core.RuntimeRegressionCheck
 check argbPixelsCheck 300 -Xmx1g marumasa.marumasa_sign.core.image.ArgbPixelsCheck "$root/tools/verify/test-image.png"
 # JPEG は libjpeg (ImageIO) を使わずに読むので、libjpeg (Pillow) の結果と比べる
 check jpegCheck 300 -Xmx512m -Xss512k marumasa.marumasa_sign.core.image.format.JpegCheck src/test/resources/jpeg
 check imageRegressionCheck 300 -Xmx512m -Xss512k marumasa.marumasa_sign.core.image.ImageRegressionCheck
-check imageFormatsFuzz 3600 -Xmx1g -Xss512k marumasa.marumasa_sign.core.image.ImageFormatsFuzz "$image_fuzz" \
+# 自分で読む形式のファジングは、FFmpeg を使わずに行う (読めないファイルを FFmpeg に回すと、1 つずつ時間がかかる)
+check imageFormatsFuzz 3600 -Xmx1g -Xss512k -Dmarumasign.ffmpeg=none marumasa.marumasa_sign.core.image.ImageFormatsFuzz "$image_fuzz" \
   "$root/tools/verify/test-image.png" src/test/resources/jpeg/*.jpg src/test/resources/image
+# FFmpeg に回す道 (自分で読めない形式) は、回数を減らして試す (FFmpeg がなければ、上と同じ道になる)
+check imageFormatsFfmpegFuzz 3600 -Xmx1g -Xss512k marumasa.marumasa_sign.core.image.ImageFormatsFuzz "$image_ffmpeg_fuzz" \
+  "$root/tools/verify/test-image.png" src/test/resources/image
 # SVG: 深い入れ子、use の爆弾、極端な CSS や transform、外部の実体などを作って読ませる
 check svgFuzz 3600 -Xmx512m -Xss512k marumasa.marumasa_sign.core.image.SvgFuzz "$svg_fuzz" src/test/resources/image
 check structureRegressionCheck 600 -Xmx2g -Xss512k marumasa.marumasa_sign.core.structure.StructureRegressionCheck
