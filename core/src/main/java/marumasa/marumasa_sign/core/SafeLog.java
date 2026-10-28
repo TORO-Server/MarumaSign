@@ -36,9 +36,10 @@ public final class SafeLog {
                 replacement = "\\n";
             } else if (c == '\r') {
                 replacement = "\\r";
-            } else if ((c < 0x20 && c != '\t') || (c >= 0x7F && c <= 0x9F) || (c >= 0x202A && c <= 0x202E)
-                    || (c >= 0x2066 && c <= 0x2069)) {
-                // 端末の色を変える文字や、文字の向きを入れ替える文字も、そのままでは書かない
+            } else if ((c < 0x20 && c != '\t') || (c >= 0x7F && c <= 0x9F) || c == 0x2028 || c == 0x2029
+                    || (c >= 0x202A && c <= 0x202E) || (c >= 0x2066 && c <= 0x2069)) {
+                // 端末の色を変える文字や、文字の向きを入れ替える文字も、そのままでは書かない。
+                // 行の区切り (U+2028) と段落の区切り (U+2029) も、記録を見るソフトによっては改行になるので書かない
                 replacement = String.format("\\u%04x", (int) c);
             } else {
                 if (result != null) result.append(c);
