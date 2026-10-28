@@ -47,7 +47,9 @@ public final class MediaTools {
      */
     public static BufferedImage thumbnail(String source) throws IOException {
         if (!Ffmpeg.isAvailable()) return null;
-        final boolean remote = source.startsWith("http://") || source.startsWith("https://");
+        // 「HTTP://」のような大文字の書き方も URL として扱う (ファイルとして扱うと、確かめずにファイルも読ませる設定になる)
+        final String lower = source.toLowerCase(Locale.ROOT);
+        final boolean remote = lower.startsWith("http://") || lower.startsWith("https://");
         final ProcessBuilder builder = new ProcessBuilder(new ArrayList<String>(Arrays.asList(
                 Ffmpeg.requireFfmpeg().getPath(),
                 "-hide_banner", "-loglevel", "error", "-nostdin",

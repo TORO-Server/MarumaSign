@@ -67,7 +67,10 @@ final class MediaInfo {
         }
     }
 
-    static MediaInfo probe(String url) throws IOException {
+    /**
+     * @param owner この結果を使う再生。再生を止めたら ffprobe も止める (少しずつしか送らないサーバーで、いつまでも残らないように)
+     */
+    static MediaInfo probe(String url, MediaPlayer owner) throws IOException {
         // 結果を「項目=値」の形式で 1 行ずつ出力させる
         final ProcessBuilder builder = new ProcessBuilder(new ArrayList<String>(Arrays.asList(
                 Ffmpeg.requireFfprobe().getPath(),
@@ -80,6 +83,7 @@ final class MediaInfo {
         )));
         FilteringProxy.apply(builder, url);
         final Process process = builder.redirectErrorStream(false).start();
+        owner.track(process);
         process.getOutputStream().close();
         MediaPlayer.drain(process.getErrorStream(), null);
 

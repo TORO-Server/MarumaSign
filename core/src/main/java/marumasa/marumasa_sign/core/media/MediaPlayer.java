@@ -125,6 +125,13 @@ public final class MediaPlayer {
         closeAttempt();
     }
 
+    // この再生のために動かしたプロセス (ffprobe など)。止めたとき (closeAttempt) に一緒に止める
+    void track(Process running) {
+        process = running;
+        // 動かしている間に止められていたら、closeAttempt はこのプロセスを知らないので、ここで止める
+        if (stopped) running.destroyForcibly();
+    }
+
     // 1 回分の再生で使った FFmpeg と通信と音声の出力を閉じる
     private void closeAttempt() {
         final Process running = process;
@@ -160,7 +167,7 @@ public final class MediaPlayer {
         boolean ready = false;
         try {
             if (!UrlPolicy.isAllowed(url)) throw new IOException("Blocked URL: " + url);
-            final MediaInfo info = MediaInfo.probe(url);
+            final MediaInfo info = MediaInfo.probe(url, this);
             if (stopped) return;
 
             double frameRate = 0;
