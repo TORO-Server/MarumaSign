@@ -702,7 +702,8 @@ public final class GltfLoader {
 
     // ---- 画像と材質 ----
 
-    private static float gamma(float linear) {
+    // 光の強さに比例する値 (glTF の色の係数など) を、表示用の色の値 (0 - 1) にする
+    static float gamma(float linear) {
         if (linear <= 0) return 0;
         return (float) Math.pow(Math.min(linear, 1f), INVERSE_GAMMA);
     }
@@ -1043,6 +1044,13 @@ public final class GltfLoader {
                 : transImage != null ? transRef : dtImage != null ? dtRef : null;
 
         System.arraycopy(f0, 0, material.f0, 0, 3);
+        // KHR_animation_pointer で動かす値の、ファイルに書かれた元の値
+        for (int i = 0; i < 4 && i < baseFactor.length; i++) material.baseFactor[i] = baseFactor[i];
+        for (int i = 0; i < 3 && i < emissiveFactor.length; i++) material.emissiveFactor[i] = emissiveFactor[i];
+        material.emissiveStrength = strength;
+        material.emissiveInColor = mapping == null && emissiveRef == null;
+        material.metallicFactor = metallicFactor;
+        material.roughnessFactor = roughnessFactor;
         if (mapping != null) {
             material.texOffsetX = mapping.offsetX;
             material.texOffsetY = mapping.offsetY;

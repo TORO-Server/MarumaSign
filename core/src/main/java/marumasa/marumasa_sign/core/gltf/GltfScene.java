@@ -57,6 +57,14 @@ public final class GltfScene {
     private final float[] matTexOffset;
     private final float[] matTexScale;
     private final float[] matTexRotation;
+    // KHR_animation_pointer で動かす材質の値 (ファイルと同じ、光の強さに比例する値)。姿勢を決めたあとで上の値に直す
+    private final float[] matBaseFactor;
+    private final float[] matEmissiveFactor;
+    private final float[] matMetallicFactor;
+    private final float[] matRoughnessFactor;
+    // 材質ごとの、アニメーションで動かす値 (ANIMATED_* の組み合わせ)
+    private final int[] animatedMaterials;
+    private static final int ANIMATED_COLOR = 1, ANIMATED_EMISSIVE = 2, ANIMATED_METALLIC = 4, ANIMATED_ROUGHNESS = 8;
 
     // ライトの動的プロパティとシーンライト
     private final float[] lightColors;
@@ -103,6 +111,20 @@ public final class GltfScene {
         matTexOffset = new float[matCount * 2];
         matTexScale = new float[matCount * 2];
         matTexRotation = new float[matCount];
+        matBaseFactor = new float[matCount * 4];
+        matEmissiveFactor = new float[matCount * 3];
+        matMetallicFactor = new float[matCount];
+        matRoughnessFactor = new float[matCount];
+        animatedMaterials = new int[matCount];
+        if (model.animations.length > 0) {
+            for (GltfModel.Channel channel : model.animations[0].channels) {
+                final int flag = channel.targetType == GltfModel.TARGET_MATERIAL_COLOR ? ANIMATED_COLOR
+                        : channel.targetType == GltfModel.TARGET_MATERIAL_EMISSIVE ? ANIMATED_EMISSIVE
+                        : channel.targetType == GltfModel.TARGET_MATERIAL_METALLIC ? ANIMATED_METALLIC
+                        : channel.targetType == GltfModel.TARGET_MATERIAL_ROUGHNESS ? ANIMATED_ROUGHNESS : 0;
+                if (flag != 0) animatedMaterials[channel.targetIndex] |= flag;
+            }
+        }
         resetMaterialProperties();
 
         final int lightCount = model.lights.length;
@@ -187,6 +209,48 @@ public final class GltfScene {
             matTexScale[i * 2] = m.texScaleX;
             matTexScale[i * 2 + 1] = m.texScaleY;
             matTexRotation[i] = m.texRotation;
+            System.arraycopy(m.baseFactor, 0, matBaseFactor, i * 4, 4);
+            System.arraycopy(m.emissiveFactor, 0, matEmissiveFactor, i * 3, 3);
+            matMetallicFactor[i] = m.metallicFactor;
+            matRoughnessFactor[i] = m.roughnessFactor;
+        }
+    }
+
+    /**
+     * アニメーションで動かした材質の値を、描くときの値に直す。
+     * 読み込みでは、ファイルの値を表示用の色に直して color やテクスチャに入れている (テクスチャの色や、
+     * 金属らしさのテクスチャの平均も掛けてある) ので、動かした値とファイルの値の比を掛ける。
+     * 表示用の色への変換は累乗なので、比を掛けても、動かした値から計算し直したものと同じになる。
+     */
+    private void applyMaterialFactors() {
+        for (int i = 0; i < animatedMaterials.length; i++) {
+            final int animated = animatedMaterials[i];
+            if (animated == 0) continue;
+            final GltfModel.Material m = model.materials[i];
+            if ((animated & ANIMATED_COLOR) != 0) {
+                for (int c = 0; c < 3; c++) {
+                    final float before = GltfLoader.gamma(m.baseFactor[c]);
+                    final float after = GltfLoader.gamma(matBaseFactor[i * 4 + c]);
+                    matColors[i * 4 + c] = before > 0 ? m.color[c] * after / before : after;
+                }
+                // 不透明と切り抜きの材質の不透明度は、読み込みで 0 か 1 に決めてある
+                if (m.alphaMode == GltfModel.ALPHA_BLEND) {
+                    final float before = Math.max(0f, Math.min(1f, m.baseFactor[3]));
+                    final float after = Math.max(0f, Math.min(1f, matBaseFactor[i * 4 + 3]));
+                    matColors[i * 4 + 3] = before > 0 ? m.color[3] * after / before : after;
+                }
+            }
+            if ((animated & ANIMATED_EMISSIVE) != 0 && m.emissiveInColor) {
+                for (int c = 0; c < 3; c++) {
+                    matEmissive[i * 3 + c] = GltfLoader.gamma(matEmissiveFactor[i * 3 + c] * m.emissiveStrength);
+                }
+            }
+            if ((animated & ANIMATED_METALLIC) != 0) {
+                matMetallic[i] = m.metallicFactor != 0 ? m.metallic * matMetallicFactor[i] / m.metallicFactor : matMetallicFactor[i];
+            }
+            if ((animated & ANIMATED_ROUGHNESS) != 0) {
+                matRoughness[i] = m.roughnessFactor != 0 ? m.roughness * matRoughnessFactor[i] / m.roughnessFactor : matRoughnessFactor[i];
+            }
         }
     }
 
@@ -241,6 +305,7 @@ public final class GltfScene {
             for (GltfModel.Channel channel : animation.channels) {
                 apply(channel, t);
             }
+            applyMaterialFactors();
         }
 
         final float[] t = new float[3], r = new float[4], s = new float[3];
@@ -330,25 +395,25 @@ public final class GltfScene {
                 }
                 break;
             case GltfModel.TARGET_MATERIAL_COLOR:
-                out = matColors;
+                out = matBaseFactor;
                 outOffset = channel.targetIndex * 4;
                 count = Math.min(components, 4);
                 isNodeRotation = false;
                 break;
             case GltfModel.TARGET_MATERIAL_EMISSIVE:
-                out = matEmissive;
+                out = matEmissiveFactor;
                 outOffset = channel.targetIndex * 3;
                 count = Math.min(components, 3);
                 isNodeRotation = false;
                 break;
             case GltfModel.TARGET_MATERIAL_METALLIC:
-                out = matMetallic;
+                out = matMetallicFactor;
                 outOffset = channel.targetIndex;
                 count = 1;
                 isNodeRotation = false;
                 break;
             case GltfModel.TARGET_MATERIAL_ROUGHNESS:
-                out = matRoughness;
+                out = matRoughnessFactor;
                 outOffset = channel.targetIndex;
                 count = 1;
                 isNodeRotation = false;
@@ -721,7 +786,10 @@ public final class GltfScene {
         final float scaX = matTexScale[mat * 2];
         final float scaY = matTexScale[mat * 2 + 1];
         final float rot = matTexRotation[mat];
-        final boolean transformUv = primitive.rawUv != null && (offX != 0 || offY != 0 || scaX != 1 || scaY != 1 || rot != 0);
+        // 読み込みで貼り方を反映し、画像を並べたテクスチャに合わせた座標 (cornerUv) を使う。
+        // アニメーションで貼り方がファイルの値から変わっているときだけ、元の座標から計算し直す
+        final boolean transformUv = primitive.rawUv != null && (offX != material.texOffsetX || offY != material.texOffsetY
+                || scaX != material.texScaleX || scaY != material.texScaleY || rot != material.texRotation);
         if (transformUv) {
             if (dynamicUv.length < indices.length * 2) {
                 dynamicUv = new float[indices.length * 2];

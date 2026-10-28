@@ -178,6 +178,8 @@ public final class Theme {
         final String dots = "...";
         int end = text.length();
         while (end > 0 && textWidth(g, text.substring(0, end) + dots) > width) end--;
+        // サロゲートペア (絵文字など) の前半だけを残さない
+        if (end > 0 && Character.isHighSurrogate(text.charAt(end - 1))) end--;
         return text.substring(0, end) + dots;
     }
 
