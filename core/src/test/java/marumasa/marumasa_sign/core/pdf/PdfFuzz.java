@@ -18,8 +18,8 @@ import java.util.concurrent.TimeoutException;
  * 壊した PDF を読ませて、想定外の例外、長い時間、メモリの使い切りにならないかを確かめる。
  * 試験の厳しい動作 (marumasign.pdfStrict) で動かし、内部で受け止めている想定外の例外も失敗として扱う。
  * <p>
- * 引数: 回数 [ファイルまたはフォルダ...]。ファイルを渡さなければ、試験用の PDF (src/test/resources/pdf) と、
- * ここで作る圧縮していない PDF を種にする。失敗したものは build/pdf-fuzz に保存する (同じ失敗を再現できるように)。
+ * 引数: 回数 [ファイルまたはフォルダ...]。ファイルを渡さなければ、試験用の PDF (src/test/resources/pdf) を種にする。
+ * ここで作る圧縮していない PDF は、いつも種に加える。失敗したものは build/pdf-fuzz に保存する (同じ失敗を再現できるように)。
  * 乱数の種はシステムプロパティ fuzz.seed で決められる。
  */
 public final class PdfFuzz {
@@ -40,12 +40,11 @@ public final class PdfFuzz {
         final List<byte[]> seeds = new ArrayList<>();
         final List<String> names = new ArrayList<>();
         for (int i = 1; i < args.length; i++) collect(new File(args[i]), seeds, names);
-        if (seeds.isEmpty()) {
-            collect(new File("src/test/resources/pdf"), seeds, names);
-            for (String[] synthetic : PdfSamples.synthetic()) {
-                names.add(synthetic[0]);
-                seeds.add(synthetic[1].getBytes(StandardCharsets.ISO_8859_1));
-            }
+        if (seeds.isEmpty()) collect(new File("src/test/resources/pdf"), seeds, names);
+        // ここで作る PDF は圧縮していないので、壊すと内容の流れやフォントの辞書にそのまま届く。ファイルを渡したときも使う
+        for (String[] synthetic : PdfSamples.synthetic()) {
+            names.add(synthetic[0]);
+            seeds.add(synthetic[1].getBytes(StandardCharsets.ISO_8859_1));
         }
         if (seeds.isEmpty()) throw new IllegalArgumentException("No seed PDFs");
         final long seed = Long.getLong("fuzz.seed", System.nanoTime());
