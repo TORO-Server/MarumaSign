@@ -63,7 +63,8 @@ public final class AvifDecoder {
                 fos.write(data);
             }
 
-            final Process process = new ProcessBuilder(Arrays.asList(
+            // 壊れたファイルで FFmpeg が終わらないことがあるので、時間を限って動かす (出力を読み終わるのを待ち続けないように)
+            final Process process = Ffmpeg.start(new ProcessBuilder(Arrays.asList(
                     Ffmpeg.requireFfmpeg().getPath(),
                     "-hide_banner", "-loglevel", "error", "-nostdin",
                     // 自分で書き出した一時ファイルだけを読ませる
@@ -71,7 +72,7 @@ public final class AvifDecoder {
                     "-i", tempFile.getAbsolutePath(),
                     "-map", "0:v:0", "-frames:v", "1",
                     "-f", "image2pipe", "-c:v", "png", "pipe:1"
-            )).redirectErrorStream(false).start();
+            )).redirectErrorStream(false), 30);
 
             process.getOutputStream().close();
             final InputStream err = process.getErrorStream();

@@ -288,7 +288,7 @@ public final class MediaPlayer {
 
         final ProcessBuilder builder = new ProcessBuilder(command);
         FilteringProxy.apply(builder, url);
-        final Process started = builder.redirectErrorStream(false).start();
+        final Process started = Ffmpeg.start(builder.redirectErrorStream(false));
         process = started;
         started.getOutputStream().close();
         final StringBuilder errors = new StringBuilder();

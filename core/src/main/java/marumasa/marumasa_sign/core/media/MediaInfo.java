@@ -82,7 +82,8 @@ final class MediaInfo {
                 url
         )));
         FilteringProxy.apply(builder, url);
-        final Process process = builder.redirectErrorStream(false).start();
+        // 情報を調べるだけなので、1 分で終わらなければ止める
+        final Process process = Ffmpeg.start(builder.redirectErrorStream(false), 60);
         owner.track(process);
         process.getOutputStream().close();
         MediaPlayer.drain(process.getErrorStream(), null);

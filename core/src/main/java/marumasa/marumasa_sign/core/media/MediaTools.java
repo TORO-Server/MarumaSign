@@ -68,7 +68,8 @@ public final class MediaTools {
             throw new IOException("Blocked URL: " + source);
         }
         FilteringProxy.apply(builder, source);
-        final Process process = builder.redirectErrorStream(false).start();
+        // 1 枚取り出すだけなので、1 分で終わらなければ止める
+        final Process process = Ffmpeg.start(builder.redirectErrorStream(false), 60);
         process.getOutputStream().close();
         MediaPlayer.drain(process.getErrorStream(), null);
 
@@ -107,7 +108,7 @@ public final class MediaTools {
                     file.getAbsolutePath()
             )));
             FilteringProxy.apply(builder, file.getAbsolutePath());
-            final Process process = builder.redirectErrorStream(true).start();
+            final Process process = Ffmpeg.start(builder.redirectErrorStream(true), 60);
             process.getOutputStream().close();
             final ByteArrayOutputStream output = new ByteArrayOutputStream();
             final InputStream input = process.getInputStream();
@@ -115,7 +116,8 @@ public final class MediaTools {
                 final byte[] buffer = new byte[4096];
                 int read;
                 while ((read = input.read(buffer)) >= 0) {
-                    output.write(buffer, 0, read);
+                    // 種類を見るだけなので、多すぎる出力は使わない
+                    if (output.size() < 1024 * 1024) output.write(buffer, 0, read);
                 }
             } finally {
                 input.close();
