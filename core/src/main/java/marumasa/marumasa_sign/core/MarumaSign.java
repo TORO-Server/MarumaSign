@@ -104,11 +104,44 @@ public final class MarumaSign {
 
     public static void tick() {
         if (platform == null) return;
-        releasePending();
-        if (platform.isInWorld()) loader.pump(config.getMaxThreads());
-        signs.tick();
-        ui.tick();
+        // tick の中の例外が外に出ると、古いバージョンではゲームが落ちる。1 つの処理が失敗しても、ほかの処理は続ける
+        try {
+            releasePending();
+        } catch (RuntimeException e) {
+            reportOnce("releasing textures", e);
+        }
+        try {
+            if (platform.isInWorld()) loader.pump(config.getMaxThreads());
+            signs.tick();
+        } catch (RuntimeException e) {
+            reportOnce("updating signs", e);
+        }
+        try {
+            ui.tick();
+        } catch (RuntimeException e) {
+            reportOnce("updating the window", e);
+        }
         if (selfTest != null) selfTest.tick();
+    }
+
+    // 記録した例外の目印 (場所、種類、投げた位置)。毎 tick や毎フレーム同じ例外が出ても、記録は 1 回だけにする
+    private static final java.util.Set<String> reported = new java.util.HashSet<String>();
+
+    /**
+     * ゲームから呼ばれる処理 (tick、描画、入力) の中で出た例外を記録する。同じものは 1 回だけ記録する。
+     * 各バージョンの実装も、ゲームに例外を渡さないために使う。
+     *
+     * @param where 何をしているときか (記録に書く)
+     */
+    public static void reportOnce(String where, Throwable error) {
+        final StackTraceElement[] trace = error.getStackTrace();
+        final String key = where + "|" + error.getClass().getName() + "|" + (trace.length > 0 ? trace[0] : "");
+        synchronized (reported) {
+            // 種類が増え続けても、記録の目印でメモリを使い切らないようにする
+            if (reported.size() >= 256) reported.clear();
+            if (!reported.add(key)) return;
+        }
+        LOGGER.error("Error while " + where, error);
     }
 
     // 画面を開くキーが押されたとき
@@ -121,7 +154,13 @@ public final class MarumaSign {
      * 看板の文字列に対応する画像を返す。MarumaSign の看板でなければ null。
      */
     public static SignImage sign(String text) {
-        final SignImage image = signs == null ? null : signs.get(text);
+        SignImage image = null;
+        try {
+            image = signs == null ? null : signs.get(text);
+        } catch (RuntimeException e) {
+            // 誰でも書ける看板の文字のせいで、描画の途中でゲームが落ちないようにする
+            reportOnce("looking up a sign", e);
+        }
         if (selfTest != null) selfTest.onLookup(image != null);
         return image;
     }
@@ -134,10 +173,15 @@ public final class MarumaSign {
     public static SignImage itemSign(String[] rawLines) {
         if (signs == null || rawLines == null) return null;
         final StringBuilder text = new StringBuilder();
-        for (String raw : rawLines) {
-            text.append(SignText.plain(raw));
+        try {
+            for (String raw : rawLines) {
+                text.append(SignText.plain(raw));
+            }
+            return signs.get(text.toString());
+        } catch (RuntimeException e) {
+            reportOnce("looking up a sign item", e);
+            return null;
         }
-        return signs.get(text.toString());
     }
 
     public static void drawn(SignImage image) {
@@ -159,7 +203,13 @@ public final class MarumaSign {
      * そのときはゲームにクリックを渡さず、キーも離されたことにする (押し続けてブロックを置いたりしないように)。
      */
     public static boolean useClicked() {
-        return signs != null && signs.pdfControls().click();
+        try {
+            return signs != null && signs.pdfControls().click();
+        } catch (RuntimeException e) {
+            // 失敗したときは、クリックをゲームに渡す
+            reportOnce("turning a page", e);
+            return false;
+        }
     }
 
     // ---------- 看板への書き込み ----------

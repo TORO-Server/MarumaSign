@@ -2,11 +2,16 @@ package marumasa.marumasa_sign.adapter;
 
 import com.mojang.blaze3d.platform.NativeImage;
 import marumasa.marumasa_sign.core.MarumaSign;
+import marumasa.marumasa_sign.core.util.Reflect;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.renderer.RenderType;
 import net.minecraft.client.renderer.texture.DynamicTexture;
+import net.minecraft.client.renderer.texture.TextureManager;
 import net.minecraft.resources.ResourceLocation;
 
+import java.lang.reflect.Field;
+import java.lang.reflect.Modifier;
+import java.util.Map;
 import java.util.concurrent.atomic.AtomicInteger;
 
 /**
@@ -15,6 +20,8 @@ import java.util.concurrent.atomic.AtomicInteger;
 final class Tex {
 
     private static final AtomicInteger nextId = new AtomicInteger();
+    // TextureManager の、名前からテクスチャを引く表
+    private static Field texturesField;
 
     final ResourceLocation id;
     private final DynamicTexture texture;
@@ -53,6 +60,32 @@ final class Tex {
     }
 
     void release(Minecraft mc) {
-        mc.getTextureManager().release(id);
+        final TextureManager manager = mc.getTextureManager();
+        manager.release(id);
+        // 古いバージョンの release は OpenGL のテクスチャを消すだけで、表から外さず、画素 (Java の外のメモリ) も解放しない。
+        // そのままでは、看板を読み込み直すたびに (使われなくなった看板は 5 分で消して、また見えたら読み込み直す) メモリが増え続けるので、
+        // 表から外して閉じる。外して閉じるようになったバージョンでは、どちらも何もしない (閉じたものを閉じても何も起きない)
+        forget(manager);
+        texture.close();
+    }
+
+    // テクスチャを TextureManager の表から外す
+    private void forget(TextureManager manager) {
+        if (texturesField == null) {
+            // 同じ型の表がほかにもあるので、このテクスチャが入っているもので見分ける
+            for (Field field : TextureManager.class.getDeclaredFields()) {
+                if (Modifier.isStatic(field.getModifiers()) || !Map.class.isAssignableFrom(field.getType())) continue;
+                field.setAccessible(true);
+                final Map<?, ?> map = Reflect.get(field, manager);
+                if (map != null && map.get(id) == texture) {
+                    texturesField = field;
+                    break;
+                }
+            }
+            // release が表から外すバージョンでは見つからない
+            if (texturesField == null) return;
+        }
+        final Map<?, ?> map = Reflect.get(texturesField, manager);
+        if (map != null && map.get(id) == texture) map.remove(id);
     }
 }

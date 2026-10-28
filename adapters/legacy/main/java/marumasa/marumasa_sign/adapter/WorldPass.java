@@ -45,32 +45,36 @@ public final class WorldPass {
         final List<?> tileEntities = Mc.tileEntities();
         boolean lightmap = false;
         boolean shaders = false;
-        for (int i = 0; i < tileEntities.size(); i++) {
-            final Object tileEntity = tileEntities.get(i);
-            if (!(tileEntity instanceof TileEntitySign)) continue;
-            final TileEntitySign sign = (TileEntitySign) tileEntity;
-            final SignImage image = SignDraw.find(sign);
-            if (image == null) continue;
+        // 途中で例外が出ても、切り替えた描画の状態は元に戻す
+        try {
+            for (int i = 0; i < tileEntities.size(); i++) {
+                final Object tileEntity = tileEntities.get(i);
+                if (!(tileEntity instanceof TileEntitySign)) continue;
+                final TileEntitySign sign = (TileEntitySign) tileEntity;
+                final SignImage image = SignDraw.find(sign);
+                if (image == null) continue;
 
-            // カメラから見た位置
-            final double x = Mc.x(sign) - TileEntityRendererDispatcher.staticPlayerX;
-            final double y = Mc.y(sign) - TileEntityRendererDispatcher.staticPlayerY;
-            final double z = Mc.z(sign) - TileEntityRendererDispatcher.staticPlayerZ;
-            final double distance = image.viewDistance();
-            if (x * x + y * y + z * z > distance * distance) continue;
+                // カメラから見た位置
+                final double x = Mc.x(sign) - TileEntityRendererDispatcher.staticPlayerX;
+                final double y = Mc.y(sign) - TileEntityRendererDispatcher.staticPlayerY;
+                final double z = Mc.z(sign) - TileEntityRendererDispatcher.staticPlayerZ;
+                final double distance = image.viewDistance();
+                if (x * x + y * y + z * z > distance * distance) continue;
 
-            if (!lightmap) {
-                readCamera();
-                Mc.enableLightmap();
-                lightmap = true;
-                // 影 Mod が有効なら、ブロックエンティティ用のシェーダーで描く
-                shaders = ShaderHooks.begin();
+                if (!lightmap) {
+                    readCamera();
+                    Mc.enableLightmap();
+                    lightmap = true;
+                    // 影 Mod が有効なら、ブロックエンティティ用のシェーダーで描く
+                    shaders = ShaderHooks.begin();
+                }
+                // 看板の位置の明るさで描く
+                Mc.applyLight(sign);
+                SignDraw.draw(image, sign, x, y, z, (float) (cameraX - x), (float) (cameraY - y), (float) (cameraZ - z));
             }
-            // 看板の位置の明るさで描く
-            Mc.applyLight(sign);
-            SignDraw.draw(image, sign, x, y, z, (float) (cameraX - x), (float) (cameraY - y), (float) (cameraZ - z));
+        } finally {
+            if (shaders) ShaderHooks.end();
+            if (lightmap) Mc.disableLightmap();
         }
-        if (shaders) ShaderHooks.end();
-        if (lightmap) Mc.disableLightmap();
     }
 }
