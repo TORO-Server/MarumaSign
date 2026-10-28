@@ -412,14 +412,12 @@ PDF の表示に使う表 (`core/src/main/resources/marumasa_sign/pdf`) は、`t
 - `encodings.txt` `glyphlist.txt.gz` `afm.txt.gz` `cmaps.bin.gz`: `python3 tools/pdfdata/gen_pdf_data.py <元のフォルダ>` (元のフォルダに置くものは道具の先頭に書いてあります)
 - `cmyk.lut`: `java tools/pdfdata/CmykLut.java <ISO Coated v2 300% (ECI) の ICC プロファイル> <出力先>`
 
-### 取り込んでいるソースコード
+### 取り込んでいるデータ
 
-次のライブラリのコードを、Java に書き直して (またはそのまま) `core` に取り込んでいます。
-ライセンスの全文は jar の `marumasa_sign/licenses` にあります。
+次の表 (データ) を `core` に取り込んでいます。ライセンスの全文は jar の `marumasa_sign/licenses` にあります。
 
-| ライブラリ | ライセンス | 使っているところ |
+| データ | ライセンス | 使っているところ |
 | --- | --- | --- |
-| [openize-drako-java](https://github.com/openize-com/openize-drako-java) | MIT | Draco の展開 (`core/gltf/draco`) |
 | [minecraft-data](https://github.com/PrismarineJS/minecraft-data) | MIT | 構造物の、古いブロックの番号と統合版のブロックの対応表 (`marumasa_sign/structure/legacy.txt.gz`, `bedrock.txt.gz`) |
 | [Adobe Glyph List](https://github.com/adobe-type-tools/agl-aglfn) | BSD 3-Clause | PDF のグリフの名前と Unicode の対応 (`marumasa_sign/pdf/glyphlist.txt.gz`) |
 | [Adobe CMap resources](https://github.com/adobe-type-tools/cmap-resources) | BSD 3-Clause | PDF の日本語・中国語・韓国語の定義済みの CMap (`marumasa_sign/pdf/cmaps.bin.gz`) |
@@ -428,15 +426,23 @@ PDF の表示に使う表 (`core/src/main/resources/marumasa_sign/pdf`) は、`t
 
 配布する jar には、ライブラリ (第三者のコード) を同梱していません。PDF の読み込みと描画 (`core/pdf`)、記録 (`SafeLog`)、
 配布物の組み立て (`dist` のパッケージ名の書き換え) は、それぞれ Apache PDFBox 2.0、Log4j、ASM を参考にした独自の実装です。
-WebP、meshopt、BC6H / BC7、KTX2 の ETC1S / UASTC の展開は、それぞれの仕様書 (RFC 6386、RFC 9649、KHR_meshopt_compression、
-Khronos Data Format Specification、KTX 2.0) から書いた独自の実装です (以前は TwelveMonkeys ImageIO、meshoptimizer、bcdec、
-Basis Universal を移植していました)。
+WebP、Draco、meshopt、BC6H / BC7、KTX2 の ETC1S / UASTC の展開は、それぞれの仕様書 (RFC 6386、RFC 9649、Draco Bitstream
+Specification、KHR_meshopt_compression、Khronos Data Format Specification、KTX 2.0) から書いた独自の実装です
+(以前は TwelveMonkeys ImageIO、openize-drako-java、meshoptimizer、bcdec、Basis Universal を移植していました)。
 参考にしたライブラリにあった次の問題は、独自の実装では起きないようにしています。
 
 - PDF の中の ICC プロファイルをネイティブの LCMS に渡すこと (細工したプロファイルによるメモリ破壊の危険) → 渡さない
 - Type 1 フォントの seac (アクセント付きの文字) の入れ子でスタックを使い切ること → 入れ子を受け付けない
 - CMap の範囲をすべての文字に展開してメモリを使うこと → 範囲のまま持つ
 - 1 ページを描く時間と命令の数に上限がないこと → 上限を設けた (CI の `pdfFuzz` で、壊したファイルでも止まることを毎回確かめます)
+- 座標が極端な道で、Java 8 の Java2D が 1 つの道に数十秒かかること → 画面から遠く伸びる部分を、渡す前に切り取る
+- WebP: 非可逆圧縮のループフィルターの強さと色差の量子化の誤り、正しいファイルで例外になること → 直した (libwebp と画素単位で一致)。
+  ハフマン符号の表のあふれ (CVE-2023-4863 と同じ種類) は、符号の長さが正しい木になるかを先に確かめて防ぐ
+- Draco: 正しいファイルの一部 (EdgeBreaker の速さ 0 - 1) で例外になること、法線の最後の桁の誤り、
+  65536 個以上の要素の識別子を見つけられないこと → 直した (Google の公式のデコーダと出力が一致)。
+  壊れた角や面の番号による範囲外の書き込み、宣言された数による巨大なメモリの確保、無限の繰り返しも防ぐ
+- meshopt、BC6H / BC7、ETC1S / UASTC: 仕様にない値 (使われていない形式の番号、書かれていない表の位置、データの終わりを越える読み込み) を
+  黙って使うこと → 読めないものとして扱う
 
 ## 貢献者
 
