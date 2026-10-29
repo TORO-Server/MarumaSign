@@ -151,8 +151,8 @@ final class Type0Font extends PdfFont {
         readWidths(cidFont.array("W2"), verticalRanges, 3);
         final String baseName = FontData.stripSubset(String.valueOf(dict.name("BaseFont")));
         glyphOrder = program == null && type2 && encodingValue instanceof PdfName
-                && ((PdfName) encodingValue).name.startsWith("Identity-") && cidToGid == null
-                && hasStandardGlyphOrder(baseName, dict.get("ToUnicode") == null)
+                && ((PdfName) encodingValue).name.startsWith("Identity-")
+                && hasStandardGlyphOrder(baseName, !(dict.get("ToUnicode") instanceof PdfStream))
                 ? glyphOrder(baseName.replace(" ", "").toLowerCase(Locale.ENGLISH))
                 : null;
     }
@@ -363,10 +363,7 @@ final class Type0Font extends PdfFont {
             if (cff != null && (cff.isCid() || program instanceof CffFont)) return cff.gidForCid(cid);
             // TrueType と、OpenType に入った CID の決まっていない CFF: CIDToGIDMap (なければ CID がそのまま GID)。
             // 仕様では TrueType のためのものだが、OpenType の CFF にも付けたものがある (poppler も使う)
-            if (cidToGid != null) {
-                final int p = 2 * cid;
-                return p + 1 < cidToGid.length ? ((cidToGid[p] & 0xFF) << 8) | (cidToGid[p + 1] & 0xFF) : 0;
-            }
+            if (cidToGid != null) return mappedGid(cid);
             return cff != null ? cff.gidForCid(cid) : cid;
         }
         // 代わりのフォントが同じ文字の集まりの CID フォントなら、CID でそのまま選べる
@@ -381,7 +378,8 @@ final class Type0Font extends PdfFont {
         if (glyphOrder != null && font instanceof UnicodeFont) {
             // ToUnicode に書いた文字を優先し、なければグリフの並びの表で文字に戻す (pdf.js と同じ)
             int standard = toUnicode(code(character), length(character));
-            if (standard <= 0) standard = glyphUnicode(glyphOrder, cid);
+            // CIDToGIDMap があれば、元のフォントのグリフの番号はその先
+            if (standard <= 0) standard = glyphUnicode(glyphOrder, cidToGid != null ? mappedGid(cid) : cid);
             final int gid = standard > 0 ? ((UnicodeFont) font).unicodeLookup(standard) : 0;
             if (gid > 0) return gid;
         }
@@ -390,10 +388,19 @@ final class Type0Font extends PdfFont {
         return 0;
     }
 
-    // 文字の Unicode: ToUnicode を優先し、なければ文字の集まりの UCS2 の表
+    // CIDToGIDMap で CID を GID にしたもの
+    private int mappedGid(int cid) {
+        final int p = 2 * cid;
+        return p + 1 < cidToGid.length ? ((cidToGid[p] & 0xFF) << 8) | (cidToGid[p + 1] & 0xFF) : 0;
+    }
+
+    // 文字の Unicode: ToUnicode を優先し、なければ文字の集まりの UCS2 の表。
+    // ToUnicode が (ストリームではなく) Identity-H という名前のものは、文字のコードを Unicode とみなす (pdf.js と同じ)
     private int unicode(int code, int length, int cid) {
         final int mapped = toUnicode(code, length);
         if (mapped > 0) return mapped;
+        final Object toUnicodeValue = dict.get("ToUnicode");
+        if (toUnicodeValue instanceof PdfName && ((PdfName) toUnicodeValue).name.startsWith("Identity-") && code > 0) return code;
         if (!ucs2Read) {
             ucs2Read = true;
             if (registry != null && ordering != null) ucs2 = CMaps.predefined(registry + "-" + ordering + "-UCS2");

@@ -375,7 +375,9 @@ public final class PdfCheck {
                 // グリフの四角の左の辺 (x = 60) は、塗りの色 (赤) で描く
                 expectColor(image, 60, 100, 0xFF0000, "uncolored Type 3 stroke");
                 break;
-            case "standard-glyph-order": {
+            case "standard-glyph-order":
+            case "standard-glyph-order-cidtogidmap":
+            case "identity-tounicode-name": {
                 // CID 16 はハイフン: 字の高さの真ん中あたりに、途切れない横棒がある (四角の .notdef なら、辺は縦だけ)
                 boolean bar = false;
                 for (int y = 86; y <= 100; y++) {

@@ -208,6 +208,19 @@ final class PdfSamples {
         samples.add(new String[]{"shading-pattern-bbox", page("<< /Pattern << /P 5 0 R >> >>", "/Pattern cs /P scn 0 0 200 200 re f",
                 "<< /PatternType 2 /Shading " + backgroundShading + " >>")});
         samples.add(new String[]{"shading-sh-bbox", page("<< /Shading << /S 5 0 R >> >>", "/S sh", backgroundShading)});
+        // 埋め込まれていない Arial の CIDToGIDMap: CID 1 は、元のフォントのグリフ 16 (ハイフン)
+        samples.add(new String[]{"standard-glyph-order-cidtogidmap", page("<< /Font << /F1 5 0 R >> >>", "0 g BT /F1 100 Tf 50 80 Td <0001> Tj ET",
+                "<< /Type /Font /Subtype /Type0 /BaseFont /Arial /Encoding /Identity-H /DescendantFonts [6 0 R] >>",
+                "<< /Type /Font /Subtype /CIDFontType2 /BaseFont /Arial /CIDSystemInfo << /Registry (Adobe) /Ordering (Identity) /Supplement 0 >> "
+                        + "/FontDescriptor << /Type /FontDescriptor /FontName /Arial /Flags 32 /FontBBox [-665 -325 2000 1006] /ItalicAngle 0 "
+                        + "/Ascent 905 /Descent -212 /CapHeight 716 /StemV 80 >> /W [1 [333]] /CIDToGIDMap 7 0 R >>",
+                stream("", latin1(new byte[]{0, 0, 0, 16})))});
+        // ToUnicode が Identity-H という名前なら、文字のコードを Unicode とみなす: 002D はハイフン
+        samples.add(new String[]{"identity-tounicode-name", page("<< /Font << /F1 5 0 R >> >>", "0 g BT /F1 100 Tf 50 80 Td <002D> Tj ET",
+                "<< /Type /Font /Subtype /Type0 /BaseFont /FooSans /Encoding /Identity-H /DescendantFonts [6 0 R] /ToUnicode /Identity-H >>",
+                "<< /Type /Font /Subtype /CIDFontType2 /BaseFont /FooSans /CIDSystemInfo << /Registry (Adobe) /Ordering (Identity) /Supplement 0 >> "
+                        + "/FontDescriptor << /Type /FontDescriptor /FontName /FooSans /Flags 32 /FontBBox [-665 -325 2000 1006] /ItalicAngle 0 "
+                        + "/Ascent 905 /Descent -212 /CapHeight 716 /StemV 80 >> /W [45 [333]] >>")});
         // OpenType に入った、CID の決まっていない CFF を使う CIDFontType0 の CIDToGIDMap (CID 1 を、四角のグリフ 2 にする)
         samples.add(new String[]{"cff-cidtogidmap", page("<< /Font << /F1 5 0 R >> >>", "0 g BT /F1 100 Tf 50 50 Td <0001> Tj ET",
                 "<< /Type /Font /Subtype /Type0 /BaseFont /T /Encoding /Identity-H /DescendantFonts [6 0 R] >>",
