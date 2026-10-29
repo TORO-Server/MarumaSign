@@ -341,6 +341,29 @@ final class PdfSamples {
                 "<< /Type /FontDescriptor /FontName /L /Flags 4 /FontBBox [0 0 1000 1000] /ItalicAngle 0 /Ascent 1000 /Descent 0 "
                         + "/CapHeight 1000 /StemV 80 /FontFile2 8 0 R >>",
                 stream("", latin1(lsbTrueType())))});
+        // PNG の予測 (Sub) の 1 画素のバイト数は切り上げ: RGB の 4 ビットは 12 ビットなので 2 バイト前を足す。
+        // 赤 (F 0 0) と青 (0 0 F) の行 F0 00 0F を、Sub で F0 00 1F にしたもの
+        samples.add(new String[]{"png-predictor-rgb4", page("<< /XObject << /I 5 0 R >> >>", "q 200 0 0 200 0 0 cm /I Do Q",
+                stream("/Type /XObject /Subtype /Image /Width 2 /Height 1 /ColorSpace /DeviceRGB /BitsPerComponent 4 /Filter /FlateDecode "
+                                + "/DecodeParms << /Predictor 11 /Colors 3 /BitsPerComponent 4 /Columns 2 >>",
+                        latin1(deflate(new byte[]{1, (byte) 0xF0, 0, 0x1F}))))});
+        // EOL を行ごとに置いた G4 (EndOfLine true): 8 x 4 の画像の上の 2 行の右半分が黒
+        samples.add(new String[]{"ccitt-g4-eol", page("<< /XObject << /I 5 0 R >> >>", "q 200 0 0 200 0 0 cm /I Do Q",
+                stream("/Type /XObject /Subtype /Image /Width 8 /Height 4 /ColorSpace /DeviceGray /BitsPerComponent 1 /Filter /CCITTFaxDecode "
+                                + "/DecodeParms << /K -1 /Columns 8 /Rows 4 /EndOfLine true >>",
+                        latin1(new byte[]{0x00, 0x13, 0x6C, 0x00, 0x70, 0x01, 0x33, 0x0D, (byte) 0xC0, 0x06, 0x00, 0x20, 0x02})))});
+        // 圧縮したインライン画像の後ろに、ASCII でない文字の文字列がある: EI を見つけて、後ろの青い四角も描く
+        samples.add(new String[]{"inline-image-latin1", page("<< /Font << /F1 5 0 R >> >>",
+                "q 100 0 0 100 0 100 cm BI /W 2 /H 2 /CS /RGB /BPC 8 /F /Fl ID "
+                        + latin1(deflate(new byte[]{(byte) 255, 0, 0, (byte) 255, 0, 0, (byte) 255, 0, 0, (byte) 255, 0, 0}))
+                        + " EI Q BT /F1 12 Tf 10 10 Td (café) Tj ET 0 0 1 rg 100 0 100 100 re f",
+                "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>")});
+        // 90 の倍数でない Rotate (135) は回さない (pdf.js と poppler と同じ)。左下の赤い四角は左下に描く
+        samples.add(new String[]{"rotate-not-multiple-of-90", build(
+                "<< /Type /Catalog /Pages 2 0 R >>",
+                "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+                "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Rotate 135 /Contents 4 0 R >>",
+                stream("", "1 0 0 rg 0 0 100 50 re f"))});
         return samples;
     }
 
@@ -659,6 +682,11 @@ final class PdfSamples {
         samples.add(new String[]{"xref-prev-cycle", cyclic.replace("/Root 1 0 R >>", "/Root 1 0 R /Prev " + xrefAt + " >>")});
         // 巨大な数を並べた相互参照表
         samples.add(new String[]{"xref-huge-count", cyclic.replaceFirst("xref\n0 \\d+", "xref\n0 2000000000")});
+        // V 5 (256 ビット) なのに R 4 の暗号化の辞書: R 4 の鍵の作り方に 32 バイトの鍵の長さを渡して、範囲の外を読んでいた
+        final String padding = "(" + new String(new char[32]).replace('\0', 'A') + ")";
+        samples.add(new String[]{"encrypt-v5-r4", page("<< >>", "0 g", "<< /Filter /Standard /V 5 /R 4 /Length 256 /CF << /StdCF "
+                + "<< /CFM /AESV3 >> >> /StmF /StdCF /StrF /StdCF /O " + padding + " /U " + padding + " /P -4 >>")
+                .replace("/Root 1 0 R >>", "/Root 1 0 R /Encrypt 5 0 R /ID [<00> <00>] >>")});
         // CCITT の行の爆弾 (高さだけ巨大)
         samples.add(new String[]{"ccitt-rows", page("<< /XObject << /I 5 0 R >> >>", "q 100 0 0 100 0 0 cm /I Do Q",
                 stream("/Type /XObject /Subtype /Image /Width 65536 /Height 65536 /ImageMask true /Filter /CCITTFaxDecode /DecodeParms << /K -1 /Columns 65536 >>",

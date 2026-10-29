@@ -25,8 +25,8 @@ final class Predictor {
         final long rowBits = (long) colors * bits * columns;
         if (rowBits > (long) limit * 8) throw new IOException("Predictor row is too large");
         final int rowBytes = (int) ((rowBits + 7) / 8);
-        // 1 画素のバイト数 (1 バイトに満たなければ 1)
-        final int pixelBytes = Math.max(1, colors * bits / 8);
+        // 1 画素のバイト数 (端数は切り上げる。RGB の 4 ビットなら 12 ビットで 2 バイト。pdf.js と poppler と同じ)
+        final int pixelBytes = (colors * bits + 7) / 8;
         if (predictor == 2) return tiff(data, colors, bits, columns, rowBytes);
         return png(data, rowBytes, pixelBytes, limit);
     }

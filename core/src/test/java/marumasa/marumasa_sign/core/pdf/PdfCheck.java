@@ -494,6 +494,24 @@ public final class PdfCheck {
                 expect(gray(image, 60, 130) < 30, "left side bearing is ignored");
                 expect(gray(image, 130, 130) > 230, "glyph is drawn at xMin");
                 break;
+            case "png-predictor-rgb4":
+                // 2 バイト前を足せば、左は赤、右は青 (1 バイト前を足すと、左が赤紫になる)
+                expectColor(image, 50, 100, 0xFF0000, "left pixel of the PNG-predicted 4-bit RGB image");
+                expectColor(image, 150, 100, 0x0000FF, "right pixel of the PNG-predicted 4-bit RGB image");
+                break;
+            case "ccitt-g4-eol":
+                expectColor(image, 150, 25, 0x000000, "black run of the first G4 row after an EOL");
+                expectColor(image, 150, 75, 0x000000, "black run of the second G4 row after an EOL");
+                expectColor(image, 50, 25, 0xFFFFFF, "white run of the first G4 row");
+                expectColor(image, 150, 125, 0xFFFFFF, "white third G4 row");
+                break;
+            case "inline-image-latin1":
+                expectColor(image, 50, 50, 0xFF0000, "inline image");
+                expectColor(image, 150, 150, 0x0000FF, "rectangle after the inline image");
+                break;
+            case "rotate-not-multiple-of-90":
+                expectColor(image, 50, 175, 0xFF0000, "page with /Rotate 135 is rotated");
+                break;
             default:
                 throw new AssertionError("no check for " + name);
         }

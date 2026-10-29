@@ -132,8 +132,9 @@ public final class CcittFax {
                     if (tag < 0) break;
                     twoDimensional = tag == 0;
                 }
-            } else if (byteAlign) {
-                bitPosition = (bitPosition + 7) & ~7;
+            } else {
+                // G4: 行の前の EOL (EndOfLine が true のもの) を飛ばす。仕様では EndOfLine が false でも EOL を受け付ける
+                skipG4Eol(byteAlign);
             }
             if (bitPosition >= totalBits) break;
             final int count;
@@ -305,6 +306,25 @@ public final class CcittFax {
             if (allZero) bitPosition = aligned;
         }
         return 0;
+    }
+
+    /**
+     * G4 の行の前の EOL (11 個以上の 0 と 1) を飛ばす。2 次元の符号は 0 が 6 個までしか続かないので、EOL と取り違えない。
+     * バイト境界にそろえるもの (EncodedByteAlign) では、EOL は詰め物の後ろでバイト境界に終わる形か、
+     * バイト境界から始まる形 (次の行はそろえない) のどちらか。どちらでもなければ、行の始まりをバイト境界にそろえる。
+     */
+    private void skipG4Eol(boolean byteAlign) {
+        long p = bitPosition;
+        while (p < totalBits && bit(p) == 0) p++;
+        if (p < totalBits && p - bitPosition >= 11 && (!byteAlign || ((p + 1) & 7) == 0)) {
+            bitPosition = (int) (p + 1);
+            return;
+        }
+        if (!byteAlign) return;
+        bitPosition = (bitPosition + 7) & ~7;
+        p = bitPosition;
+        while (p < totalBits && bit(p) == 0) p++;
+        if (p < totalBits && p - bitPosition >= 11) bitPosition = (int) (p + 1);
     }
 
     private int bit(long position) {

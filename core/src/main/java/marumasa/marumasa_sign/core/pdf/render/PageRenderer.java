@@ -125,7 +125,9 @@ public final class PageRenderer {
         double[] crop = page.cropBox != null ? intersect(page.cropBox, media) : media;
         if (crop == null || crop[2] - crop[0] <= 0 || crop[3] - crop[1] <= 0) crop = media;
         final double cropWidth = Math.max(1, crop[2] - crop[0]), cropHeight = Math.max(1, crop[3] - crop[1]);
-        final int rotate = ((page.rotate % 360) + 360) % 360 / 90 * 90;
+        // 90 の倍数でない Rotate (仕様の違反) は、pdf.js と poppler と同じく回さない
+        final int normalized = ((page.rotate % 360) + 360) % 360;
+        final int rotate = normalized % 90 == 0 ? normalized : 0;
         final boolean swap = rotate == 90 || rotate == 270;
         if (!(scale > 0) || scale == Double.POSITIVE_INFINITY) scale = 1;
         scale = Math.min(scale, Math.min(MAX_PAGE_SIDE / Math.max(cropWidth, cropHeight), Math.sqrt(MAX_PAGE_PIXELS / (cropWidth * cropHeight))));
