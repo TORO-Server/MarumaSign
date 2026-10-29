@@ -723,9 +723,9 @@ public final class PdfDocument implements Resolver {
         if (visited.put(node, Boolean.TRUE) != null) return;
         final PdfDict ownResources = node.dict("Resources");
         if (ownResources != null) resources = ownResources;
-        final double[] ownMedia = rectangle(node.array("MediaBox"));
+        final double[] ownMedia = pageBox(node.array("MediaBox"));
         if (ownMedia != null) mediaBox = ownMedia;
-        final double[] ownCrop = rectangle(node.array("CropBox"));
+        final double[] ownCrop = pageBox(node.array("CropBox"));
         if (ownCrop != null) cropBox = ownCrop;
         final Object ownRotate = node.get("Rotate");
         if (ownRotate instanceof Number) rotate = Objects.toInt((Number) ownRotate);
@@ -763,8 +763,8 @@ public final class PdfDocument implements Resolver {
             final Map<PdfDict, Boolean> seen = new IdentityHashMap<>();
             for (int depth = 0; node != null && depth < MAX_TREE_DEPTH && seen.put(node, Boolean.TRUE) == null; depth++) {
                 if (resources == null) resources = node.dict("Resources");
-                if (mediaBox == null) mediaBox = rectangle(node.array("MediaBox"));
-                if (cropBox == null) cropBox = rectangle(node.array("CropBox"));
+                if (mediaBox == null) mediaBox = pageBox(node.array("MediaBox"));
+                if (cropBox == null) cropBox = pageBox(node.array("CropBox"));
                 if (!rotateFound && node.get("Rotate") instanceof Number) {
                     rotate = Objects.toInt((Number) node.get("Rotate"));
                     rotateFound = true;
@@ -774,6 +774,13 @@ public final class PdfDocument implements Resolver {
             result.add(new Page(page, resources, mediaBox, cropBox, rotate));
         }
         return result;
+    }
+
+    // ページの箱 (MediaBox、CropBox)。[0 0 0 0] と書いたものは、ないものとして親から受け継ぐ (poppler と同じ。
+    // そのまま使うと、1 ポイントの大きさのページをページの画像いっぱいに拡大して描いていた)
+    private static double[] pageBox(PdfArray array) {
+        final double[] box = rectangle(array);
+        return box != null && box[0] == 0 && box[1] == 0 && box[2] == 0 && box[3] == 0 ? null : box;
     }
 
     // [x1 y1 x2 y2] を、左下と右上の順にそろえたもの。形が合わなければ null

@@ -539,6 +539,10 @@ public final class PdfCheck {
                 expectColor(image, 50, 100, 0xFFFFFF, "hidden optional content");
                 expectColor(image, 150, 100, 0xFFFFFF, "hidden optional content after the cross-reference table is rebuilt");
                 break;
+            case "zero-media-box":
+                expectColor(image, 50, 150, 0xFF0000, "red square at the bottom left");
+                expectColor(image, 150, 50, 0xFFFFFF, "page with MediaBox [0 0 0 0] is magnified");
+                break;
             case "rotate-not-multiple-of-90":
                 expectColor(image, 50, 175, 0xFF0000, "page with /Rotate 135 is rotated");
                 break;

@@ -369,6 +369,12 @@ final class PdfSamples {
                 stream("", "/OC /OC1 BDC 1 0 0 rg 0 0 100 200 re f EMC /G gs /OC /OC2 BDC 1 0 0 rg 100 0 100 200 re f EMC"),
                 "<< /Type /OCG /Name (A) >>",
                 "<< /Type /OCMD /OCGs [5 0 R] >>")});
+        // ページの MediaBox [0 0 0 0] は、ないものとして親の MediaBox (200 x 200) を使う。赤は左下の 4 分の 1 だけ
+        samples.add(new String[]{"zero-media-box", build(
+                "<< /Type /Catalog /Pages 2 0 R >>",
+                "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 200 200] >>",
+                "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 0 0] /Contents 4 0 R >>",
+                stream("", "1 0 0 rg 0 0 100 100 re f"))});
         // 90 の倍数でない Rotate (135) は回さない (pdf.js と poppler と同じ)。左下の赤い四角は左下に描く
         samples.add(new String[]{"rotate-not-multiple-of-90", build(
                 "<< /Type /Catalog /Pages 2 0 R >>",
