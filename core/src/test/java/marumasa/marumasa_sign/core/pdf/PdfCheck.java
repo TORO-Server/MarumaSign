@@ -468,6 +468,7 @@ public final class PdfCheck {
                 expect(gray(image, 100, 100) < 30, "CIDToGIDMap of an OpenType CFF font is ignored");
                 break;
             case "bare-cff-cid":
+            case "cff-in-fontfile":
                 // CID 2 は、そのまま四角のグリフ 2
                 expect(gray(image, 100, 100) < 30, "CID of a bare CFF font is not used as GID");
                 break;

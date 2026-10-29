@@ -280,6 +280,14 @@ final class PdfSamples {
                         + "/CapHeight 1000 /StemV 80 /FontFile 7 0 R >>",
                 stream("/Length1 " + type1[0].length + " /Length2 " + type1[1].length + " /Length3 0",
                         latin1(type1[0]) + latin1(type1[1])))});
+        // FontFile (Type 1 の鍵) に CFF を入れたもの: 中身の形で読む
+        samples.add(new String[]{"cff-in-fontfile", page("<< /Font << /F1 5 0 R >> >>", "0 g BT /F1 100 Tf 50 50 Td <0002> Tj ET",
+                "<< /Type /Font /Subtype /Type0 /BaseFont /T /Encoding /Identity-H /DescendantFonts [6 0 R] >>",
+                "<< /Type /Font /Subtype /CIDFontType0 /BaseFont /T /CIDSystemInfo << /Registry (Adobe) /Ordering (Identity) /Supplement 0 >> "
+                        + "/FontDescriptor 7 0 R /DW 1000 >>",
+                "<< /Type /FontDescriptor /FontName /T /Flags 4 /FontBBox [0 0 1000 1000] /ItalicAngle 0 /Ascent 1000 /Descent 0 "
+                        + "/CapHeight 1000 /StemV 80 /FontFile 8 0 R >>",
+                stream("", latin1(squareCff())))});
         // OpenType に入った、CID の決まっていない CFF を使う CIDFontType0 の CIDToGIDMap (CID 1 を、四角のグリフ 2 にする)
         samples.add(new String[]{"cff-cidtogidmap", page("<< /Font << /F1 5 0 R >> >>", "0 g BT /F1 100 Tf 50 50 Td <0001> Tj ET",
                 "<< /Type /Font /Subtype /Type0 /BaseFont /T /Encoding /Identity-H /DescendantFonts [6 0 R] >>",

@@ -139,37 +139,36 @@ public abstract class PdfFont {
         if (descriptor == null) return null;
         try {
             final PdfStream type1 = descriptor.stream("FontFile");
-            if (type1 != null) {
-                final byte[] data = type1.decode(MAX_FONT_FILE);
-                final int length1 = type1.dict.integer("Length1", 0);
-                final int length2 = type1.dict.integer("Length2", 0);
-                // Length1 は、平文の部分の最後 (eexec の後) を指すはず。違えば (間違った値のこともある) 全体から探す
-                if (length1 > 0 && length2 > 0 && length1 + (long) length2 <= data.length && data.length > 0 && (data[0] & 0xFF) != 0x80
-                        && endsWithEexec(data, length1)) {
-                    try {
-                        return Type1Font.parse(java.util.Arrays.copyOf(data, length1),
-                                java.util.Arrays.copyOfRange(data, length1, length1 + length2));
-                    } catch (RuntimeException e) {
-                        Strict.check(e);
-                        // Length1 / Length2 が間違っていることがある。全体から探す
-                    }
-                }
-                return Type1Font.parse(data);
-            }
+            final PdfStream trueType = descriptor.stream("FontFile2");
+            final PdfStream other = descriptor.stream("FontFile3");
+            final PdfStream stream = type1 != null ? type1 : trueType != null ? trueType : other;
+            if (stream == null) return null;
+            final byte[] data = stream.decode(MAX_FONT_FILE);
+            // 鍵と中身の形が違うもの (FontFile に CFF など) もあるので、中身の形で読む (poppler と同じ)。分からなければ鍵の形
+            final boolean sfnt = data.length >= 4 && (startsWith(data, "OTTO") || startsWith(data, "true") || startsWith(data, "ttcf")
+                    || (data[0] == 0 && data[1] == 1 && data[2] == 0 && data[3] == 0));
+            final boolean postScript = data.length >= 2 && (startsWith(data, "%!") || ((data[0] & 0xFF) == 0x80 && data[1] == 1));
+            final boolean cff = data.length >= 4 && data[0] == 1 && data[1] == 0 && (data[2] & 0xFF) >= 4;
             // TrueType の集合 (.ttc) をそのまま埋め込んだものもある。FontName のフォントを選ぶ
             final String name = descriptor.get("FontName") instanceof PdfName ? FontData.stripSubset(descriptor.name("FontName")) : null;
-            final PdfStream trueType = descriptor.stream("FontFile2");
-            if (trueType != null) return TrueTypeFont.parse(trueType.decode(MAX_FONT_FILE), name);
-            final PdfStream other = descriptor.stream("FontFile3");
-            if (other != null) {
-                final byte[] data = other.decode(MAX_FONT_FILE);
-                final String subtype = other.dict.name("Subtype");
-                if ("OpenType".equals(subtype) || (data.length >= 4 && (startsWith(data, "OTTO") || startsWith(data, "true")
-                        || startsWith(data, "ttcf") || (data[0] == 0 && data[1] == 1 && data[2] == 0 && data[3] == 0)))) {
-                    return TrueTypeFont.parse(data, name);
-                }
-                return new CffFont(new FontBytes(data), null);
+            if (sfnt || (!postScript && !cff && (stream == trueType || (stream == other && "OpenType".equals(other.dict.name("Subtype")))))) {
+                return TrueTypeFont.parse(data, name);
             }
+            if (cff || (!postScript && stream == other)) return new CffFont(new FontBytes(data), null);
+            final int length1 = stream.dict.integer("Length1", 0);
+            final int length2 = stream.dict.integer("Length2", 0);
+            // Length1 は、平文の部分の最後 (eexec の後) を指すはず。違えば (間違った値のこともある) 全体から探す
+            if (stream == type1 && length1 > 0 && length2 > 0 && length1 + (long) length2 <= data.length && data.length > 0
+                    && (data[0] & 0xFF) != 0x80 && endsWithEexec(data, length1)) {
+                try {
+                    return Type1Font.parse(java.util.Arrays.copyOf(data, length1),
+                            java.util.Arrays.copyOfRange(data, length1, length1 + length2));
+                } catch (RuntimeException e) {
+                    Strict.check(e);
+                    // Length1 / Length2 が間違っていることがある。全体から探す
+                }
+            }
+            return Type1Font.parse(data);
         } catch (IOException | RuntimeException e) {
             Strict.check(e);
             // 壊れたフォント: 代わりを使う
