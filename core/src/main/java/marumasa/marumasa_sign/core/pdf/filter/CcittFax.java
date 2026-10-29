@@ -104,8 +104,10 @@ public final class CcittFax {
         if (columns < 1 || columns > (1 << 20)) throw new IOException("Bad CCITT columns");
         if (rows <= 0 || rows > maxRows) rows = maxRows;
         final int rowBytes = (columns + 7) / 8;
-        if ((long) rowBytes * rows > limit) throw new IOException("CCITT image is too large");
-        final byte[] out = new byte[rowBytes * rows];
+        if ((long) rowBytes * maxRows > limit) throw new IOException("CCITT image is too large");
+        // Rows が画像の高さより少なくても、高さの分の行を作る (戻さない行は、読めなかった行と同じく白。poppler と同じ)。
+        // 短いデータを渡すと、足りない行は画素の値 0 (BlackIs1 が false なら黒) として描かれてしまう
+        final byte[] out = new byte[rowBytes * maxRows];
         final CcittFax decoder = new CcittFax(data);
         decoder.alignedEol = byteAlign && !endOfLine;
         decoder.run(out, columns, rows, k, byteAlign);

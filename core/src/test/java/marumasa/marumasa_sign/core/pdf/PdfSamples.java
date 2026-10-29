@@ -352,6 +352,11 @@ final class PdfSamples {
                 stream("/Type /XObject /Subtype /Image /Width 8 /Height 4 /ColorSpace /DeviceGray /BitsPerComponent 1 /Filter /CCITTFaxDecode "
                                 + "/DecodeParms << /K -1 /Columns 8 /Rows 4 /EndOfLine true >>",
                         latin1(new byte[]{0x00, 0x13, 0x6C, 0x00, 0x70, 0x01, 0x33, 0x0D, (byte) 0xC0, 0x06, 0x00, 0x20, 0x02})))});
+        // Rows (2) が高さ (4) より少ない G4: 戻さない下の 2 行は白 (黒く塗っていた)
+        samples.add(new String[]{"ccitt-rows-short", page("<< /XObject << /I 5 0 R >> >>", "q 200 0 0 200 0 0 cm /I Do Q",
+                stream("/Type /XObject /Subtype /Image /Width 8 /Height 4 /ColorSpace /DeviceGray /BitsPerComponent 1 /Filter /CCITTFaxDecode "
+                                + "/DecodeParms << /K -1 /Columns 8 /Rows 2 >>",
+                        latin1(new byte[]{0x36, (byte) 0xF0, 0x01, 0x00, 0x10})))});
         // 圧縮したインライン画像の後ろに、ASCII でない文字の文字列がある: EI を見つけて、後ろの青い四角も描く
         samples.add(new String[]{"inline-image-latin1", page("<< /Font << /F1 5 0 R >> >>",
                 "q 100 0 0 100 0 100 cm BI /W 2 /H 2 /CS /RGB /BPC 8 /F /Fl ID "

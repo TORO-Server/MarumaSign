@@ -528,6 +528,11 @@ public final class PdfCheck {
                 expectColor(image, 50, 25, 0xFFFFFF, "white run of the first G4 row");
                 expectColor(image, 150, 125, 0xFFFFFF, "white third G4 row");
                 break;
+            case "ccitt-rows-short":
+                expectColor(image, 150, 75, 0x000000, "black run of the second G4 row");
+                expectColor(image, 150, 125, 0xFFFFFF, "row after Rows of a CCITT image");
+                expectColor(image, 150, 175, 0xFFFFFF, "last row of a CCITT image with fewer Rows");
+                break;
             case "inline-image-latin1":
                 expectColor(image, 50, 50, 0xFF0000, "inline image");
                 expectColor(image, 150, 150, 0x0000FF, "rectangle after the inline image");
