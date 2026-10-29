@@ -241,6 +241,14 @@ final class PdfSamples {
                 "<< /Type /FontDescriptor /FontName /ABCDEF+L /Flags 4 /FontBBox [0 0 1000 1000] /ItalicAngle 0 /Ascent 1000 /Descent 0 "
                         + "/CapHeight 1000 /StemV 80 /FontFile2 8 0 R >>",
                 stream("", latin1(trueTypeCollection())))});
+        // Length1 が間違っている (eexec の途中を指す) Type 1 フォント: 平文の終わりを探し直す
+        final byte[][] type1 = type1Font();
+        samples.add(new String[]{"type1-bad-length1", page("<< /Font << /F1 5 0 R >> >>", "0 g BT /F1 100 Tf 50 50 Td (a) Tj ET",
+                "<< /Type /Font /Subtype /Type1 /BaseFont /T /FirstChar 97 /LastChar 97 /Widths [1000] /FontDescriptor 6 0 R >>",
+                "<< /Type /FontDescriptor /FontName /T /Flags 4 /FontBBox [0 0 1000 1000] /ItalicAngle 0 /Ascent 1000 /Descent 0 "
+                        + "/CapHeight 1000 /StemV 80 /FontFile 7 0 R >>",
+                stream("/Length1 " + (type1[0].length - 4) + " /Length2 " + type1[1].length + " /Length3 0",
+                        latin1(type1[0]) + latin1(type1[1])))});
         // OpenType に入った、CID の決まっていない CFF を使う CIDFontType0 の CIDToGIDMap (CID 1 を、四角のグリフ 2 にする)
         samples.add(new String[]{"cff-cidtogidmap", page("<< /Font << /F1 5 0 R >> >>", "0 g BT /F1 100 Tf 50 50 Td <0001> Tj ET",
                 "<< /Type /Font /Subtype /Type0 /BaseFont /T /Encoding /Identity-H /DescendantFonts [6 0 R] >>",
@@ -292,6 +300,56 @@ final class PdfSamples {
         // Private DICT: defaultWidthX 0
         write(out, 139, 20);
         return out.toByteArray();
+    }
+
+    /**
+     * a が 0 から 1000 の四角の Type 1 フォント。{平文の部分, eexec で暗号化した部分}。
+     */
+    static byte[][] type1Font() {
+        final String clear = "%!PS-AdobeFont-1.0: T 001\n11 dict begin\n/FontName /T def\n/FontType 1 def\n/PaintType 0 def\n"
+                + "/FontMatrix [0.001 0 0 0.001 0 0] readonly def\n/FontBBox {0 0 1000 1000} readonly def\n"
+                + "/Encoding 256 array 0 1 255 {1 index exch /.notdef put} for dup 97 /a put readonly def\n"
+                + "currentdict end\ncurrentfile eexec\n";
+        // hsbw 0 1000、rmoveto 0 0、hlineto 1000、vlineto 1000、hlineto -1000、closepath、endchar (初めの 4 バイトは捨てる分)
+        final byte[] square = charString(0, 0, 0, 0, 139, 250, 124, 13, 139, 139, 21, 250, 124, 6, 250, 124, 7, 254, 124, 6, 9, 14);
+        // .notdef: hsbw 0 0、endchar
+        final byte[] notdef = charString(0, 0, 0, 0, 139, 139, 13, 14);
+        final ByteArrayOutputStream secret = new ByteArrayOutputStream();
+        final String head = "dup /Private 8 dict dup begin\n/RD{string currentfile exch readstring pop}executeonly def\n"
+                + "/ND{noaccess def}executeonly def\n/NP{noaccess put}executeonly def\n/lenIV 4 def\n/Subrs 0 array ND\n"
+                + "2 index /CharStrings 2 dict dup begin\n/.notdef " + notdef.length + " RD ";
+        writeText(secret, head);
+        secret.write(notdef, 0, notdef.length);
+        writeText(secret, " ND\n/a " + square.length + " RD ");
+        secret.write(square, 0, square.length);
+        writeText(secret, " ND\nend\nend\nreadonly put\nnoaccess put\ndup /FontName get exch definefont pop\nmark currentfile closefile\n");
+        final byte[] plain = secret.toByteArray();
+        // eexec の暗号化 (初めに 4 バイトを足す)
+        final byte[] encrypted = new byte[plain.length + 4];
+        int r = 55665;
+        for (int i = 0; i < encrypted.length; i++) {
+            final int c = (i < 4 ? 0 : plain[i - 4] & 0xFF) ^ (r >> 8);
+            encrypted[i] = (byte) c;
+            r = ((c + r) * 52845 + 22719) & 0xFFFF;
+        }
+        return new byte[][]{clear.getBytes(StandardCharsets.ISO_8859_1), encrypted};
+    }
+
+    // Type 1 の文字の手順を暗号化したもの
+    private static byte[] charString(int... bytes) {
+        final byte[] out = new byte[bytes.length];
+        int r = 4330;
+        for (int i = 0; i < bytes.length; i++) {
+            final int c = bytes[i] ^ (r >> 8);
+            out[i] = (byte) c;
+            r = ((c + r) * 52845 + 22719) & 0xFFFF;
+        }
+        return out;
+    }
+
+    private static void writeText(ByteArrayOutputStream out, String text) {
+        final byte[] bytes = text.getBytes(StandardCharsets.ISO_8859_1);
+        out.write(bytes, 0, bytes.length);
     }
 
     /**

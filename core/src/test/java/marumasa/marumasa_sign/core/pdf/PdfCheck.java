@@ -444,6 +444,10 @@ public final class PdfCheck {
                 expectColor(image, 20, 100, 0xFFFFFF, "background of sh");
                 expectColor(image, 190, 100, 0xFFFFFF, "shading outside the BBox");
                 break;
+            case "type1-bad-length1":
+                // a は四角 (ページの 50 から 150)
+                expect(gray(image, 100, 100) < 30, "Type 1 font with a wrong Length1 is not drawn");
+                break;
             case "cff-cidtogidmap":
                 // CID 1 は CIDToGIDMap で四角のグリフ 2 (ページの 50 から 150)
                 expect(gray(image, 100, 100) < 30, "CIDToGIDMap of an OpenType CFF font is ignored");

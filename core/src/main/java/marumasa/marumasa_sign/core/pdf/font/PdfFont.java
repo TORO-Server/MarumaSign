@@ -138,7 +138,9 @@ public abstract class PdfFont {
                 final byte[] data = type1.decode(MAX_FONT_FILE);
                 final int length1 = type1.dict.integer("Length1", 0);
                 final int length2 = type1.dict.integer("Length2", 0);
-                if (length1 > 0 && length2 > 0 && length1 + (long) length2 <= data.length && data.length > 0 && (data[0] & 0xFF) != 0x80) {
+                // Length1 は、平文の部分の最後 (eexec の後) を指すはず。違えば (間違った値のこともある) 全体から探す
+                if (length1 > 0 && length2 > 0 && length1 + (long) length2 <= data.length && data.length > 0 && (data[0] & 0xFF) != 0x80
+                        && endsWithEexec(data, length1)) {
                     try {
                         return Type1Font.parse(java.util.Arrays.copyOf(data, length1),
                                 java.util.Arrays.copyOfRange(data, length1, length1 + length2));
@@ -168,6 +170,17 @@ public abstract class PdfFont {
             // 壊れたフォント: 代わりを使う
         }
         return null;
+    }
+
+    // data の初めの length バイトが、eexec と空白で終わるか
+    private static boolean endsWithEexec(byte[] data, int length) {
+        int end = Math.min(length, data.length);
+        while (end > 0 && (data[end - 1] == '\r' || data[end - 1] == '\n' || data[end - 1] == ' ' || data[end - 1] == '\t' || data[end - 1] == 0)) end--;
+        if (end < 5) return false;
+        for (int i = 0; i < 5; i++) {
+            if (data[end - 5 + i] != "eexec".charAt(i)) return false;
+        }
+        return true;
     }
 
     private static boolean startsWith(byte[] data, String text) {
