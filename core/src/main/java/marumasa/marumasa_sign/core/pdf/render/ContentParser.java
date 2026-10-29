@@ -40,6 +40,8 @@ final class ContentParser {
      */
     boolean next() {
         operands.clear();
+        // 引数の要素の数は、命令ごとに数える (引数を全部覚えておくので、合わせた数に上限がある)
+        parser.resetItems();
         inlineImage = null;
         while (true) {
             final Object token = lexer.next();
@@ -48,8 +50,9 @@ final class ContentParser {
             try {
                 value = parser.value(token, 0);
             } catch (IOException e) {
-                // 深すぎる入れ子など: この命令は捨てて続ける
+                // 深すぎる入れ子や、要素の多すぎる引数など: この命令は捨てて続ける
                 operands.clear();
+                parser.resetItems();
                 continue;
             }
             if (value instanceof Keyword && value != Keyword.ARRAY_END && value != Keyword.DICT_END
@@ -62,7 +65,10 @@ final class ContentParser {
                 return true;
             }
             if (value instanceof Keyword) continue;
-            if (operands.size() >= MAX_OPERANDS) operands.clear();
+            if (operands.size() >= MAX_OPERANDS) {
+                operands.clear();
+                parser.resetItems();
+            }
             operands.add(value);
         }
     }
@@ -125,22 +131,54 @@ final class ContentParser {
                 if (p + 1 < data.length && data[p] == 'E' && data[p + 1] == 'I') return (int) (start + length);
             }
         }
-        for (int i = start; i + 1 < data.length; i++) {
+        // 後ろを確かめるために読むバイトの合計の上限 ("EI" を大量に並べたデータで、長い時間止まらないように)
+        long budget = FOLLOWING_BUDGET;
+        for (int i = start; i + 1 < data.length && budget > 0; i++) {
             if (data[i] != 'E' || data[i + 1] != 'I') continue;
             final boolean before = i == start || Lexer.isWhitespace(data[i - 1]);
             final boolean after = i + 2 >= data.length || Lexer.isWhitespace(data[i + 2]) || Lexer.isDelimiter(data[i + 2]);
             if (!before || !after) continue;
-            if (followedByOperator(data, i + 2)) return i > start && Lexer.isWhitespace(data[i - 1]) ? i - 1 : i;
+            final int end = (int) Math.min(data.length, i + 2 + Math.min(FOLLOWING_BYTES, budget));
+            budget -= end - (i + 2) + 1;
+            if (followedByOperator(data, i + 2, end)) return i > start && Lexer.isWhitespace(data[i - 1]) ? i - 1 : i;
         }
         return data.length;
     }
 
-    // EI の後ろが、内容の命令として読める文字か (画像のデータの中の偶然の "EI" を除くため)
-    private static boolean followedByOperator(byte[] data, int position) {
-        final int end = Math.min(data.length, position + 64);
-        for (int i = position; i < end; i++) {
-            final int b = data[i] & 0xFF;
-            if (b > 0x7E || (b < 0x20 && !Lexer.isWhitespace(b))) return false;
+    // EI の後ろを確かめる範囲 (バイト) と、1 つのインライン画像で確かめに読むバイトの合計の上限
+    private static final int FOLLOWING_BYTES = 1024;
+    private static final long FOLLOWING_BUDGET = 8L * 1024 * 1024;
+
+    /**
+     * EI の後ろ (position から end まで) が、内容の命令として読めるか (画像のデータの中の偶然の "EI" を除くため)。
+     * 引数 (数、名前、文字列など) を読み飛ばし、最初の命令が命令らしい名前なら読めるとする。
+     * バイトの値だけで決めると、後ろの文字列の中の ASCII でない文字 ((café) Tj など) で本当の EI を見落とし、
+     * ページの残りをすべて画像のデータとして読み捨ててしまう (pdf.js も、後ろの語を読んで確かめる)。
+     */
+    private static boolean followedByOperator(byte[] data, int position, int end) {
+        final Lexer lexer = new Lexer(data, position, end);
+        int operands = 0;
+        while (true) {
+            final Object token = lexer.next();
+            // 内容の終わりまで引数しかない (EI が最後の命令) か、範囲の終わりまで引数が続いた (長い TJ の配列など)。
+            // 画像のデータは、引数として読める語が続かず、すぐに命令らしくない語になる
+            if (token == null) return end == data.length || operands >= 2;
+            if (!(token instanceof Keyword) || token == Lexer.NULL || token == Keyword.ARRAY_START || token == Keyword.ARRAY_END
+                    || token == Keyword.DICT_START || token == Keyword.DICT_END) {
+                operands++;
+                continue;
+            }
+            return isOperatorName(((Keyword) token).text);
+        }
+    }
+
+    // 内容の命令の名前の形 (1 から 3 文字。英字か ' か " で始まり、英字、数字 (d0 / d1)、* が続く)
+    private static boolean isOperatorName(String text) {
+        if (text.isEmpty() || text.length() > 3) return false;
+        for (int i = 0; i < text.length(); i++) {
+            final char c = text.charAt(i);
+            final boolean letter = (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z');
+            if (i == 0 ? !letter && c != '\'' && c != '"' : !letter && c != '*' && !(c >= '0' && c <= '9')) return false;
         }
         return true;
     }

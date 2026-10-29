@@ -9,6 +9,7 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.IdentityHashMap;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -32,6 +33,17 @@ public final class PdfDocument implements Resolver {
     private static final int MAX_TREE_DEPTH = 64;
     // オブジェクトストリームの中のオブジェクトの数の上限
     private static final int MAX_OBJECT_STREAM_ITEMS = 1 << 20;
+    // オブジェクトを読む途中で、別のオブジェクトを読む入れ子の深さの上限 (正しいファイルでは、/Length とオブジェクトストリームで数段)
+    private static final int MAX_LOADING_DEPTH = 64;
+    // 相互参照表に載せるオブジェクトの数の上限。小さなオブジェクトを何百万も並べたファイルで、表と読んだものの覚えだけで
+    // 1 GB を超えるメモリを使っていた (正しいファイルでは、64 MB のものでも 100 万個に届かない)
+    private static final int MAX_OBJECTS = 1 << 21;
+    // 覚えておくオブジェクトの要素 (配列と辞書の項目) の数の合計の上限。1 つの値の上限 (ObjectParser.MAX_TOTAL_ITEMS) の
+    // 近くまで要素を持つ値を、圧縮したオブジェクトストリームにいくつも入れると、80 KB ほどのファイルで数 GB を使えてしまう。
+    // 超えた分は覚えずに、使うたびに読み直す (正しいファイルでは、何千ページのものでも 10 万個ほど)
+    private static final long MAX_CACHED_ITEMS = 1 << 20;
+    // 覚えておく、戻したオブジェクトストリームの大きさの合計の上限 (超えたら、長く使っていないものから捨てる)
+    private static final long MAX_OBJECT_STREAM_BYTES = 64L * 1024 * 1024;
 
     // 相互参照表の 1 項目
     private static final class Entry {
@@ -92,8 +104,13 @@ public final class PdfDocument implements Resolver {
     private Object encryptReference;
 
     private final Map<Integer, Object> cache = new HashMap<>();
+    // 覚えているオブジェクトの要素の数の合計と、直前に読んだオブジェクトの要素の数
+    private long cachedItems;
+    private int lastItems;
     private final Set<Integer> loading = new HashSet<>();
-    private final Map<Integer, ObjectStream> objectStreams = new HashMap<>();
+    // 使った順に並べる (大きさの合計が上限を超えたら、長く使っていないものから捨てる)
+    private final Map<Integer, ObjectStream> objectStreams = new LinkedHashMap<>(16, 0.75f, true);
+    private long objectStreamBytes;
     private final Set<Integer> loadingObjectStreams = new HashSet<>();
     private List<Page> pages;
 
@@ -119,8 +136,7 @@ public final class PdfDocument implements Resolver {
                 // 作り直したトレーラーの /ID が違うと鍵が合わない。最初に合った鍵を使う
                 if (previous == null) throw e;
                 security = previous;
-                cache.clear();
-                objectStreams.clear();
+                forgetObjects();
             }
             pages = readPages();
         }
@@ -262,7 +278,7 @@ public final class PdfDocument implements Resolver {
                 if (number < 0 || number > Integer.MAX_VALUE) continue;
                 final boolean inUse = ((Keyword) kind).is("n");
                 // 0 番は必ず使われていない。新しい版の項目を優先する (先に読んだものを上書きしない)
-                if (!xref.containsKey((int) number)) {
+                if (!xref.containsKey((int) number) && xref.size() < MAX_OBJECTS) {
                     final long position = ((Number) offset).longValue();
                     xref.put((int) number, inUse && position > 0 ? new Entry(1, position, 0) : new Entry(0, 0, 0));
                 }
@@ -314,7 +330,7 @@ public final class PdfDocument implements Resolver {
                 final long second = field(rows, position + w0, w1);
                 final long third = field(rows, position + w0 + w1, w2);
                 final long number = (long) range[0] + i;
-                if (number < 0 || number > Integer.MAX_VALUE || xref.containsKey((int) number)) continue;
+                if (number < 0 || number > Integer.MAX_VALUE || xref.containsKey((int) number) || xref.size() >= MAX_OBJECTS) continue;
                 if (type == 1) {
                     xref.put((int) number, new Entry(1, second, 0));
                 } else if (type == 2) {
@@ -343,8 +359,7 @@ public final class PdfDocument implements Resolver {
      */
     private void repair() throws IOException {
         repaired = true;
-        cache.clear();
-        objectStreams.clear();
+        forgetObjects();
         final Map<Integer, Entry> found = new HashMap<>();
         final List<Integer> trailers = new ArrayList<>();
         final List<Integer> objectStreamNumbers = new ArrayList<>();
@@ -355,7 +370,7 @@ public final class PdfDocument implements Resolver {
                 if (start >= 0) {
                     final Lexer lexer = new Lexer(data, start, i);
                     final Object number = lexer.next();
-                    if (number instanceof Integer && (Integer) number > 0) {
+                    if (number instanceof Integer && (Integer) number > 0 && (found.size() < MAX_OBJECTS || found.containsKey(number))) {
                         found.put((Integer) number, new Entry(1, start, 0));
                         // オブジェクトストリームと相互参照ストリームは、中を見る必要がある
                         if (startsWithin(i + 3, "/ObjStm", 256)) objectStreamNumbers.add((Integer) number);
@@ -372,13 +387,14 @@ public final class PdfDocument implements Resolver {
             try {
                 final ObjectStream stream = objectStream(number);
                 for (int k = 0; k < stream.numbers.length; k++) {
-                    if (!xref.containsKey(stream.numbers[k]) && stream.numbers[k] > 0) xref.put(stream.numbers[k], new Entry(2, number, k));
+                    if (!xref.containsKey(stream.numbers[k]) && stream.numbers[k] > 0 && xref.size() < MAX_OBJECTS) xref.put(stream.numbers[k], new Entry(2, number, k));
                 }
             } catch (IOException | RuntimeException e) {
                 // このオブジェクトストリームは使えない
             }
         }
         cache.clear();
+        cachedItems = 0;
         // トレーラー: 後ろのものほど新しい。/Root のあるものを合わせる
         PdfDict merged = null;
         for (int t : trailers) {
@@ -405,10 +421,17 @@ public final class PdfDocument implements Resolver {
             // トレーラーがない: /Type /Catalog のオブジェクトを探す
             if (merged == null) merged = new PdfDict(this);
             for (Map.Entry<Integer, Entry> entry : xref.entrySet()) {
+                final boolean cached = cache.containsKey(entry.getKey());
+                final long items = cachedItems;
                 final Object value = getObject(entry.getKey());
                 if (value instanceof PdfDict && ((PdfDict) value).isName("Type", "Catalog") && ((PdfDict) value).get("Pages") != null) {
                     merged.put("Root", new PdfRef(entry.getKey(), 0));
                     break;
+                }
+                // 探すために読んだだけのものは覚えない (すべてのオブジェクトを覚えると、メモリを多く使う)
+                if (!cached) {
+                    cache.remove(entry.getKey());
+                    cachedItems = items;
                 }
             }
         }
@@ -461,19 +484,36 @@ public final class PdfDocument implements Resolver {
      */
     public Object getObject(int number) {
         if (cache.containsKey(number)) return cache.get(number);
+        // 読んでいる途中のものを読む入れ子が深すぎる (/Length が別のストリームを指し、その /Length がまた別のストリームを
+        // 指すことを何万回も繰り返したものなど)。Java のスタックを使い切らないように、ここでは読まない (覚えもしない)
+        if (loading.size() >= MAX_LOADING_DEPTH) return null;
         // 読んでいる途中のものをまた読もうとした (参照の輪)
         if (!loading.add(number)) return null;
         Object value = null;
+        int items = 0;
         try {
+            lastItems = 0;
             value = load(number);
+            items = lastItems;
         } catch (IOException | RuntimeException e) {
             Strict.check(e);
             value = null;
         } finally {
             loading.remove(number);
         }
+        // 要素の多いものを覚えすぎない (上限を超えたものは、使うたびに読み直す)
+        if (value != null && cachedItems + items > MAX_CACHED_ITEMS) return value;
+        cachedItems += items;
         cache.put(number, value);
         return value;
+    }
+
+    // 読んだオブジェクトとオブジェクトストリームの覚えを、すべて捨てる
+    private void forgetObjects() {
+        cache.clear();
+        cachedItems = 0;
+        objectStreams.clear();
+        objectStreamBytes = 0;
     }
 
     private Object load(int number) throws IOException {
@@ -481,7 +521,7 @@ public final class PdfDocument implements Resolver {
         if (entry == null || (entry.type == 1 && locate(entry, number) < 0)) {
             // 表にない番号か、表の指す位置が違う: 表を作り直して探す (1 回だけ)
             if (repaired) return null;
-            repairNow();
+            repairMissing();
             entry = xref.get(number);
             if (entry == null) return null;
         }
@@ -503,6 +543,7 @@ public final class PdfDocument implements Resolver {
             if (start < 0 || start >= stream.data.length) return null;
             final ObjectParser parser = new ObjectParser(new Lexer(stream.data, (int) start, stream.data.length), this, true);
             final Object value = parser.next();
+            lastItems = parser.items();
             return value instanceof Keyword ? null : value;
         }
         if (entry.type != 1) return null;
@@ -518,6 +559,38 @@ public final class PdfDocument implements Resolver {
         // 位置が "%PDF-" より前の余計なバイトの分だけずれているファイルがある
         if (headerOffset > 0 && headerAt(position + headerOffset, number)) return position + headerOffset;
         return -1;
+    }
+
+    /**
+     * 読めた表にない番号 (どこからか参照だけが残ったものなど) や、表の指す位置が違うものを探すための作り直し。
+     * 作り直した表は、元の表で見つからないものにだけ使う。元の表の正しい項目まで置き換えると、
+     * オブジェクトストリームに入れて更新した新しい版より、前に直接書かれた古い版を選んでしまう
+     * (参照の切れた番号が 1 つあるだけの正しいファイルで、古い版のページを描いていた)。
+     * 読んだオブジェクトとトレーラーもそのまま使う (同じ辞書を読み直して別のものにすると、
+     * 表示しない層 (OCG) のように、辞書そのもので比べるものが合わなくなる)。
+     */
+    private void repairMissing() throws IOException {
+        final Map<Integer, Entry> original = xref;
+        final Map<Integer, Object> loaded = new HashMap<>(cache);
+        final Map<Integer, ObjectStream> streams = new LinkedHashMap<>(objectStreams);
+        final long items = cachedItems, streamBytes = objectStreamBytes;
+        final PdfDict saved = trailer;
+        repair();
+        for (Map.Entry<Integer, Entry> item : original.entrySet()) {
+            final Entry entry = item.getValue();
+            if (entry.type != 1 || locate(entry, item.getKey()) >= 0) xref.put(item.getKey(), entry);
+        }
+        cache.clear();
+        for (Map.Entry<Integer, Object> item : loaded.entrySet()) {
+            if (item.getValue() != null) cache.put(item.getKey(), item.getValue());
+        }
+        objectStreams.clear();
+        objectStreams.putAll(streams);
+        cachedItems = items;
+        objectStreamBytes = streamBytes;
+        // 元のトレーラーのカタログが見つかるなら、元のトレーラーを使う
+        final Object root = saved == null ? null : saved.raw("Root");
+        if (root instanceof PdfDict || (root instanceof PdfRef && xref.containsKey(((PdfRef) root).number))) trailer = saved;
     }
 
     private void repairNow() throws IOException {
@@ -562,6 +635,8 @@ public final class PdfDocument implements Resolver {
             });
         }
         final Object value = parser.next();
+        final int items = parser.items();
+        lastItems = items;
         if (value instanceof Keyword) return null;
         if (!(value instanceof PdfDict)) return value;
         if (!lexer.peekKeyword("stream")) return value;
@@ -577,6 +652,8 @@ public final class PdfDocument implements Resolver {
         if (useSecurity && !dict.isName("Type", "XRef") && !hasIdentityCrypt(dict)) {
             bytes = security.decryptStream(objectNumber, objectGeneration, bytes);
         }
+        // /Length を読んだときに、別のオブジェクトの数で上書きされている
+        lastItems = items;
         return new PdfStream(dict, bytes);
     }
 
@@ -652,7 +729,15 @@ public final class PdfDocument implements Resolver {
                 offsets[i] = pairs.get(i)[1];
             }
             final ObjectStream result = new ObjectStream(numbers, offsets, decoded, first);
+            // 戻したデータの大きさの合計が上限を超えるなら、長く使っていないものから捨てる
+            // (展開すると 128 MB になるオブジェクトストリームをいくつも使うファイルで、メモリを使い切らないように)
+            final java.util.Iterator<ObjectStream> eldest = objectStreams.values().iterator();
+            while (eldest.hasNext() && objectStreamBytes + decoded.length > MAX_OBJECT_STREAM_BYTES) {
+                objectStreamBytes -= eldest.next().data.length;
+                eldest.remove();
+            }
             objectStreams.put(number, result);
+            objectStreamBytes += decoded.length;
             return result;
         } finally {
             loadingObjectStreams.remove(number);
@@ -670,8 +755,7 @@ public final class PdfDocument implements Resolver {
         final Object ids = trailer.get("ID");
         security = SecurityHandler.create((PdfDict) encrypt, SecurityHandler.firstId(ids instanceof PdfArray ? (PdfArray) ids : null));
         // 暗号化の辞書を読む前に読んだオブジェクトは、復号されていないので読み直す
-        cache.clear();
-        objectStreams.clear();
+        forgetObjects();
     }
 
     // ---------- ページ ----------
@@ -694,9 +778,9 @@ public final class PdfDocument implements Resolver {
         if (visited.put(node, Boolean.TRUE) != null) return;
         final PdfDict ownResources = node.dict("Resources");
         if (ownResources != null) resources = ownResources;
-        final double[] ownMedia = rectangle(node.array("MediaBox"));
+        final double[] ownMedia = pageBox(node.array("MediaBox"));
         if (ownMedia != null) mediaBox = ownMedia;
-        final double[] ownCrop = rectangle(node.array("CropBox"));
+        final double[] ownCrop = pageBox(node.array("CropBox"));
         if (ownCrop != null) cropBox = ownCrop;
         final Object ownRotate = node.get("Rotate");
         if (ownRotate instanceof Number) rotate = Objects.toInt((Number) ownRotate);
@@ -722,8 +806,17 @@ public final class PdfDocument implements Resolver {
         java.util.Collections.sort(numbers);
         for (int number : numbers) {
             if (result.size() >= MAX_PAGES) break;
+            final boolean cached = cache.containsKey(number);
+            final long items = cachedItems;
             final Object value = getObject(number);
-            if (!(value instanceof PdfDict) || !((PdfDict) value).isName("Type", "Page")) continue;
+            if (!(value instanceof PdfDict) || !((PdfDict) value).isName("Type", "Page")) {
+                // 探すために読んだだけのものは覚えない (すべてのオブジェクトを覚えると、メモリを多く使う)
+                if (!cached) {
+                    cache.remove(number);
+                    cachedItems = items;
+                }
+                continue;
+            }
             final PdfDict page = (PdfDict) value;
             // 親から受け継ぐ値も、たどれる範囲で集める
             PdfDict resources = null;
@@ -734,8 +827,8 @@ public final class PdfDocument implements Resolver {
             final Map<PdfDict, Boolean> seen = new IdentityHashMap<>();
             for (int depth = 0; node != null && depth < MAX_TREE_DEPTH && seen.put(node, Boolean.TRUE) == null; depth++) {
                 if (resources == null) resources = node.dict("Resources");
-                if (mediaBox == null) mediaBox = rectangle(node.array("MediaBox"));
-                if (cropBox == null) cropBox = rectangle(node.array("CropBox"));
+                if (mediaBox == null) mediaBox = pageBox(node.array("MediaBox"));
+                if (cropBox == null) cropBox = pageBox(node.array("CropBox"));
                 if (!rotateFound && node.get("Rotate") instanceof Number) {
                     rotate = Objects.toInt((Number) node.get("Rotate"));
                     rotateFound = true;
@@ -745,6 +838,13 @@ public final class PdfDocument implements Resolver {
             result.add(new Page(page, resources, mediaBox, cropBox, rotate));
         }
         return result;
+    }
+
+    // ページの箱 (MediaBox、CropBox)。[0 0 0 0] と書いたものは、ないものとして親から受け継ぐ (poppler と同じ。
+    // そのまま使うと、1 ポイントの大きさのページをページの画像いっぱいに拡大して描いていた)
+    private static double[] pageBox(PdfArray array) {
+        final double[] box = rectangle(array);
+        return box != null && box[0] == 0 && box[1] == 0 && box[2] == 0 && box[3] == 0 ? null : box;
     }
 
     // [x1 y1 x2 y2] を、左下と右上の順にそろえたもの。形が合わなければ null

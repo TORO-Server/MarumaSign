@@ -16,6 +16,12 @@ public final class Lexer {
 
     public static final Keyword NULL = new Keyword("null");
 
+    // 名前と命令の語の長さの上限 (バイト)。それより後ろは読み進めるが、覚えない。仕様の実装上の限界は名前が 127 バイトで、
+    // 命令は数文字。100 MB を超える 1 つの語を圧縮して入れると、Java 8 では文字列 (1 文字 2 バイト) と作業用の領域で
+    // 500 MB を超えるメモリを使っていた
+    private static final int MAX_NAME = 65536;
+    private static final int MAX_KEYWORD = 256;
+
     private static final boolean[] WHITESPACE = new boolean[256];
     private static final boolean[] DELIMITER = new boolean[256];
 
@@ -141,7 +147,7 @@ public final class Lexer {
                 position++;
                 continue;
             }
-            final String text = new String(data, start, position - start, StandardCharsets.ISO_8859_1);
+            final String text = new String(data, start, Math.min(position - start, MAX_KEYWORD), StandardCharsets.ISO_8859_1);
             if (text.equals("true")) return Boolean.TRUE;
             if (text.equals("false")) return Boolean.FALSE;
             if (text.equals("null")) return NULL;
@@ -229,11 +235,12 @@ public final class Lexer {
         final ByteArrayOutputStream bytes = new ByteArrayOutputStream(16);
         while (position < end && isRegular(data[position])) {
             final int b = data[position] & 0xFF;
+            final boolean keep = bytes.size() < MAX_NAME;
             if (b == '#' && position + 2 < end && hex(data[position + 1]) >= 0 && hex(data[position + 2]) >= 0) {
-                bytes.write(hex(data[position + 1]) * 16 + hex(data[position + 2]));
+                if (keep) bytes.write(hex(data[position + 1]) * 16 + hex(data[position + 2]));
                 position += 3;
             } else {
-                bytes.write(b);
+                if (keep) bytes.write(b);
                 position++;
             }
         }

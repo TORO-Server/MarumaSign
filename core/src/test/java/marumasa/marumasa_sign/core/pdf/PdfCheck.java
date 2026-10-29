@@ -162,6 +162,29 @@ public final class PdfCheck {
                 }
             }
         }
+        // バイト境界にそろえた EOL のない G3 (1 次元): 行は白 29 (00000010) と黒 1 で、前の行の後ろに 0 の詰め物が 5 個ある。
+        // 詰め物と白 29 の 0 が合わせて 11 個になるのを、EOL と取り違えてはいけない
+        final PdfDict aligned = new PdfDict(value -> value);
+        aligned.put("K", 0);
+        aligned.put("Columns", 30);
+        aligned.put("Rows", 4);
+        aligned.put("EncodedByteAlign", Boolean.TRUE);
+        final byte[] rows = CcittFax.decode(new byte[]{0x02, 0x40, 0x02, 0x40, 0x02, 0x40, 0x02, 0x40}, aligned, 30, 4, 1 << 20);
+        expectWhite29Black1(rows, "byte-aligned G3");
+        // EndOfLine なら、バイト境界にそろっていない EOL も EOL として読む (EncodedByteAlign と書いてあっても、そろえていない書き手)
+        aligned.put("EndOfLine", Boolean.TRUE);
+        expectWhite29Black1(CcittFax.decode(new byte[]{0x00, 0x10, 0x24, 0x00, 0x20, 0x48, 0x00, 0x40, (byte) 0x90, 0x00, (byte) 0x81, 0x20},
+                aligned, 30, 4, 1 << 20), "G3 with unaligned EOLs");
+    }
+
+    // 30 x 4 の画像の各行が、白 29 と黒 1 か
+    private static void expectWhite29Black1(byte[] rows, String what) {
+        for (int y = 0; y < 4; y++) {
+            for (int x = 0; x < 30; x++) {
+                final boolean black = ((rows[y * 4 + x / 8] >> (7 - x % 8)) & 1) == 0;
+                expect(black == (x == 29), what + " row " + y + " differs at " + x);
+            }
+        }
     }
 
     private static void jpeg() throws IOException {
@@ -493,6 +516,44 @@ public final class PdfCheck {
                 // 四角は原点 (x = 50) から 40 ポイントの幅
                 expect(gray(image, 60, 130) < 30, "left side bearing is ignored");
                 expect(gray(image, 130, 130) > 230, "glyph is drawn at xMin");
+                break;
+            case "png-predictor-rgb4":
+                // 2 バイト前を足せば、左は赤、右は青 (1 バイト前を足すと、左が赤紫になる)
+                expectColor(image, 50, 100, 0xFF0000, "left pixel of the PNG-predicted 4-bit RGB image");
+                expectColor(image, 150, 100, 0x0000FF, "right pixel of the PNG-predicted 4-bit RGB image");
+                break;
+            case "ccitt-g4-eol":
+                expectColor(image, 150, 25, 0x000000, "black run of the first G4 row after an EOL");
+                expectColor(image, 150, 75, 0x000000, "black run of the second G4 row after an EOL");
+                expectColor(image, 50, 25, 0xFFFFFF, "white run of the first G4 row");
+                expectColor(image, 150, 125, 0xFFFFFF, "white third G4 row");
+                break;
+            case "ccitt-rows-short":
+                expectColor(image, 150, 75, 0x000000, "black run of the second G4 row");
+                expectColor(image, 150, 125, 0xFFFFFF, "row after Rows of a CCITT image");
+                expectColor(image, 150, 175, 0xFFFFFF, "last row of a CCITT image with fewer Rows");
+                break;
+            case "short-image-data":
+                expectColor(image, 50, 75, 0x808080, "rows of an image with data");
+                expectColor(image, 50, 125, 0xFFFFFF, "rows of an image without data");
+                break;
+            case "inline-image-latin1":
+                expectColor(image, 50, 50, 0xFF0000, "inline image");
+                expectColor(image, 150, 150, 0x0000FF, "rectangle after the inline image");
+                break;
+            case "incremental-object-stream":
+                expectColor(image, 100, 100, 0x0000FF, "page updated in an object stream (an older revision is drawn)");
+                break;
+            case "hidden-layer-after-repair":
+                expectColor(image, 50, 100, 0xFFFFFF, "hidden optional content");
+                expectColor(image, 150, 100, 0xFFFFFF, "hidden optional content after the cross-reference table is rebuilt");
+                break;
+            case "zero-media-box":
+                expectColor(image, 50, 150, 0xFF0000, "red square at the bottom left");
+                expectColor(image, 150, 50, 0xFFFFFF, "page with MediaBox [0 0 0 0] is magnified");
+                break;
+            case "rotate-not-multiple-of-90":
+                expectColor(image, 50, 175, 0xFF0000, "page with /Rotate 135 is rotated");
                 break;
             default:
                 throw new AssertionError("no check for " + name);

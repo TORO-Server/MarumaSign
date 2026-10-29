@@ -64,6 +64,78 @@ final class PdfSamples {
     }
 
     /**
+     * 文字列と繰り返しの数を交互に並べたもの (text1, count1, text2, count2, ...) をつないだデータを、全体を配列に作らずに圧縮する。
+     * 展開すると 100 MB を超えるデータでも、試験のメモリを使わずに作れる。
+     */
+    static byte[] deflateRepeated(Object... parts) {
+        final Deflater deflater = new Deflater(6);
+        final ByteArrayOutputStream out = new ByteArrayOutputStream();
+        final byte[] buffer = new byte[65536];
+        for (int i = 0; i + 1 < parts.length; i += 2) {
+            final byte[] unit = ((String) parts[i]).getBytes(StandardCharsets.ISO_8859_1);
+            long remaining = (Integer) parts[i + 1];
+            // 64 KB ほどの塊にまとめて渡す
+            final int perChunk = Math.max(1, 65536 / Math.max(1, unit.length));
+            final byte[] chunk = new byte[perChunk * unit.length];
+            for (int k = 0; k < perChunk; k++) System.arraycopy(unit, 0, chunk, k * unit.length, unit.length);
+            while (remaining > 0) {
+                final int n = (int) Math.min(perChunk, remaining);
+                deflater.setInput(chunk, 0, n * unit.length);
+                while (!deflater.needsInput()) out.write(buffer, 0, deflater.deflate(buffer));
+                remaining -= n;
+            }
+        }
+        deflater.finish();
+        while (!deflater.finished()) out.write(buffer, 0, deflater.deflate(buffer));
+        deflater.end();
+        return out.toByteArray();
+    }
+
+    /**
+     * 1 ページの PDF で、オブジェクトストリーム (5 番から) の中のオブジェクト (100 番から) を、ページの ExtGState から使うもの。
+     * 相互参照ストリームで書く。streams[i] は i 番目のオブジェクトストリームの、圧縮したデータ (中は {@code count} 個のオブジェクト)。
+     */
+    static String objectStreamPage(int[] counts, int first, byte[]... streams) {
+        final StringBuilder gs = new StringBuilder();
+        final StringBuilder content = new StringBuilder();
+        int total = 0;
+        for (int count : counts) total += count;
+        for (int i = 0; i < total; i++) {
+            gs.append(" /G").append(i).append(' ').append(100 + i).append(" 0 R");
+            content.append("/G").append(i).append(" gs ");
+        }
+        content.append("0 g 0 0 10 10 re f");
+        final StringBuilder out = new StringBuilder("%PDF-1.7\n");
+        final List<Integer> offsets = new ArrayList<>();
+        final List<String> objects = new ArrayList<>();
+        objects.add("<< /Type /Catalog /Pages 2 0 R >>");
+        objects.add("<< /Type /Pages /Kids [3 0 R] /Count 1 >>");
+        objects.add("<< /Type /Page /Parent 2 0 R /MediaBox [0 0 100 100] /Contents 4 0 R /Resources << /ExtGState <<" + gs + " >> >> >>");
+        objects.add(stream("", content.toString()));
+        for (int i = 0; i < streams.length; i++) {
+            objects.add(stream("/Type /ObjStm /N " + counts[i] + " /First " + first + " /Filter /FlateDecode", latin1(streams[i])));
+        }
+        for (int i = 0; i < objects.size(); i++) {
+            offsets.add(out.length());
+            out.append(i + 1).append(" 0 obj\n").append(objects.get(i)).append("\nendobj\n");
+        }
+        final int xref = out.length();
+        // /W [1 4 1] の行: 0 番、1 番から並べたオブジェクト、相互参照ストリーム自身、100 番からのオブジェクトストリームの中のもの
+        final ByteArrayOutputStream rows = new ByteArrayOutputStream();
+        write(rows, 0, 0, 0, 0, 0, 0);
+        for (int offset : offsets) write(rows, 1, offset >>> 24, offset >>> 16 & 0xFF, offset >>> 8 & 0xFF, offset & 0xFF, 0);
+        write(rows, 1, xref >>> 24, xref >>> 16 & 0xFF, xref >>> 8 & 0xFF, xref & 0xFF, 0);
+        int number = 100;
+        for (int i = 0; i < counts.length; i++) {
+            for (int k = 0; k < counts[i]; k++, number++) write(rows, 2, 0, 0, 0, 5 + i, k);
+        }
+        final int self = objects.size() + 1;
+        out.append(self).append(" 0 obj\n").append(stream("/Type /XRef /Size " + number + " /Index [0 " + (self + 1) + " 100 " + (number - 100)
+                + "] /W [1 4 1] /Root 1 0 R", latin1(rows.toByteArray()))).append("\nendobj\nstartxref\n").append(xref).append("\n%%EOF\n");
+        return out.toString();
+    }
+
+    /**
      * 機能を確かめる、圧縮していない PDF。{名前, 中身}。
      */
     static List<String[]> synthetic() {
@@ -341,7 +413,87 @@ final class PdfSamples {
                 "<< /Type /FontDescriptor /FontName /L /Flags 4 /FontBBox [0 0 1000 1000] /ItalicAngle 0 /Ascent 1000 /Descent 0 "
                         + "/CapHeight 1000 /StemV 80 /FontFile2 8 0 R >>",
                 stream("", latin1(lsbTrueType())))});
+        // PNG の予測 (Sub) の 1 画素のバイト数は切り上げ: RGB の 4 ビットは 12 ビットなので 2 バイト前を足す。
+        // 赤 (F 0 0) と青 (0 0 F) の行 F0 00 0F を、Sub で F0 00 1F にしたもの
+        samples.add(new String[]{"png-predictor-rgb4", page("<< /XObject << /I 5 0 R >> >>", "q 200 0 0 200 0 0 cm /I Do Q",
+                stream("/Type /XObject /Subtype /Image /Width 2 /Height 1 /ColorSpace /DeviceRGB /BitsPerComponent 4 /Filter /FlateDecode "
+                                + "/DecodeParms << /Predictor 11 /Colors 3 /BitsPerComponent 4 /Columns 2 >>",
+                        latin1(deflate(new byte[]{1, (byte) 0xF0, 0, 0x1F}))))});
+        // EOL を行ごとに置いた G4 (EndOfLine true): 8 x 4 の画像の上の 2 行の右半分が黒
+        samples.add(new String[]{"ccitt-g4-eol", page("<< /XObject << /I 5 0 R >> >>", "q 200 0 0 200 0 0 cm /I Do Q",
+                stream("/Type /XObject /Subtype /Image /Width 8 /Height 4 /ColorSpace /DeviceGray /BitsPerComponent 1 /Filter /CCITTFaxDecode "
+                                + "/DecodeParms << /K -1 /Columns 8 /Rows 4 /EndOfLine true >>",
+                        latin1(new byte[]{0x00, 0x13, 0x6C, 0x00, 0x70, 0x01, 0x33, 0x0D, (byte) 0xC0, 0x06, 0x00, 0x20, 0x02})))});
+        // Rows (2) が高さ (4) より少ない G4: 戻さない下の 2 行は白 (黒く塗っていた)
+        samples.add(new String[]{"ccitt-rows-short", page("<< /XObject << /I 5 0 R >> >>", "q 200 0 0 200 0 0 cm /I Do Q",
+                stream("/Type /XObject /Subtype /Image /Width 8 /Height 4 /ColorSpace /DeviceGray /BitsPerComponent 1 /Filter /CCITTFaxDecode "
+                                + "/DecodeParms << /K -1 /Columns 8 /Rows 2 >>",
+                        latin1(new byte[]{0x36, (byte) 0xF0, 0x01, 0x00, 0x10})))});
+        // 2 x 4 の画像に 2 行分のデータしかない: 足りない下の 2 行は描かない (黒く塗っていた)
+        samples.add(new String[]{"short-image-data", page("<< /XObject << /I 5 0 R >> >>", "q 200 0 0 200 0 0 cm /I Do Q",
+                stream("/Type /XObject /Subtype /Image /Width 2 /Height 4 /ColorSpace /DeviceGray /BitsPerComponent 8 /Filter /FlateDecode",
+                        latin1(deflate(new byte[]{(byte) 0x80, (byte) 0x80, (byte) 0x80, (byte) 0x80}))))});
+        // 圧縮したインライン画像の後ろに、ASCII でない文字の文字列がある。2 つ目の後ろには、長い (2 KB ほどの)
+        // ActualText の文字列を持つ BDC が続く: どちらも EI を見つけて、後ろの青い四角も描く
+        final StringBuilder longText = new StringBuilder("(þÿ");
+        for (int i = 0; i < 1000; i++) longText.append("\u0000é");
+        samples.add(new String[]{"inline-image-latin1", page("<< /Font << /F1 5 0 R >> >>",
+                "q 100 0 0 100 0 100 cm BI /W 2 /H 2 /CS /RGB /BPC 8 /F /Fl ID "
+                        + latin1(deflate(new byte[]{(byte) 255, 0, 0, (byte) 255, 0, 0, (byte) 255, 0, 0, (byte) 255, 0, 0}))
+                        + " EI Q BT /F1 12 Tf 10 10 Td (café) Tj ET q 100 0 0 100 0 100 cm BI /W 2 /H 2 /CS /RGB /BPC 8 /F /Fl ID "
+                        + latin1(deflate(new byte[]{(byte) 255, 0, 0, (byte) 255, 0, 0, (byte) 255, 0, 0, (byte) 255, 0, 0}))
+                        + " EI /Span << /ActualText " + longText + ") >> BDC EMC Q 0 0 1 rg 100 0 100 100 re f",
+                "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>")});
+        // 増分更新でオブジェクトストリームに入れたページ (青) と、参照の切れた番号 (99): 表を作り直しても、新しい版を使う
+        samples.add(new String[]{"incremental-object-stream", objectStreamUpdate()});
+        // 表示しない層の 2 つの区切りの間で、参照の切れた番号 (99) を読む: 表を作り直した後も、層の辞書は同じもので、右も描かない
+        samples.add(new String[]{"hidden-layer-after-repair", build(
+                "<< /Type /Catalog /Pages 2 0 R /OCProperties << /OCGs [5 0 R] /D << /OFF [5 0 R] >> >> >>",
+                "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+                "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Contents 4 0 R "
+                        + "/Resources << /Properties << /OC1 5 0 R /OC2 6 0 R >> /ExtGState << /G 99 0 R >> >> >>",
+                stream("", "/OC /OC1 BDC 1 0 0 rg 0 0 100 200 re f EMC /G gs /OC /OC2 BDC 1 0 0 rg 100 0 100 200 re f EMC"),
+                "<< /Type /OCG /Name (A) >>",
+                "<< /Type /OCMD /OCGs [5 0 R] >>")});
+        // ページの MediaBox [0 0 0 0] は、ないものとして親の MediaBox (200 x 200) を使う。赤は左下の 4 分の 1 だけ
+        samples.add(new String[]{"zero-media-box", build(
+                "<< /Type /Catalog /Pages 2 0 R >>",
+                "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 200 200] >>",
+                "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 0 0] /Contents 4 0 R >>",
+                stream("", "1 0 0 rg 0 0 100 100 re f"))});
+        // 90 の倍数でない Rotate (135) は回さない (pdf.js と poppler と同じ)。左下の赤い四角は左下に描く
+        samples.add(new String[]{"rotate-not-multiple-of-90", build(
+                "<< /Type /Catalog /Pages 2 0 R >>",
+                "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+                "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Rotate 135 /Contents 4 0 R >>",
+                stream("", "1 0 0 rg 0 0 100 50 re f"))});
         return samples;
+    }
+
+    /**
+     * 増分更新のある PDF。最初の版は赤く塗るページ (3 番) で、ページの木 (2 番) に参照の切れた番号 (99) がある。
+     * 2 つ目の版は、相互参照ストリームとオブジェクトストリーム (5 番) で、ページを青く塗るもの (内容は 6 番) に置き換える。
+     */
+    static String objectStreamUpdate() {
+        final StringBuilder out = new StringBuilder(build(
+                "<< /Type /Catalog /Pages 2 0 R >>",
+                "<< /Type /Pages /Kids [3 0 R] /Count 1 /Resources 99 0 R >>",
+                "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Contents 4 0 R >>",
+                stream("", "1 0 0 rg 0 0 200 200 re f")));
+        final int previous = out.lastIndexOf("\nxref\n") + 1;
+        final int objectStream = out.length();
+        out.append("5 0 obj\n").append(stream("/Type /ObjStm /N 1 /First 4",
+                "3 0\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Contents 6 0 R >>")).append("\nendobj\n");
+        final int content = out.length();
+        out.append("6 0 obj\n").append(stream("", "0 0 1 rg 0 0 200 200 re f")).append("\nendobj\n");
+        final int xref = out.length();
+        // /W [1 4 1] の行: 3 番 (5 番の 0 番目)、5 番、6 番、7 番 (この相互参照ストリーム)
+        final ByteArrayOutputStream rows = new ByteArrayOutputStream();
+        final int[][] entries = {{2, 5, 0}, {1, objectStream, 0}, {1, content, 0}, {1, xref, 0}};
+        for (int[] entry : entries) write(rows, entry[0], entry[1] >>> 24, entry[1] >>> 16 & 0xFF, entry[1] >>> 8 & 0xFF, entry[1] & 0xFF, entry[2]);
+        out.append("7 0 obj\n").append(stream("/Type /XRef /Size 8 /Index [3 1 5 3] /W [1 4 1] /Root 1 0 R /Prev " + previous,
+                latin1(rows.toByteArray()))).append("\nendobj\nstartxref\n").append(xref).append("\n%%EOF\n");
+        return out.toString();
     }
 
     /**
@@ -659,6 +811,50 @@ final class PdfSamples {
         samples.add(new String[]{"xref-prev-cycle", cyclic.replace("/Root 1 0 R >>", "/Root 1 0 R /Prev " + xrefAt + " >>")});
         // 巨大な数を並べた相互参照表
         samples.add(new String[]{"xref-huge-count", cyclic.replaceFirst("xref\n0 \\d+", "xref\n0 2000000000")});
+        // /Length が次のストリームを指すことを 20000 回繰り返したもの (読む入れ子でスタックを使い切っていた)
+        final String[] chain = new String[20004];
+        chain[0] = "<< /Type /Catalog /Pages 2 0 R >>";
+        chain[1] = "<< /Type /Pages /Kids [3 0 R] /Count 1 >>";
+        chain[2] = "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 100 100] /Contents 4 0 R >>";
+        for (int i = 3; i < chain.length - 1; i++) chain[i] = "<< /Length " + (i + 2) + " 0 R >>\nstream\n0 g\nendstream";
+        chain[chain.length - 1] = "4";
+        samples.add(new String[]{"length-chain", build(chain)});
+        // 空の辞書 780 万個を入れ子の配列に入れた内容 (圧縮して 30 KB ほど。600 MB を超えるオブジェクトを作っていた)
+        final List<Object> nestedDicts = new ArrayList<>();
+        nestedDicts.add("[");
+        nestedDicts.add(1);
+        for (int i = 0; i < 2; i++) java.util.Collections.addAll(nestedDicts, "[", 1, "<<>>", 3900000, "]", 1);
+        java.util.Collections.addAll(nestedDicts, "] TJ 0 g 0 0 10 10 re f", 1);
+        samples.add(new String[]{"nested-empty-dicts", build(
+                "<< /Type /Catalog /Pages 2 0 R >>",
+                "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+                "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 100 100] /Contents 4 0 R >>",
+                stream("/Filter /FlateDecode", latin1(deflateRepeated(nestedDicts.toArray()))))});
+        // 100 万個近い空の辞書の配列 12 個を、1 つのオブジェクトストリームに入れて、すべてページから使う
+        // (1 つずつは上限より少ないが、すべて覚えると 900 MB ほどになっていた)
+        final String inner = "[" + new String(new char[999990]).replace("\0", "<<>>") + "]\n";
+        final StringBuilder header = new StringBuilder();
+        for (int i = 0; i < 12; i++) header.append(100 + i).append(' ').append(i * inner.length()).append(' ');
+        final String headerText = String.format("%-200s", header);
+        samples.add(new String[]{"cached-object-items", objectStreamPage(new int[]{12}, headerText.length(),
+                deflateRepeated(headerText, 1, inner, 12))});
+        // 展開すると 100 MB になるオブジェクトストリーム 6 つ (戻したものをすべて覚えると、600 MB になっていた)
+        final byte[][] large = new byte[6][];
+        for (int i = 0; i < large.length; i++) large[i] = deflateRepeated((100 + i) + " 0\n", 1, " ", 100000000, "<< /ca 1 >>", 1);
+        samples.add(new String[]{"large-object-streams", objectStreamPage(new int[]{1, 1, 1, 1, 1, 1}, 6, large)});
+        // 内容に 1.2 億バイトの名前と、命令 (Java 8 では、文字列と作業用の領域で 500 MB を超えていた)
+        for (String[] huge : new String[][]{{"huge-name", "/", " gs"}, {"huge-keyword", "", " 0 g"}}) {
+            samples.add(new String[]{huge[0], build(
+                    "<< /Type /Catalog /Pages 2 0 R >>",
+                    "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+                    "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 100 100] /Contents 4 0 R >>",
+                    stream("/Filter /FlateDecode", latin1(deflateRepeated(huge[1], 1, "a", 120000000, huge[2], 1))))});
+        }
+        // V 5 (256 ビット) なのに R 4 の暗号化の辞書: R 4 の鍵の作り方に 32 バイトの鍵の長さを渡して、範囲の外を読んでいた
+        final String padding = "(" + new String(new char[32]).replace('\0', 'A') + ")";
+        samples.add(new String[]{"encrypt-v5-r4", page("<< >>", "0 g", "<< /Filter /Standard /V 5 /R 4 /Length 256 /CF << /StdCF "
+                + "<< /CFM /AESV3 >> >> /StmF /StdCF /StrF /StdCF /O " + padding + " /U " + padding + " /P -4 >>")
+                .replace("/Root 1 0 R >>", "/Root 1 0 R /Encrypt 5 0 R /ID [<00> <00>] >>")});
         // CCITT の行の爆弾 (高さだけ巨大)
         samples.add(new String[]{"ccitt-rows", page("<< /XObject << /I 5 0 R >> >>", "q 100 0 0 100 0 0 cm /I Do Q",
                 stream("/Type /XObject /Subtype /Image /Width 65536 /Height 65536 /ImageMask true /Filter /CCITTFaxDecode /DecodeParms << /K -1 /Columns 65536 >>",
