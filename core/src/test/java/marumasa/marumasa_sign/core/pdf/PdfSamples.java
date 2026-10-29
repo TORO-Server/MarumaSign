@@ -297,6 +297,13 @@ final class PdfSamples {
                         + "/CapHeight 1000 /StemV 80 /FontFile 7 0 R >>",
                 stream("/Length1 " + notdefLast[0].length + " /Length2 " + notdefLast[1].length + " /Length3 0",
                         latin1(notdefLast[0]) + latin1(notdefLast[1])))});
+        // 壊れた (head の unitsPerEm が 0 の) 埋め込みの TrueType は使わず、代わりのフォントで描く
+        samples.add(new String[]{"truetype-broken-head", page("<< /Font << /F1 5 0 R >> >>", "0 g BT /F1 100 Tf 50 50 Td (a) Tj ET",
+                "<< /Type /Font /Subtype /TrueType /BaseFont /L /FirstChar 97 /LastChar 97 /Widths [556] /FontDescriptor 6 0 R "
+                        + "/Encoding /WinAnsiEncoding >>",
+                "<< /Type /FontDescriptor /FontName /L /Flags 32 /FontBBox [0 -200 1000 900] /ItalicAngle 0 /Ascent 900 /Descent -200 "
+                        + "/CapHeight 700 /StemV 80 /FontFile2 7 0 R >>",
+                stream("", latin1(withUnitsPerEm(lsbTrueType(), 0))))});
         // OpenType に入った、CID の決まっていない CFF を使う CIDFontType0 の CIDToGIDMap (CID 1 を、四角のグリフ 2 にする)
         samples.add(new String[]{"cff-cidtogidmap", page("<< /Font << /F1 5 0 R >> >>", "0 g BT /F1 100 Tf 50 50 Td <0001> Tj ET",
                 "<< /Type /Font /Subtype /Type0 /BaseFont /T /Encoding /Identity-H /DescendantFonts [6 0 R] >>",
@@ -521,6 +528,22 @@ final class PdfSamples {
         for (int i = 0; i < name.length(); i++) names.write(name.charAt(i));
         return sfnt(0x00010000, new String[]{"glyf", "head", "hhea", "hmtx", "loca", "maxp", "name"},
                 new byte[][]{glyf.toByteArray(), head(500, 0, 900, 400), hhea(1), hmtx, loca, maxp, names.toByteArray()}, base);
+    }
+
+    // フォントの head の表の unitsPerEm を書き換えたもの
+    static byte[] withUnitsPerEm(byte[] font, int units) {
+        final byte[] copy = font.clone();
+        final int tables = ((copy[4] & 0xFF) << 8) | (copy[5] & 0xFF);
+        for (int i = 0; i < tables; i++) {
+            final int record = 12 + 16 * i;
+            if (copy[record] == 'h' && copy[record + 1] == 'e' && copy[record + 2] == 'a' && copy[record + 3] == 'd') {
+                final int offset = ((copy[record + 8] & 0xFF) << 24) | ((copy[record + 9] & 0xFF) << 16) | ((copy[record + 10] & 0xFF) << 8)
+                        | (copy[record + 11] & 0xFF);
+                copy[offset + 18] = (byte) (units >> 8);
+                copy[offset + 19] = (byte) units;
+            }
+        }
+        return copy;
     }
 
     private static void write(ByteArrayOutputStream out, int... bytes) {

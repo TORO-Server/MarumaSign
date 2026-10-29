@@ -464,6 +464,15 @@ public final class PdfCheck {
                 expect(gray(image, 75, 125) < 30, "glyph is not drawn");
                 expect(gray(image, 125, 125) > 230, "width outside Widths is not MissingWidth");
                 break;
+            case "truetype-broken-head": {
+                // 代わりのフォントの a (ページの x = 50 から 105、y = 50 から 102 のあたり) が描かれる
+                boolean drawn = false;
+                for (int y = 100; y < 150; y += 2) {
+                    for (int x = 52; x < 104; x += 2) drawn |= gray(image, x, y) < 64;
+                }
+                expect(drawn, "broken embedded font is used instead of a substitute");
+                break;
+            }
             case "cff-cidtogidmap":
                 // CID 1 は CIDToGIDMap で四角のグリフ 2 (ページの 50 から 150)
                 expect(gray(image, 100, 100) < 30, "CIDToGIDMap of an OpenType CFF font is ignored");

@@ -75,8 +75,9 @@ public final class TrueTypeFont implements UnicodeFont {
             tables.put(tag, data.slice(tableOffset, tableLength));
         }
         final FontBytes head = tables.get("head");
-        int units = head != null && head.length() >= 54 ? head.u16(18) : 1000;
-        if (units < 16 || units > 16384) units = 1000;
+        final int units = head != null && head.length() >= 54 ? head.u16(18) : 1000;
+        // 単位の大きさのおかしいフォントは、壊れている (表の位置がずれているなど)。FreeType と同じく読まない
+        if (units < 16 || units > 16384) throw new FontBytes.FontFormatError("Bad unitsPerEm");
         unitsPerEm = units;
         longLoca = head != null && head.length() >= 54 && head.s16(50) != 0;
         final FontBytes maxp = tables.get("maxp");
