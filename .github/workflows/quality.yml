@@ -138,3 +138,23 @@ jobs:
         uses: github/codeql-action/analyze@v4
         with:
           category: /language:java-kotlin
+          output: codeql-results
+
+      # 見つけた問題を、ジョブの記録にも一覧で書き出す (Security のタブを見られない人も確かめられるように)
+      - name: List findings
+        if: always()
+        run: |
+          python3 - <<'PY'
+          import glob, json
+          count = 0
+          for path in glob.glob('codeql-results/*.sarif'):
+              for run in json.load(open(path, encoding='utf-8')).get('runs', []):
+                  for result in run.get('results', []):
+                      location = result.get('locations', [{}])[0].get('physicalLocation', {})
+                      file = location.get('artifactLocation', {}).get('uri', '?')
+                      line = location.get('region', {}).get('startLine', '?')
+                      message = result.get('message', {}).get('text', '').replace('\n', ' ')
+                      print(f"{result.get('ruleId')}  {file}:{line}  {message[:200]}")
+                      count += 1
+          print(f"{count} findings")
+          PY
