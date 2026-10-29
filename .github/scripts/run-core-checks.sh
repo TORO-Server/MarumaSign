@@ -90,6 +90,8 @@ check signLimitsCheck 1200 -Xmx3g marumasa.marumasa_sign.core.SignLimitsCheck
 # 画像、構造物、3D モデル、スプラットの読み込み (壊したファイルを含む)
 # 看板の読み込みと後片付け (止めた読み込み、途中で切れたダウンロード、壊れた保存、動画のメモリの上限など)
 check runtimeRegressionCheck 600 -Xmx2g marumasa.marumasa_sign.core.RuntimeRegressionCheck
+# 動画の音の出力が、再生を止めたあと (出力を開いている途中で止めたときも) 開いたまま残らないこと (試験用の音の出力を使う)
+check mediaAudioCheck 300 -Xmx512m marumasa.marumasa_sign.core.media.MediaAudioCheck
 check argbPixelsCheck 300 -Xmx1g marumasa.marumasa_sign.core.image.ArgbPixelsCheck "$root/tools/verify/test-image.png"
 # JPEG は libjpeg (ImageIO) を使わずに読むので、libjpeg (Pillow) の結果と比べる
 check jpegCheck 300 -Xmx512m -Xss512k marumasa.marumasa_sign.core.image.format.JpegCheck src/test/resources/jpeg

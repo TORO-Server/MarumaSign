@@ -445,25 +445,34 @@ public final class MediaPlayer {
         line = open;
         audioRunning = open != null;
 
-        final byte[] buffer = new byte[BYTES_PER_SAMPLE_FRAME * 2048];
-        int filled = 0;
-        while (!stopped) {
-            final int read = input.read(buffer, filled, buffer.length - filled);
-            if (read < 0) break;
-            lastDataNanos = System.nanoTime();
-            filled += read;
-            // 左右そろった単位でだけ書き込む
-            final int usable = filled - filled % BYTES_PER_SAMPLE_FRAME;
-            if (usable == 0) continue;
-            if (open != null) {
-                applyGain(buffer, usable, gain);
-                open.write(buffer, 0, usable);
-                audioWrittenFrames += usable / BYTES_PER_SAMPLE_FRAME;
+        try {
+            final byte[] buffer = new byte[BYTES_PER_SAMPLE_FRAME * 2048];
+            int filled = 0;
+            while (!stopped) {
+                final int read = input.read(buffer, filled, buffer.length - filled);
+                if (read < 0) break;
+                lastDataNanos = System.nanoTime();
+                filled += read;
+                // 左右そろった単位でだけ書き込む
+                final int usable = filled - filled % BYTES_PER_SAMPLE_FRAME;
+                if (usable == 0) continue;
+                if (open != null) {
+                    applyGain(buffer, usable, gain);
+                    open.write(buffer, 0, usable);
+                    audioWrittenFrames += usable / BYTES_PER_SAMPLE_FRAME;
+                }
+                System.arraycopy(buffer, usable, buffer, 0, filled - usable);
+                filled -= usable;
             }
-            System.arraycopy(buffer, usable, buffer, 0, filled - usable);
-            filled -= usable;
+            if (open != null && !stopped) open.drain();
+        } finally {
+            // 開いた出力は、ここでも閉じる。出力を開いている途中で止められると、止める側 (closeAttempt) はまだこの出力を
+            // 知らないので閉じられず、開いたまま残っていた (音の出力の数には限りがあり、残るとほかの動画の音が出なくなる)
+            if (open != null) {
+                open.stop();
+                open.close();
+            }
         }
-        if (open != null && !stopped) open.drain();
     }
 
     private static void applyGain(byte[] buffer, int length, float gain) {
