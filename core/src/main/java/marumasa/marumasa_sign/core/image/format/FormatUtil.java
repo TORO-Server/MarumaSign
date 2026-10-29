@@ -119,6 +119,10 @@ final class FormatUtil {
 
     // value を 0 から max の範囲から 0 から 255 に直す
     static int to8(long value, long max) {
+        if (max <= 0) return 0;
+        // 範囲の外の値 (壊れたファイル) は端に寄せる。value * 255 があふれないようにもなる
+        if (value < 0) value = 0;
+        if (value > max) value = max;
         if (max == 255) return (int) value;
         return (int) ((value * 255 + max / 2) / max);
     }

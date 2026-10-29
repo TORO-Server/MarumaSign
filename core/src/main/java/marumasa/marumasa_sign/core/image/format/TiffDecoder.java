@@ -128,7 +128,8 @@ final class TiffDecoder {
         final long count = big ? u64((int) offset) : u16((int) offset);
         if (count > 4096 || offset + countSize + count * entrySize > d.length) throw new IOException("Invalid TIFF directory");
         final int inline = big ? 8 : 4;
-        for (int i = 0; i < count; i++) {
+        final int entries = (int) count;
+        for (int i = 0; i < entries; i++) {
             final int entry = (int) offset + countSize + i * entrySize;
             final int tag = u16(entry);
             final int type = u16(entry + 2);

@@ -211,6 +211,11 @@ final class SvgDocument {
         final XMLReader reader = parser.getXMLReader();
         reader.setFeature("http://xml.org/sax/features/external-general-entities", false);
         reader.setFeature("http://xml.org/sax/features/external-parameter-entities", false);
+        try {
+            reader.setFeature("http://apache.org/xml/features/nonvalidating/load-external-dtd", false);
+        } catch (SAXException e) {
+            // この設定を知らない XML パーサー。外部の DTD は、resolveEntity が空の中身を返すので読まれない
+        }
         return reader;
     }
 

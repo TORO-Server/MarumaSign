@@ -56,7 +56,8 @@ final class Atlas {
             for (int i = 0; i < sprites.size(); i++) {
                 final Sprite sprite = sprites.get(i);
                 if (!sprite.isAnimated()) continue;
-                int total = 0;
+                // 長い時間を足しても int であふれないように long で数える
+                long total = 0;
                 for (int time : sprite.times) total += time;
                 if (total <= 0) continue;
                 long t = tick % total;

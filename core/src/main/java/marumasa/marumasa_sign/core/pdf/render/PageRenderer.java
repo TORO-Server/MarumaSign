@@ -58,6 +58,9 @@ public final class PageRenderer {
     private static final double MAX_DASHES = 200_000;
     // パターンの 1 周期の絵の、一辺の画素の数の上限
     private static final int MAX_CELL_SIDE = 2048;
+    // ページの画像の 1 辺と、画素の数の上限 (呼ぶ側の拡大率が大きすぎても、この大きさまでに縮める)
+    private static final int MAX_PAGE_SIDE = 16384;
+    private static final double MAX_PAGE_PIXELS = 64.0 * 1024 * 1024;
     // 外観のない注釈の形を作るときの、座標の数の上限
     private static final int MAX_ANNOTATION_POINTS = 200_000;
 
@@ -124,6 +127,8 @@ public final class PageRenderer {
         final double cropWidth = Math.max(1, crop[2] - crop[0]), cropHeight = Math.max(1, crop[3] - crop[1]);
         final int rotate = ((page.rotate % 360) + 360) % 360 / 90 * 90;
         final boolean swap = rotate == 90 || rotate == 270;
+        if (!(scale > 0) || scale == Double.POSITIVE_INFINITY) scale = 1;
+        scale = Math.min(scale, Math.min(MAX_PAGE_SIDE / Math.max(cropWidth, cropHeight), Math.sqrt(MAX_PAGE_PIXELS / (cropWidth * cropHeight))));
         final int width = (int) Math.max(1, Math.floor((swap ? cropHeight : cropWidth) * scale));
         final int height = (int) Math.max(1, Math.floor((swap ? cropWidth : cropHeight) * scale));
 

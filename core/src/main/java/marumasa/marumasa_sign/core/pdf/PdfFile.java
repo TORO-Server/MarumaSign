@@ -121,8 +121,9 @@ public final class PdfFile {
         if (index < 0 || index >= pageCount) throw new IOException("No page " + (index + 1));
         final PdfDocument.Page page = document.pages().get(index);
         final double[] box = cropBox(page);
-        final double longest = Math.max(box[2] - box[0], box[3] - box[1]);
-        final double scale = longest > 0 ? size / longest : 1;
+        // 描く側 (PageRenderer) と同じく、辺は 1 ポイントより短くしない (0.000001 のような箱で、拡大率が極端にならないように)
+        final double longest = Math.max(1, Math.max(box[2] - box[0], box[3] - box[1]));
+        final double scale = longest < Double.POSITIVE_INFINITY ? size / longest : 1;
         final BufferedImage image;
         try {
             image = PageRenderer.render(cache, page, scale, RENDER_TIMEOUT);

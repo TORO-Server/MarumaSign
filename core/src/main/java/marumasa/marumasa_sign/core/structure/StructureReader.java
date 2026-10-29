@@ -454,7 +454,7 @@ public final class StructureReader {
         if (primary == null) throw new IOException("Structure has no blocks");
         final int sx = size[0], sy = size[1], sz = size[2];
         final Map<Integer, Integer> waterlogged = new HashMap<Integer, Integer>();
-        final long cells = Math.min((long) sx * sy * sz, primary.length);
+        final int cells = (int) Math.min((long) sx * sy * sz, primary.length);
         for (int index = 0; index < cells; index++) {
             // 並びは z が最も速く、次に y、最後に x
             final int z = index % sz;
@@ -525,6 +525,7 @@ public final class StructureReader {
         final byte[] add = Nbt.bytes(root, "AddBlocks") != null ? Nbt.bytes(root, "AddBlocks") : Nbt.bytes(root, "Add");
         final long total = (long) width * height * length;
         if (blocks == null || blocks.length < total) throw new IOException("Schematic block data is too short");
+        final int cells = (int) total;
         final Structure structure = new Structure(Structure.Source.LEGACY, 0, width, height, length);
 
         // 番号を名前で書いたもの (Schematica と MCEdit 2)。標準の番号に付け替える
@@ -533,7 +534,7 @@ public final class StructureReader {
         readIdMapping(Nbt.compound(root, "BlockIDs"), false, remap);
 
         final Map<Integer, Integer> cache = new HashMap<Integer, Integer>();
-        for (int index = 0; index < total; index++) {
+        for (int index = 0; index < cells; index++) {
             int id = blocks[index] & 0xFF;
             if (add != null && (index >> 1) < add.length) {
                 id |= (index & 1) == 0 ? (add[index >> 1] & 0x0F) << 8 : (add[index >> 1] & 0xF0) << 4;

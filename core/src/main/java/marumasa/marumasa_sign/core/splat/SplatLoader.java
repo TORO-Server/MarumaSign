@@ -132,7 +132,7 @@ public final class SplatLoader {
     }
 
     static int[] select(float[] importance, float[] positions, int count, int max, boolean crop) {
-        if (count <= 0) return new int[0];
+        if (count <= 0 || max <= 0) return new int[0];
 
         int[] candidates = null;
         int candCount = count;
@@ -174,7 +174,7 @@ public final class SplatLoader {
             }
 
             // 安全性チェック: 残る分布が全体の半分未満になる場合は切り落とさない
-            if (kept >= (count + 1) / 2 && kept < count) {
+            if (kept >= count - count / 2 && kept < count) {
                 candidates = new int[kept];
                 int n = 0;
                 for (int i = 0; i < count; i++) {
