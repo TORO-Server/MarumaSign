@@ -357,6 +357,7 @@ public final class PdfCheck {
                 break;
             }
             case "missing-glyph":
+            case "type1-notdef-order":
                 for (int y = 50; y < 150; y += 2) {
                     for (int x = 40; x < 160; x += 2) expect(gray(image, x, y) > 200, "notdef glyph is drawn at " + x + "," + y);
                 }

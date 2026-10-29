@@ -204,10 +204,10 @@ public final class Type1Font implements FontProgram {
                 break;
             }
         }
-        if (!charStrings.containsKey(".notdef")) {
-            charStrings.put(".notdef", new byte[0]);
-            glyphNames.add(0, ".notdef");
-        }
+        // .notdef をグリフ 0 にする (CharStrings の途中にあっても。グリフ 0 は、ない文字に使う)
+        if (!charStrings.containsKey(".notdef")) charStrings.put(".notdef", new byte[0]);
+        glyphNames.remove(".notdef");
+        glyphNames.add(0, ".notdef");
         for (int i = 0; i < glyphNames.size(); i++) {
             if (!nameToGid.containsKey(glyphNames.get(i))) nameToGid.put(glyphNames.get(i), i);
         }

@@ -288,6 +288,15 @@ final class PdfSamples {
                 "<< /Type /FontDescriptor /FontName /T /Flags 4 /FontBBox [0 0 1000 1000] /ItalicAngle 0 /Ascent 1000 /Descent 0 "
                         + "/CapHeight 1000 /StemV 80 /FontFile 8 0 R >>",
                 stream("", latin1(squareCff())))});
+        // フォントにない文字 (b) は .notdef で描く。CharStrings の最初のグリフ (a の四角) ではない
+        final byte[][] notdefLast = type1Font(true);
+        samples.add(new String[]{"type1-notdef-order", page("<< /Font << /F1 5 0 R >> >>", "0 g BT /F1 100 Tf 50 50 Td (b) Tj ET",
+                "<< /Type /Font /Subtype /Type1 /BaseFont /T /FirstChar 98 /LastChar 98 /Widths [1000] /FontDescriptor 6 0 R "
+                        + "/Encoding << /Differences [98 /b] >> >>",
+                "<< /Type /FontDescriptor /FontName /T /Flags 4 /FontBBox [0 0 1000 1000] /ItalicAngle 0 /Ascent 1000 /Descent 0 "
+                        + "/CapHeight 1000 /StemV 80 /FontFile 7 0 R >>",
+                stream("/Length1 " + notdefLast[0].length + " /Length2 " + notdefLast[1].length + " /Length3 0",
+                        latin1(notdefLast[0]) + latin1(notdefLast[1])))});
         // OpenType に入った、CID の決まっていない CFF を使う CIDFontType0 の CIDToGIDMap (CID 1 を、四角のグリフ 2 にする)
         samples.add(new String[]{"cff-cidtogidmap", page("<< /Font << /F1 5 0 R >> >>", "0 g BT /F1 100 Tf 50 50 Td <0001> Tj ET",
                 "<< /Type /Font /Subtype /Type0 /BaseFont /T /Encoding /Identity-H /DescendantFonts [6 0 R] >>",
@@ -341,10 +350,16 @@ final class PdfSamples {
         return out.toByteArray();
     }
 
+    static byte[][] type1Font() {
+        return type1Font(false);
+    }
+
     /**
      * a が 0 から 1000 の四角の Type 1 フォント。{平文の部分, eexec で暗号化した部分}。
+     *
+     * @param notdefLast CharStrings で、.notdef を a の後に書くか
      */
-    static byte[][] type1Font() {
+    static byte[][] type1Font(boolean notdefLast) {
         final String clear = "%!PS-AdobeFont-1.0: T 001\n11 dict begin\n/FontName /T def\n/FontType 1 def\n/PaintType 0 def\n"
                 + "/FontMatrix [0.001 0 0 0.001 0 0] readonly def\n/FontBBox {0 0 1000 1000} readonly def\n"
                 + "/Encoding 256 array 0 1 255 {1 index exch /.notdef put} for dup 97 /a put readonly def\n"
@@ -356,12 +371,16 @@ final class PdfSamples {
         final ByteArrayOutputStream secret = new ByteArrayOutputStream();
         final String head = "dup /Private 8 dict dup begin\n/RD{string currentfile exch readstring pop}executeonly def\n"
                 + "/ND{noaccess def}executeonly def\n/NP{noaccess put}executeonly def\n/lenIV 4 def\n/Subrs 0 array ND\n"
-                + "2 index /CharStrings 2 dict dup begin\n/.notdef " + notdef.length + " RD ";
+                + "2 index /CharStrings 2 dict dup begin\n";
         writeText(secret, head);
-        secret.write(notdef, 0, notdef.length);
-        writeText(secret, " ND\n/a " + square.length + " RD ");
-        secret.write(square, 0, square.length);
-        writeText(secret, " ND\nend\nend\nreadonly put\nnoaccess put\ndup /FontName get exch definefont pop\nmark currentfile closefile\n");
+        for (int i = 0; i < 2; i++) {
+            final boolean a = (i == 0) == notdefLast;
+            final byte[] glyph = a ? square : notdef;
+            writeText(secret, (a ? "/a " : "/.notdef ") + glyph.length + " RD ");
+            secret.write(glyph, 0, glyph.length);
+            writeText(secret, " ND\n");
+        }
+        writeText(secret, "end\nend\nreadonly put\nnoaccess put\ndup /FontName get exch definefont pop\nmark currentfile closefile\n");
         final byte[] plain = secret.toByteArray();
         // eexec の暗号化 (初めに 4 バイトを足す)
         final byte[] encrypted = new byte[plain.length + 4];
