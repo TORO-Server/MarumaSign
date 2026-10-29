@@ -289,7 +289,7 @@ final class PdfSamples {
                         + "/CapHeight 1000 /StemV 80 /FontFile 8 0 R >>",
                 stream("", latin1(squareCff())))});
         // フォントにない文字 (b) は .notdef で描く。CharStrings の最初のグリフ (a の四角) ではない
-        final byte[][] notdefLast = type1Font(true);
+        final byte[][] notdefLast = type1Font(true, false);
         samples.add(new String[]{"type1-notdef-order", page("<< /Font << /F1 5 0 R >> >>", "0 g BT /F1 100 Tf 50 50 Td (b) Tj ET",
                 "<< /Type /Font /Subtype /Type1 /BaseFont /T /FirstChar 98 /LastChar 98 /Widths [1000] /FontDescriptor 6 0 R "
                         + "/Encoding << /Differences [98 /b] >> >>",
@@ -307,6 +307,14 @@ final class PdfSamples {
         // 標準 14 フォントのコード 32 を .notdef にしたもの: 空白の幅にする
         samples.add(new String[]{"notdef-space", page("<< /Font << /F1 5 0 R >> >>", "0 g BT /F1 100 Tf 50 50 Td (I I) Tj ET",
                 "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding << /Differences [32 /.notdef] >> >>")});
+        // Subrs を 2 回書いた Type 1 フォント: 最初のものを使う (2 つ目は、高い解像度のときだけのもの)
+        final byte[][] twoSubrs = type1Font(false, true);
+        samples.add(new String[]{"type1-two-subrs", page("<< /Font << /F1 5 0 R >> >>", "0 g BT /F1 100 Tf 50 50 Td (a) Tj ET",
+                "<< /Type /Font /Subtype /Type1 /BaseFont /T /FirstChar 97 /LastChar 97 /Widths [1000] /FontDescriptor 6 0 R >>",
+                "<< /Type /FontDescriptor /FontName /T /Flags 4 /FontBBox [0 0 1000 1000] /ItalicAngle 0 /Ascent 1000 /Descent 0 "
+                        + "/CapHeight 1000 /StemV 80 /FontFile 7 0 R >>",
+                stream("/Length1 " + twoSubrs[0].length + " /Length2 " + twoSubrs[1].length + " /Length3 0",
+                        latin1(twoSubrs[0]) + latin1(twoSubrs[1])))});
         // OpenType に入った、CID の決まっていない CFF を使う CIDFontType0 の CIDToGIDMap (CID 1 を、四角のグリフ 2 にする)
         samples.add(new String[]{"cff-cidtogidmap", page("<< /Font << /F1 5 0 R >> >>", "0 g BT /F1 100 Tf 50 50 Td <0001> Tj ET",
                 "<< /Type /Font /Subtype /Type0 /BaseFont /T /Encoding /Identity-H /DescendantFonts [6 0 R] >>",
@@ -361,15 +369,16 @@ final class PdfSamples {
     }
 
     static byte[][] type1Font() {
-        return type1Font(false);
+        return type1Font(false, false);
     }
 
     /**
      * a が 0 から 1000 の四角の Type 1 フォント。{平文の部分, eexec で暗号化した部分}。
      *
      * @param notdefLast CharStrings で、.notdef を a の後に書くか
+     * @param twoSubrs   a の形を Subrs 0 に置き、Subrs を 2 回書くか (2 つ目の Subrs 0 は何も描かない。解像度で選び直すフォントの形)
      */
-    static byte[][] type1Font(boolean notdefLast) {
+    static byte[][] type1Font(boolean notdefLast, boolean twoSubrs) {
         final String clear = "%!PS-AdobeFont-1.0: T 001\n11 dict begin\n/FontName /T def\n/FontType 1 def\n/PaintType 0 def\n"
                 + "/FontMatrix [0.001 0 0 0.001 0 0] readonly def\n/FontBBox {0 0 1000 1000} readonly def\n"
                 + "/Encoding 256 array 0 1 255 {1 index exch /.notdef put} for dup 97 /a put readonly def\n"
@@ -378,14 +387,27 @@ final class PdfSamples {
         final byte[] square = charString(0, 0, 0, 0, 139, 250, 124, 13, 139, 139, 21, 250, 124, 6, 250, 124, 7, 254, 124, 6, 9, 14);
         // .notdef: hsbw 0 0、endchar
         final byte[] notdef = charString(0, 0, 0, 0, 139, 139, 13, 14);
+        // Subrs 0 に四角を置くとき: a は hsbw 0 1000、callsubr 0、endchar
+        final byte[] squareSubr = charString(0, 0, 0, 0, 139, 139, 21, 250, 124, 6, 250, 124, 7, 254, 124, 6, 9, 11);
+        final byte[] emptySubr = charString(0, 0, 0, 0, 11);
+        final byte[] callSquare = charString(0, 0, 0, 0, 139, 250, 124, 13, 139, 10, 14);
         final ByteArrayOutputStream secret = new ByteArrayOutputStream();
         final String head = "dup /Private 8 dict dup begin\n/RD{string currentfile exch readstring pop}executeonly def\n"
-                + "/ND{noaccess def}executeonly def\n/NP{noaccess put}executeonly def\n/lenIV 4 def\n/Subrs 0 array ND\n"
-                + "2 index /CharStrings 2 dict dup begin\n";
+                + "/ND{noaccess def}executeonly def\n/NP{noaccess put}executeonly def\n/lenIV 4 def\n";
         writeText(secret, head);
+        if (twoSubrs) {
+            for (byte[] subr : new byte[][]{squareSubr, emptySubr}) {
+                writeText(secret, "/Subrs 1 array\ndup 0 " + subr.length + " RD ");
+                secret.write(subr, 0, subr.length);
+                writeText(secret, " NP\nND\n");
+            }
+        } else {
+            writeText(secret, "/Subrs 0 array ND\n");
+        }
+        writeText(secret, "2 index /CharStrings 2 dict dup begin\n");
         for (int i = 0; i < 2; i++) {
             final boolean a = (i == 0) == notdefLast;
-            final byte[] glyph = a ? square : notdef;
+            final byte[] glyph = a ? (twoSubrs ? callSquare : square) : notdef;
             writeText(secret, (a ? "/a " : "/.notdef ") + glyph.length + " RD ");
             secret.write(glyph, 0, glyph.length);
             writeText(secret, " ND\n");

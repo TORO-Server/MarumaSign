@@ -198,7 +198,8 @@ public final class Type1Font implements FontProgram {
                 final Object value = lexer.next();
                 if (value instanceof Integer) lenIV = (Integer) value;
             } else if (key.equals("Subrs")) {
-                readSubrs(lexer, data, lenIV);
+                // 解像度で Subrs を選び直すフォント (2 つ目を restore で取り消す) があるので、最初のものを使う (画面の解像度のときの結果)
+                readSubrs(lexer, data, lenIV, subrs.isEmpty() ? subrs : new ArrayList<byte[]>());
             } else if (key.equals("CharStrings")) {
                 readCharStrings(lexer, data, lenIV);
                 break;
@@ -224,7 +225,7 @@ public final class Type1Font implements FontProgram {
         return lenIV < 0 ? raw : decrypt(raw, 4330, lenIV, false);
     }
 
-    private void readSubrs(Lexer lexer, byte[] data, int lenIV) {
+    private void readSubrs(Lexer lexer, byte[] data, int lenIV, List<byte[]> subrs) {
         final Object count = lexer.next();
         if (!(count instanceof Integer)) return;
         final int n = Math.min((Integer) count, 65536);

@@ -446,6 +446,7 @@ public final class PdfCheck {
                 expectColor(image, 190, 100, 0xFFFFFF, "shading outside the BBox");
                 break;
             case "type1-bad-length1":
+            case "type1-two-subrs":
                 // a は四角 (ページの 50 から 150)
                 expect(gray(image, 100, 100) < 30, "Type 1 font with a wrong Length1 is not drawn");
                 break;
