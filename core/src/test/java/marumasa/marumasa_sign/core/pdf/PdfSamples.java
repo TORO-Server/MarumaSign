@@ -155,6 +155,18 @@ final class PdfSamples {
                 "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Contents 4 0 R /Annots [5 0 R] >>",
                 stream("", "0 g"),
                 "<< /Type /Annot /Subtype /Link /Rect [100 100 180 140] /Border [0 0 2] /C [1 0 0] >>")});
+        // 外観 (AP) のない注釈は、決まった形で描く: 四角形 (IC で塗り、C の枠)、マーカー (Multiply)、手書きの線、取り消し線。
+        // Border も BS もないリンクの枠は描かない
+        samples.add(new String[]{"annotation-defaults", build(
+                "<< /Type /Catalog /Pages 2 0 R >>",
+                "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+                "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Contents 4 0 R /Annots [5 0 R 6 0 R 7 0 R 8 0 R 9 0 R] >>",
+                stream("", "0 1 1 rg 170 150 20 40 re f"),
+                "<< /Type /Annot /Subtype /Square /Rect [10 110 90 190] /C [1 0 0] /IC [0 0 1] /Border [0 0 4] >>",
+                "<< /Type /Annot /Subtype /Highlight /Rect [110 150 190 190] /QuadPoints [110 190 190 190 110 150 190 150] /C [1 1 0] >>",
+                "<< /Type /Annot /Subtype /Ink /Rect [10 10 90 90] /InkList [[20 20 80 80]] /C [0 0 1] /BS << /W 3 >> >>",
+                "<< /Type /Annot /Subtype /StrikeOut /Rect [110 70 190 90] /QuadPoints [110 90 190 90 110 70 190 70] /C [1 0 0] >>",
+                "<< /Type /Annot /Subtype /Link /Rect [110 10 190 50] /C [0 1 0] >>")});
         // 色のない (d1) Type 3 のグリフの線は、塗りの色で描く
         samples.add(new String[]{"type3-uncolored-stroke", page("<< /Font << /T3 5 0 R >> >>",
                 "1 0 0 rg 0 0 1 RG BT /T3 100 Tf 50 50 Td (a) Tj ET",

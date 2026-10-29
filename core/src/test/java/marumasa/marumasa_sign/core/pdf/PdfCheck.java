@@ -371,6 +371,15 @@ public final class PdfCheck {
                 expectColor(image, 100, 80, 0xFF0000, "link border");
                 expect(gray(image, 140, 80) > 247, "link is filled");
                 break;
+            case "annotation-defaults":
+                expectColor(image, 50, 50, 0x0000FF, "square interior");
+                expectColor(image, 11, 50, 0xFF0000, "square border");
+                expectColor(image, 150, 30, 0xFFFF00, "highlight");
+                expectColor(image, 180, 30, 0x00FF00, "highlight multiplied with cyan");
+                expectColor(image, 50, 150, 0x0000FF, "ink");
+                expectColor(image, 150, 120, 0xFF0000, "strike out");
+                expect(gray(image, 110, 170) > 247 && gray(image, 150, 150) > 247, "link without a border is framed");
+                break;
             case "type3-uncolored-stroke":
                 // グリフの四角の左の辺 (x = 60) は、塗りの色 (赤) で描く
                 expectColor(image, 60, 100, 0xFF0000, "uncolored Type 3 stroke");

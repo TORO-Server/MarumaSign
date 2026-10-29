@@ -58,6 +58,8 @@ public final class PageRenderer {
     private static final double MAX_DASHES = 200_000;
     // パターンの 1 周期の絵の、一辺の画素の数の上限
     private static final int MAX_CELL_SIDE = 2048;
+    // 外観のない注釈の形を作るときの、座標の数の上限
+    private static final int MAX_ANNOTATION_POINTS = 200_000;
 
     /**
      * 命令の数か時間の上限に達した。
@@ -1869,16 +1871,17 @@ public final class PageRenderer {
         // Hidden (2) と NoView (32) は描かない
         if ((flags & 2) != 0 || (flags & 32) != 0) return;
         if (cache.isHiddenContent(annotation.dict("OC"))) return;
-        final double[] rect = PdfDocument.rectangle(annotation.array("Rect"));
-        if (rect == null || rect[2] - rect[0] <= 0 || rect[3] - rect[1] <= 0) return;
-        appearance(annotation, rect);
-        if ("Link".equals(annotation.name("Subtype"))) linkBorder(annotation, rect);
+        double[] rect = PdfDocument.rectangle(annotation.array("Rect"));
+        if (rect != null && (rect[2] - rect[0] <= 0 || rect[3] - rect[1] <= 0)) rect = null;
+        // 外観がなければ、決まった形で描く (線や多角形などは、Rect がなくても形が決まる)
+        if (rect == null || !appearance(annotation, rect)) defaultAppearance(annotation, rect);
+        if (rect != null && "Link".equals(annotation.name("Subtype"))) linkBorder(annotation, rect);
     }
 
-    // 注釈の外観 (/AP の /N) を描く
-    private void appearance(PdfDict annotation, double[] rect) {
+    // 注釈の外観 (/AP の /N) を描く。外観がなければ false
+    private boolean appearance(PdfDict annotation, double[] rect) {
         final PdfDict appearances = annotation.dict("AP");
-        if (appearances == null) return;
+        if (appearances == null) return false;
         final Object normal = appearances.get("N");
         PdfStream form = null;
         if (normal instanceof PdfStream) {
@@ -1887,15 +1890,16 @@ public final class PageRenderer {
             final String state = annotation.name("AS");
             if (state != null) form = ((PdfDict) normal).stream(state);
         }
-        if (form == null) return;
+        if (form == null) return false;
         final double[] bbox = PdfDocument.rectangle(form.dict.array("BBox"));
-        if (bbox == null) return;
+        // 外観はあるが描けないもの (BBox が壊れているなど) は、何も描かない
+        if (bbox == null) return true;
         // 12.5.5: 外観の BBox を Matrix で変換した範囲を、注釈の Rect に合わせる
         final PdfArray matrixArray = form.dict.array("Matrix");
         final double[] m = matrixArray == null ? null : matrixArray.numbers();
         final AffineTransform matrix = m != null && m.length >= 6 ? new AffineTransform(m[0], m[1], m[2], m[3], m[4], m[5]) : new AffineTransform();
         final Rectangle2D transformed = matrix.createTransformedShape(new Rectangle2D.Double(bbox[0], bbox[1], bbox[2] - bbox[0], bbox[3] - bbox[1])).getBounds2D();
-        if (transformed.getWidth() <= 0 || transformed.getHeight() <= 0) return;
+        if (transformed.getWidth() <= 0 || transformed.getHeight() <= 0) return true;
         final AffineTransform a = new AffineTransform();
         a.translate(rect[0], rect[1]);
         a.scale((rect[2] - rect[0]) / transformed.getWidth(), (rect[3] - rect[1]) / transformed.getHeight());
@@ -1908,33 +1912,258 @@ public final class PageRenderer {
         } finally {
             gs = saved;
         }
+        return true;
     }
 
     /**
-     * リンクの枠 (12.5.2 の Border と BS、12.5.4)。太さの既定は 1、色 (C) がなければ黒、空の配列なら描かない
-     * (Acrobat と poppler の画面での表示と同じ)。
+     * 外観 (AP) のない注釈を、決まった形で描く (pdf.js が作る外観と同じ形): Square、Circle、Line、PolyLine、Polygon、Ink、
+     * Highlight、Underline、StrikeOut、Squiggly。ほかの種類は描かない。
+     *
+     * @param rect 注釈の Rect (なければ null)
+     */
+    private void defaultAppearance(PdfDict annotation, double[] rect) {
+        final String subtype = annotation.name("Subtype");
+        if (subtype == null) return;
+        final StringBuilder out = new StringBuilder();
+        // 線の色 (C、なければ黒) と、中の色 (IC、なければ塗らない)。空の配列は透明 (描かない)
+        final String stroke = colorOperator(annotation.array("C"), true, "0 G");
+        final String fill = colorOperator(annotation.array("IC"), false, null);
+        String blend = "Normal";
+        switch (subtype) {
+            case "Square":
+            case "Circle": {
+                if (rect == null) return;
+                final double w = borderWidth(annotation, rect);
+                if ((w == 0 || stroke == null) && fill == null) return;
+                // 線が Rect からはみ出さないよう、太さの半分だけ内側に描く
+                final double x0 = rect[0] + w / 2, y0 = rect[1] + w / 2, x1 = rect[2] - w / 2, y1 = rect[3] - w / 2;
+                if (!(x1 > x0) || !(y1 > y0)) return;
+                out.append(num(w)).append(" w ");
+                if ("Square".equals(subtype)) {
+                    out.append(num(x0)).append(' ').append(num(y0)).append(' ').append(num(x1 - x0)).append(' ').append(num(y1 - y0)).append(" re ");
+                } else {
+                    // 4 つのベジェ曲線で近似した楕円
+                    final double k = 4.0 / 3 * Math.tan(Math.PI / 8);
+                    final double cx = (x0 + x1) / 2, cy = (y0 + y1) / 2, ox = (x1 - x0) / 2 * k, oy = (y1 - y0) / 2 * k;
+                    out.append(num(cx)).append(' ').append(num(y1)).append(" m ");
+                    curve(out, cx + ox, y1, x1, cy + oy, x1, cy);
+                    curve(out, x1, cy - oy, cx + ox, y0, cx, y0);
+                    curve(out, cx - ox, y0, x0, cy - oy, x0, cy);
+                    curve(out, x0, cy + oy, cx - ox, y1, cx, y1);
+                    out.append("h ");
+                }
+                paintOperator(out, stroke, fill, w > 0);
+                break;
+            }
+            case "Line": {
+                final PdfArray line = annotation.array("L");
+                final double[] l = line == null ? null : line.numbers();
+                if (l == null || l.length < 4 || stroke == null) return;
+                out.append(num(lineWidth(annotation, rect))).append(" w ").append(stroke).append(' ');
+                out.append(num(l[0])).append(' ').append(num(l[1])).append(" m ").append(num(l[2])).append(' ').append(num(l[3])).append(" l S");
+                break;
+            }
+            case "PolyLine":
+            case "Polygon": {
+                final PdfArray vertices = annotation.array("Vertices");
+                final double[] v = vertices == null ? null : vertices.numbers();
+                if (v == null || v.length < 4 || v.length > MAX_ANNOTATION_POINTS) return;
+                out.append(num(lineWidth(annotation, rect))).append(" w ");
+                for (int i = 0; i + 1 < v.length; i += 2) out.append(num(v[i])).append(' ').append(num(v[i + 1])).append(i == 0 ? " m " : " l ");
+                if ("Polygon".equals(subtype)) {
+                    out.append("h ");
+                    paintOperator(out, stroke, fill, true);
+                } else if (stroke != null) {
+                    out.append(stroke).append(" S");
+                } else {
+                    return;
+                }
+                break;
+            }
+            case "Ink": {
+                final PdfArray lists = annotation.array("InkList");
+                if (lists == null || stroke == null) return;
+                out.append(num(lineWidth(annotation, rect))).append(" w ").append(stroke).append(' ');
+                int points = 0;
+                for (int j = 0; j < lists.size(); j++) {
+                    final PdfArray list = lists.array(j);
+                    final double[] v = list == null ? null : list.numbers();
+                    if (v == null || v.length < 2) continue;
+                    points += v.length;
+                    if (points > MAX_ANNOTATION_POINTS) break;
+                    // 点は直線でつなぐ (つなぎ方は実装による。pdf.js と同じ)
+                    for (int i = 0; i + 1 < v.length; i += 2) out.append(num(v[i])).append(' ').append(num(v[i + 1])).append(i == 0 ? " m " : " l ");
+                    out.append("S ");
+                }
+                break;
+            }
+            case "Highlight":
+            case "Underline":
+            case "StrikeOut":
+            case "Squiggly": {
+                final PdfArray quadPoints = annotation.array("QuadPoints");
+                final double[] q = quadPoints == null ? null : quadPoints.numbers();
+                if (q == null || q.length < 8 || q.length > MAX_ANNOTATION_POINTS) return;
+                // マーカーの色の既定は黄色 (Acrobat と同じ)
+                final String color = "Highlight".equals(subtype) ? colorOperator(annotation.array("C"), false, "1 1 0 rg") : stroke;
+                if (color == null) return;
+                out.append(color).append(' ');
+                if ("Highlight".equals(subtype)) {
+                    blend = "Multiply";
+                } else {
+                    // 線の太さは Acrobat と同じ
+                    out.append("Underline".equals(subtype) ? "0.571" : "1").append(" w ");
+                }
+                for (int i = 0; i + 7 < q.length; i += 8) {
+                    // 四隅の順番はファイルによって違うので、囲む長方形にする (pdf.js と同じ)
+                    double minX = q[i], maxX = q[i], minY = q[i + 1], maxY = q[i + 1];
+                    for (int k = 2; k < 8; k += 2) {
+                        minX = Math.min(minX, q[i + k]);
+                        maxX = Math.max(maxX, q[i + k]);
+                        minY = Math.min(minY, q[i + k + 1]);
+                        maxY = Math.max(maxY, q[i + k + 1]);
+                    }
+                    quadAppearance(out, subtype, minX, minY, maxX, maxY);
+                }
+                break;
+            }
+            default:
+                return;
+        }
+        final GraphicsState saved = gs;
+        final PdfDict savedResources = resources;
+        final AffineTransform savedText = textMatrix, savedLine = lineMatrix;
+        gs = new GraphicsState();
+        gs.clip = saved.clip;
+        // 不透明度 (CA) は、線にも塗りにもかける
+        final double alpha = clamp01(annotation.number("CA", 1));
+        gs.strokeAlpha = alpha;
+        gs.fillAlpha = alpha;
+        gs.blendMode = blend;
+        resources = null;
+        try {
+            run(out.toString().getBytes(java.nio.charset.StandardCharsets.US_ASCII));
+        } finally {
+            gs = saved;
+            resources = savedResources;
+            textMatrix = savedText;
+            lineMatrix = savedLine;
+        }
+    }
+
+    // 文字を飾る注釈の、1 つの四角形の分の形
+    private static void quadAppearance(StringBuilder out, String subtype, double minX, double minY, double maxX, double maxY) {
+        switch (subtype) {
+            case "Highlight":
+                out.append(num(minX)).append(' ').append(num(maxY)).append(" m ").append(num(maxX)).append(' ').append(num(maxY)).append(" l ")
+                        .append(num(maxX)).append(' ').append(num(minY)).append(" l ").append(num(minX)).append(' ').append(num(minY)).append(" l f ");
+                break;
+            case "Underline":
+                out.append(num(minX)).append(' ').append(num(minY + 1.3)).append(" m ").append(num(maxX)).append(' ').append(num(minY + 1.3))
+                        .append(" l S ");
+                break;
+            case "StrikeOut": {
+                final double y = (minY + maxY) / 2;
+                out.append(num(minX)).append(' ').append(num(y)).append(" m ").append(num(maxX)).append(' ').append(num(y)).append(" l S ");
+                break;
+            }
+            default: {
+                // Squiggly: 高さの 1/6 だけ上下する、2 ポイントごとの折れ線
+                final double dy = (maxY - minY) / 6;
+                double shift = dy;
+                out.append(num(minX)).append(' ').append(num(minY + shift)).append(" m ");
+                double x = minX;
+                for (int i = 0; x < maxX && i < 10_000; i++) {
+                    x += 2;
+                    shift = shift == 0 ? dy : 0;
+                    out.append(num(x)).append(' ').append(num(minY + shift)).append(" l ");
+                }
+                out.append("S ");
+                break;
+            }
+        }
+    }
+
+    // 線と塗りの色に合わせた、道を描く命令 (どちらもなければ描かない)
+    private static void paintOperator(StringBuilder out, String stroke, String fill, boolean strokes) {
+        final boolean s = stroke != null && strokes;
+        if (s) out.append(stroke).append(' ');
+        if (fill != null) out.append(fill).append(' ');
+        out.append(s && fill != null ? "B" : s ? "S" : fill != null ? "f" : "n");
+    }
+
+    private static void curve(StringBuilder out, double x1, double y1, double x2, double y2, double x3, double y3) {
+        out.append(num(x1)).append(' ').append(num(y1)).append(' ').append(num(x2)).append(' ').append(num(y2)).append(' ')
+                .append(num(x3)).append(' ').append(num(y3)).append(" c ");
+    }
+
+    // 内容に書く数 (指数の形にしない。大きすぎるものは 0)
+    private static String num(double value) {
+        return Math.abs(value) < 1e9 ? String.format(java.util.Locale.ROOT, "%.4f", value) : "0";
+    }
+
+    /**
+     * 注釈の色の配列 (成分が 1、3、4 つで灰色、RGB、CMYK) を、色を選ぶ命令にしたもの。配列がなければ fallback、空や数でないものは null (透明)。
+     */
+    private static String colorOperator(PdfArray array, boolean stroke, String fallback) {
+        if (array == null) return fallback;
+        final double[] c = array.numbers();
+        if (c == null || c.length == 0) return null;
+        final StringBuilder out = new StringBuilder();
+        final int n = c.length >= 4 ? 4 : c.length >= 3 ? 3 : 1;
+        for (int i = 0; i < n; i++) out.append(num(clamp01(c[i]))).append(' ');
+        final String operator = n == 4 ? "k" : n == 3 ? "rg" : "g";
+        return out.append(stroke ? operator.toUpperCase(java.util.Locale.ROOT) : operator).toString();
+    }
+
+    /**
+     * 注釈の枠の太さ (BS の W、なければ Border の 3 つ目)。どちらもなければ 0 (仕様の既定は 1 だが、Acrobat は枠を描かない。pdf.js も同じ)。
+     * Rect の幅か高さの半分より太いものは 1 にする (pdf.js と同じ)。
+     */
+    private static double borderWidth(PdfDict annotation, double[] rect) {
+        double width;
+        final PdfDict style = annotation.dict("BS");
+        final PdfArray border = annotation.array("Border");
+        if (style != null) {
+            final Object w = style.get("W");
+            width = w == null ? 1 : w instanceof Number ? ((Number) w).doubleValue() : 0;
+        } else if (border != null) {
+            width = border.size() >= 3 ? border.number(2, 0) : border.size() == 0 ? 0 : 1;
+        } else {
+            width = 0;
+        }
+        if (!(width > 0) || Double.isInfinite(width)) return 0;
+        if (rect != null && (width > (rect[2] - rect[0]) / 2 || width > (rect[3] - rect[1]) / 2)) width = 1;
+        return width;
+    }
+
+    // 線の注釈 (Line、PolyLine、Polygon、Ink) の線の太さ。枠の太さが 0 なら 1 (pdf.js と同じ)
+    private static double lineWidth(PdfDict annotation, double[] rect) {
+        final double width = borderWidth(annotation, rect);
+        return width > 0 ? width : 1;
+    }
+
+    /**
+     * リンクの枠 (12.5.2 の Border と BS、12.5.4)。Border も BS もないもの (太さ 0) と、色 (C) のないもの、C が空の配列のものは描かない
+     * (Acrobat と pdf.js と同じ)。
      */
     private void linkBorder(PdfDict annotation, double[] rect) {
-        double width = 1;
+        final double width = borderWidth(annotation, rect);
         double[] dash = null;
         final PdfDict style = annotation.dict("BS");
         final PdfArray border = annotation.array("Border");
         if (style != null) {
-            width = style.number("W", 1);
             if (style.isName("S", "D")) {
                 final PdfArray d = style.array("D");
                 dash = d == null ? new double[]{3} : d.numbers();
             }
         } else if (border != null) {
-            if (border.size() < 3) return;
-            width = border.number(2, 0);
             final PdfArray d = border.array(3);
             if (d != null) dash = d.numbers();
         }
-        if (!(width > 0) || width > Math.min(rect[2] - rect[0], rect[3] - rect[1])) return;
         final PdfArray c = annotation.array("C");
-        final double[] color = c == null ? new double[]{0} : c.numbers();
-        if (color == null || color.length == 0) return;
+        final double[] color = c == null ? null : c.numbers();
+        if (!(width > 0) || color == null || color.length == 0) return;
         final PdfColorSpace space = color.length >= 4 ? DeviceSpaces.CMYK : color.length >= 3 ? DeviceSpaces.RGB : DeviceSpaces.GRAY;
         final float[] components = new float[space.components()];
         for (int i = 0; i < components.length; i++) components[i] = (float) color[i];
