@@ -34,6 +34,9 @@ public final class PdfDocument implements Resolver {
     private static final int MAX_OBJECT_STREAM_ITEMS = 1 << 20;
     // オブジェクトを読む途中で、別のオブジェクトを読む入れ子の深さの上限 (正しいファイルでは、/Length とオブジェクトストリームで数段)
     private static final int MAX_LOADING_DEPTH = 64;
+    // 相互参照表に載せるオブジェクトの数の上限。小さなオブジェクトを何百万も並べたファイルで、表と読んだものの覚えだけで
+    // 1 GB を超えるメモリを使っていた (正しいファイルでは、64 MB のものでも 100 万個に届かない)
+    private static final int MAX_OBJECTS = 1 << 21;
 
     // 相互参照表の 1 項目
     private static final class Entry {
@@ -264,7 +267,7 @@ public final class PdfDocument implements Resolver {
                 if (number < 0 || number > Integer.MAX_VALUE) continue;
                 final boolean inUse = ((Keyword) kind).is("n");
                 // 0 番は必ず使われていない。新しい版の項目を優先する (先に読んだものを上書きしない)
-                if (!xref.containsKey((int) number)) {
+                if (!xref.containsKey((int) number) && xref.size() < MAX_OBJECTS) {
                     final long position = ((Number) offset).longValue();
                     xref.put((int) number, inUse && position > 0 ? new Entry(1, position, 0) : new Entry(0, 0, 0));
                 }
@@ -316,7 +319,7 @@ public final class PdfDocument implements Resolver {
                 final long second = field(rows, position + w0, w1);
                 final long third = field(rows, position + w0 + w1, w2);
                 final long number = (long) range[0] + i;
-                if (number < 0 || number > Integer.MAX_VALUE || xref.containsKey((int) number)) continue;
+                if (number < 0 || number > Integer.MAX_VALUE || xref.containsKey((int) number) || xref.size() >= MAX_OBJECTS) continue;
                 if (type == 1) {
                     xref.put((int) number, new Entry(1, second, 0));
                 } else if (type == 2) {
@@ -357,7 +360,7 @@ public final class PdfDocument implements Resolver {
                 if (start >= 0) {
                     final Lexer lexer = new Lexer(data, start, i);
                     final Object number = lexer.next();
-                    if (number instanceof Integer && (Integer) number > 0) {
+                    if (number instanceof Integer && (Integer) number > 0 && (found.size() < MAX_OBJECTS || found.containsKey(number))) {
                         found.put((Integer) number, new Entry(1, start, 0));
                         // オブジェクトストリームと相互参照ストリームは、中を見る必要がある
                         if (startsWithin(i + 3, "/ObjStm", 256)) objectStreamNumbers.add((Integer) number);
@@ -374,7 +377,7 @@ public final class PdfDocument implements Resolver {
             try {
                 final ObjectStream stream = objectStream(number);
                 for (int k = 0; k < stream.numbers.length; k++) {
-                    if (!xref.containsKey(stream.numbers[k]) && stream.numbers[k] > 0) xref.put(stream.numbers[k], new Entry(2, number, k));
+                    if (!xref.containsKey(stream.numbers[k]) && stream.numbers[k] > 0 && xref.size() < MAX_OBJECTS) xref.put(stream.numbers[k], new Entry(2, number, k));
                 }
             } catch (IOException | RuntimeException e) {
                 // このオブジェクトストリームは使えない
@@ -407,11 +410,14 @@ public final class PdfDocument implements Resolver {
             // トレーラーがない: /Type /Catalog のオブジェクトを探す
             if (merged == null) merged = new PdfDict(this);
             for (Map.Entry<Integer, Entry> entry : xref.entrySet()) {
+                final boolean cached = cache.containsKey(entry.getKey());
                 final Object value = getObject(entry.getKey());
                 if (value instanceof PdfDict && ((PdfDict) value).isName("Type", "Catalog") && ((PdfDict) value).get("Pages") != null) {
                     merged.put("Root", new PdfRef(entry.getKey(), 0));
                     break;
                 }
+                // 探すために読んだだけのものは覚えない (すべてのオブジェクトを覚えると、メモリを多く使う)
+                if (!cached) cache.remove(entry.getKey());
             }
         }
         // カタログが見つからなくても、ページだけは scanPages で探せる
@@ -756,8 +762,13 @@ public final class PdfDocument implements Resolver {
         java.util.Collections.sort(numbers);
         for (int number : numbers) {
             if (result.size() >= MAX_PAGES) break;
+            final boolean cached = cache.containsKey(number);
             final Object value = getObject(number);
-            if (!(value instanceof PdfDict) || !((PdfDict) value).isName("Type", "Page")) continue;
+            if (!(value instanceof PdfDict) || !((PdfDict) value).isName("Type", "Page")) {
+                // 探すために読んだだけのものは覚えない (すべてのオブジェクトを覚えると、メモリを多く使う)
+                if (!cached) cache.remove(number);
+                continue;
+            }
             final PdfDict page = (PdfDict) value;
             // 親から受け継ぐ値も、たどれる範囲で集める
             PdfDict resources = null;
