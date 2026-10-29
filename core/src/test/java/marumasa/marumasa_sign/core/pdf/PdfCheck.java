@@ -162,6 +162,29 @@ public final class PdfCheck {
                 }
             }
         }
+        // バイト境界にそろえた EOL のない G3 (1 次元): 行は白 29 (00000010) と黒 1 で、前の行の後ろに 0 の詰め物が 5 個ある。
+        // 詰め物と白 29 の 0 が合わせて 11 個になるのを、EOL と取り違えてはいけない
+        final PdfDict aligned = new PdfDict(value -> value);
+        aligned.put("K", 0);
+        aligned.put("Columns", 30);
+        aligned.put("Rows", 4);
+        aligned.put("EncodedByteAlign", Boolean.TRUE);
+        final byte[] rows = CcittFax.decode(new byte[]{0x02, 0x40, 0x02, 0x40, 0x02, 0x40, 0x02, 0x40}, aligned, 30, 4, 1 << 20);
+        expectWhite29Black1(rows, "byte-aligned G3");
+        // EndOfLine なら、バイト境界にそろっていない EOL も EOL として読む (EncodedByteAlign と書いてあっても、そろえていない書き手)
+        aligned.put("EndOfLine", Boolean.TRUE);
+        expectWhite29Black1(CcittFax.decode(new byte[]{0x00, 0x10, 0x24, 0x00, 0x20, 0x48, 0x00, 0x40, (byte) 0x90, 0x00, (byte) 0x81, 0x20},
+                aligned, 30, 4, 1 << 20), "G3 with unaligned EOLs");
+    }
+
+    // 30 x 4 の画像の各行が、白 29 と黒 1 か
+    private static void expectWhite29Black1(byte[] rows, String what) {
+        for (int y = 0; y < 4; y++) {
+            for (int x = 0; x < 30; x++) {
+                final boolean black = ((rows[y * 4 + x / 8] >> (7 - x % 8)) & 1) == 0;
+                expect(black == (x == 29), what + " row " + y + " differs at " + x);
+            }
+        }
     }
 
     private static void jpeg() throws IOException {

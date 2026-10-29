@@ -80,6 +80,9 @@ public final class CcittFax {
     private final byte[] data;
     private int bitPosition;
     private final long totalBits;
+    // EOL をバイト境界にあるものだけに限るか (EncodedByteAlign で、EndOfLine でないもの。
+    // EndOfLine なら行ごとに EOL があり、詰め物と行の始まりの 0 を EOL と取り違えることはない)
+    private boolean alignedEol;
 
     private CcittFax(byte[] data) {
         this.data = data;
@@ -96,6 +99,7 @@ public final class CcittFax {
         final int columns = parameters == null ? width : parameters.integer("Columns", 1728);
         int rows = parameters == null ? 0 : parameters.integer("Rows", 0);
         final boolean byteAlign = parameters != null && parameters.bool("EncodedByteAlign", false);
+        final boolean endOfLine = parameters != null && parameters.bool("EndOfLine", false);
         final boolean blackIs1 = parameters != null && parameters.bool("BlackIs1", false);
         if (columns < 1 || columns > (1 << 20)) throw new IOException("Bad CCITT columns");
         if (rows <= 0 || rows > maxRows) rows = maxRows;
@@ -103,6 +107,7 @@ public final class CcittFax {
         if ((long) rowBytes * rows > limit) throw new IOException("CCITT image is too large");
         final byte[] out = new byte[rowBytes * rows];
         final CcittFax decoder = new CcittFax(data);
+        decoder.alignedEol = byteAlign && !endOfLine;
         decoder.run(out, columns, rows, k, byteAlign);
         // 黒を 1 にした結果を、決まりに合わせて反転する (読めなかった残りの行は白になる)
         if (!blackIs1) {
@@ -291,7 +296,10 @@ public final class CcittFax {
             p++;
         }
         if (p >= totalBits) return -1;
-        if (zeros >= 11) {
+        // バイト境界にそろえるもの (EncodedByteAlign で EndOfLine でないもの) の EOL は、詰め物の後ろでバイト境界に終わる形か、バイト境界から始まる形。
+        // そうでないものは、詰め物の 0 と、0 で始まる行の符号 (白の 29 は 00000010) が続いただけなので EOL としない
+        final boolean eolAligned = !alignedEol || ((p + 1) & 7) == 0 || ((p - 11) & 7) == 0;
+        if (zeros >= 11 && eolAligned) {
             bitPosition = (int) (p + 1);
             return 1;
         }
@@ -310,13 +318,13 @@ public final class CcittFax {
 
     /**
      * G4 の行の前の EOL (11 個以上の 0 と 1) を飛ばす。2 次元の符号は 0 が 6 個までしか続かないので、EOL と取り違えない。
-     * バイト境界にそろえるもの (EncodedByteAlign) では、EOL は詰め物の後ろでバイト境界に終わる形か、
+     * バイト境界にそろえるもの (EncodedByteAlign で EndOfLine でないもの) では、EOL は詰め物の後ろでバイト境界に終わる形か、
      * バイト境界から始まる形 (次の行はそろえない) のどちらか。どちらでもなければ、行の始まりをバイト境界にそろえる。
      */
     private void skipG4Eol(boolean byteAlign) {
         long p = bitPosition;
         while (p < totalBits && bit(p) == 0) p++;
-        if (p < totalBits && p - bitPosition >= 11 && (!byteAlign || ((p + 1) & 7) == 0)) {
+        if (p < totalBits && p - bitPosition >= 11 && (!alignedEol || ((p + 1) & 7) == 0)) {
             bitPosition = (int) (p + 1);
             return;
         }
