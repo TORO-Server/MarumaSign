@@ -99,8 +99,7 @@ jobs:
 
   codeql:
     runs-on: ubuntu-latest
-    # ビルドせずに解析しても、リポジトリが大きいので 1 時間を超えることがある
-    timeout-minutes: 120
+    timeout-minutes: 60
     permissions:
       contents: read
       security-events: write
@@ -108,14 +107,32 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v6
 
-      # Minecraft の準備に時間がかかるので、ビルドせずに解析する (build-mode: none)
+      - name: Set up JDK 25
+        uses: actions/setup-java@v5
+        with:
+          java-version: '25'
+          distribution: 'temurin'
+
+      # build-mode: none でも、依存を調べるために Gradle を動かし、すべての版の Minecraft の準備に 2 時間以上かかる。
+      # そこで、配布する Mod の中身の core と bootstrap だけを javac でコンパイルして解析する
+      # (adapters は Minecraft がないとコンパイルできない。Minecraft とつなぐだけの薄い部分)
       - name: Initialize CodeQL
         uses: github/codeql-action/init@v4
         with:
           languages: java-kotlin
-          build-mode: none
-          # セキュリティの問題を探す問い合わせに絞る (品質の問い合わせまで入れると、時間内に終わらない)
+          build-mode: manual
           queries: security-extended
+
+      - name: Compile core and bootstrap
+        run: |
+          out="$RUNNER_TEMP/codeql-classes"
+          mkdir -p "$out/core" "$out/boot" "$out/generated/marumasa/marumasa_sign/boot"
+          javac --release 8 -encoding UTF-8 -nowarn -d "$out/core" $(find core/src/main/java -name '*.java')
+          # Gradle が作る BootInfo の代わり
+          printf 'package marumasa.marumasa_sign.boot;\n\npublic final class BootInfo {\n    public static final String VERSION = "ci";\n\n    private BootInfo() {\n    }\n}\n' \
+            > "$out/generated/marumasa/marumasa_sign/boot/BootInfo.java"
+          javac --release 8 -encoding UTF-8 -nowarn -cp "$out/core" -d "$out/boot" \
+            $(find bootstrap/src -name '*.java') "$out/generated/marumasa/marumasa_sign/boot/BootInfo.java"
 
       - name: Analyze
         uses: github/codeql-action/analyze@v4
