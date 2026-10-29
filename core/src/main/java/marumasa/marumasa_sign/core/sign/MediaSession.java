@@ -166,19 +166,21 @@ final class MediaSession {
 
     // tick ごとに呼ぶ
     void tick() {
+        // 看板に背を向けると描画されなくなるが、そのときに距離 0 (最大音量) と見なさないよう、前の距離を使う。
+        // 再生していないときも tick ごとに新しくする (近かったときの距離が残ると、遠ざかったあとも近いものとして選ばれ、
+        // 本当に近い動画が止められて、最初から再生し直しになる)
+        if (nearestDistance != Double.MAX_VALUE) lastDistance = nearestDistance;
+        nearestDistance = Double.MAX_VALUE;
         if (player == null) return;
         if (Clock.millis() - lastUsed > IDLE_MILLIS) {
             player.stop();
             player = null;
             return;
         }
-        // 近いほど大きく聞こえるようにする。
-        // 看板に背を向けると描画されなくなるが、そのときに距離 0 (最大音量) と見なさないよう、前の距離を使う
-        if (nearestDistance != Double.MAX_VALUE) lastDistance = nearestDistance;
+        // 近いほど大きく聞こえるようにする
         currentGain = gain(lastDistance, MarumaSign.config().getVolume());
         currentFalloff = gain(lastDistance, 100);
         player.setGain(currentGain);
-        nearestDistance = Double.MAX_VALUE;
     }
 
     // 今の音の大きさ (0 - 1)。再生していなければ -1
