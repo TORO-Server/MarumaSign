@@ -100,13 +100,12 @@ public final class SignSpec {
         if (len > maxLineLength * 4) return null;
 
         final String[] result = new String[4];
-        final int base = len / 4;
-        final int remainder = len % 4;
         int start = 0;
-        int end = 0;
         for (int i = 0; i < 4; i++) {
-            end += base + (i < remainder ? 1 : 0);
-            int cut = Math.max(start, end);
+            // 残りの文字を、残りの行に均等に分ける。前の行の区切りをずらした分も、後の行で分け直す
+            // (最初に決めた区切りのままでは、前の行を短くした分だけ後の行が長くなり、入りきる文字列でも入らなくなる)
+            final int lines = 4 - i;
+            int cut = start + (len - start + lines - 1) / lines;
             // サロゲートペア (絵文字など) を 2 行に分けない (片方だけの行は、保存や送信で別の文字に置き換わる)。
             // 行が長くなりすぎない向きにずらす
             if (cut > start && cut < len && Character.isHighSurrogate(text.charAt(cut - 1)) && Character.isLowSurrogate(text.charAt(cut))) {

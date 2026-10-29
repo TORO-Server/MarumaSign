@@ -235,6 +235,34 @@ public final class RuntimeLogicCheck {
             }
         }
         check(SignSpec.splitLines("abcdefgh", 2) != null && SignSpec.splitLines("abcdefghi", 2) == null, "sign lines: length limit");
+
+        // 絵文字をずらして 1 行が短くなっても、後の行で分け直して、入りきる文字列は必ず 4 行に分ける。
+        // 以前は後の行が上限を超えて null になり、書き込みの予約が何も書かずに消えていた (例: 上限 2 で "a😀aaa")
+        int missed = 0;
+        String example = null;
+        for (int count = 0; count <= 9; count++) {
+            for (int bits = 0; bits < 1 << count; bits++) {
+                final StringBuilder text = new StringBuilder();
+                for (int i = 0; i < count; i++) text.append((bits >> i & 1) != 0 ? EMOJI : "a");
+                for (int max = 1; max <= 5; max++) {
+                    if (fits(text.toString(), 0, 4, max) && SignSpec.splitLines(text.toString(), max) == null) {
+                        missed++;
+                        if (example == null) example = text.toString().replace(EMOJI, "E") + " (max " + max + ")";
+                    }
+                }
+            }
+        }
+        check(missed == 0, "sign lines: every text that fits in 4 lines is split (" + missed + " missed, e.g. " + example + ")");
+    }
+
+    // text の start から後ろを、サロゲートペアを分けずに、lines 行 (1 行は max 文字まで) に分けられるかどうか
+    private static boolean fits(String text, int start, int lines, int max) {
+        if (lines == 0) return start == text.length();
+        for (int end = start; end <= Math.min(text.length(), start + max); end++) {
+            if (end > 0 && end < text.length() && Character.isHighSurrogate(text.charAt(end - 1))) continue;
+            if (fits(text, end, lines - 1, max)) return true;
+        }
+        return false;
     }
 
     private static File temporaryDirectory() throws IOException {
