@@ -282,6 +282,9 @@ public class TextField extends Widget {
         if (focused) {
             if (caretX - scroll > inner) scroll = caretX - inner;
             if (caretX - scroll < 0) scroll = caretX;
+            // 文字が短くなったら (置き換えや削除)、右に空きを残さず、左に隠れた文字を見せる。
+            // そのままでは、キャレットより前の文字がすべて左に隠れたままになることがある
+            scroll = Math.max(0, Math.min(scroll, widthTo(text.length()) - inner));
         }
 
         final Shape clip = g.getClip();

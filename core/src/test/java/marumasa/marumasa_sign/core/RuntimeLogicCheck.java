@@ -128,12 +128,48 @@ public final class RuntimeLogicCheck {
         final long millis = (System.nanoTime() - start) / 1_000_000;
         check(big.getText().length() == 2048 && millis < 2000, "text field: huge paste is cut at the limit (" + big.getText().length() + " characters, " + millis + " ms)");
 
+        textFieldScroll();
+
         // 幅に収まらない文字列を「...」で省略するときも、絵文字を半分にしない
         final Graphics2D g = new BufferedImage(1, 1, BufferedImage.TYPE_INT_ARGB).createGraphics();
         boolean whole = true;
         for (int width = 0; width < 150; width++) whole &= !broken(Theme.ellipsize(g, "ab" + EMOJI + EMOJI + EMOJI + EMOJI + "cdefgh", width));
         g.dispose();
         check(whole, "ellipsized text keeps emoji whole");
+    }
+
+    // 入力欄を描き (フォーカスあり)、左端 (文字の始まる位置) をクリックしたときのキャレットの位置に "|" を入れた文字列を返す
+    private static String clickLeftEdge(Field field) {
+        final Graphics2D g = new BufferedImage(200, 30, BufferedImage.TYPE_INT_ARGB).createGraphics();
+        try {
+            field.paint(g, false, true);
+            field.mousePressed(field.x + 4, field.y + 10, false);
+            field.charTyped('|');
+            return field.getText();
+        } finally {
+            g.dispose();
+        }
+    }
+
+    // 長い文字列が短くなったとき (置き換えや削除)、文字が左に隠れたままにならない
+    private static void textFieldScroll() {
+        final StringBuilder longText = new StringBuilder();
+        for (int i = 0; i < 60; i++) longText.append('w');
+
+        final Field replaced = field(longText.toString());
+        replaced.bounds(0, 0, 100, 21);
+        replaced.paint(new BufferedImage(200, 30, BufferedImage.TYPE_INT_ARGB).createGraphics(), false, true);
+        replaced.selectAll();
+        replaced.type("ab");
+        final String afterReplace = clickLeftEdge(replaced);
+        check(afterReplace.equals("|ab"), "text field: short text that replaced a long one is not scrolled out of view: " + afterReplace);
+
+        final Field deleted = field(longText.toString());
+        deleted.bounds(0, 0, 100, 21);
+        deleted.paint(new BufferedImage(200, 30, BufferedImage.TYPE_INT_ARGB).createGraphics(), false, true);
+        for (int i = 0; i < 57; i++) deleted.keys(Key.BACKSPACE);
+        final String afterDelete = clickLeftEdge(deleted);
+        check(afterDelete.equals("|www"), "text field: text left after backspace is not scrolled out of view: " + afterDelete);
     }
 
     // 小数点がコンマの地域では、コンマも小数点として受け付ける
