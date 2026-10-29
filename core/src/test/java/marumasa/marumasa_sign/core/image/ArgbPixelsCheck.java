@@ -33,7 +33,12 @@ public final class ArgbPixelsCheck {
             // PNG と JPEG に書いて ImageIO で読み直した形式 (ファイルから読むときと同じ形式になる)
             for (String format : new String[]{"png", "jpg", "gif", "bmp"}) {
                 final ByteArrayOutputStream output = new ByteArrayOutputStream();
-                if (!ImageIO.write(image, format, output)) continue;
+                try {
+                    if (!ImageIO.write(image, format, output)) continue;
+                } catch (javax.imageio.IIOException e) {
+                    // Java 8 の JPEG の書き出しは、透明度のある画像を false ではなく例外で断る (Java 9 からは false)
+                    continue;
+                }
                 final BufferedImage read = ImageIO.read(new ByteArrayInputStream(output.toByteArray()));
                 if (read != null) compare("type " + type + " via " + format + " (read as type " + read.getType() + ")", read);
             }

@@ -62,6 +62,8 @@ final class NamedColors {
                 return 0xFF800000;
             case "purple":
                 return 0xFF800080;
+            case "rebeccapurple":
+                return 0xFF663399;
             case "transparent":
                 return 0;
             default:

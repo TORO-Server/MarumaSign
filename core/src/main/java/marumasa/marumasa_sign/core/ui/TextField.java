@@ -2,6 +2,8 @@ package marumasa.marumasa_sign.core.ui;
 
 import java.awt.Graphics2D;
 import java.awt.Shape;
+import java.text.BreakIterator;
+import java.util.Locale;
 
 public class TextField extends Widget {
 
@@ -47,7 +49,7 @@ public class TextField extends Widget {
 
     public void setText(String value) {
         if (value == null) value = "";
-        if (value.length() > maxLength) value = value.substring(0, maxLength);
+        if (value.length() > maxLength) value = value.substring(0, cut(value, maxLength));
         if (value.contentEquals(text)) return;
         text.setLength(0);
         text.append(value);
@@ -76,6 +78,32 @@ public class TextField extends Widget {
         if (onChange != null) onChange.run();
     }
 
+    // length 文字で切るときの長さ。サロゲートペア (絵文字など) の片方だけを残さない
+    private static int cut(CharSequence value, int length) {
+        return length > 0 && Character.isHighSurrogate(value.charAt(length - 1)) ? length - 1 : length;
+    }
+
+    // 文字の境目を探すもの。サロゲートペアや、結合文字 (濁点やアクセント記号など) の途中には止まらない
+    private BreakIterator characters() {
+        final BreakIterator iterator = BreakIterator.getCharacterInstance(Locale.ROOT);
+        iterator.setText(text.toString());
+        return iterator;
+    }
+
+    // index より前の、最も近い文字の境目
+    private int previousBoundary(int index) {
+        if (index <= 0) return 0;
+        final int boundary = characters().preceding(Math.min(index, text.length()));
+        return boundary == BreakIterator.DONE ? 0 : boundary;
+    }
+
+    // index より後の、最も近い文字の境目
+    private int nextBoundary(int index) {
+        if (index >= text.length()) return text.length();
+        final int boundary = characters().following(Math.max(0, index));
+        return boundary == BreakIterator.DONE ? text.length() : boundary;
+    }
+
     private boolean hasSelection() {
         return caret != anchor;
     }
@@ -93,20 +121,31 @@ public class TextField extends Widget {
 
     protected void insert(String value) {
         final StringBuilder filtered = new StringBuilder();
-        for (int i = 0; i < value.length(); i++) {
+        // とても長い文字列を貼り付けられても、入る分 (と、切る位置を決めるための 1 文字) だけを調べる
+        for (int i = 0; i < value.length() && filtered.length() <= maxLength; i++) {
             final char c = value.charAt(i);
             if (c < 0x20 || c == 0x7F) continue;
             if (allowed != null && allowed.indexOf(c) < 0) continue;
             filtered.append(c);
         }
         if (filtered.length() == 0) return;
-        if (hasSelection()) deleteSelection();
+        final boolean replaced = hasSelection();
+        if (replaced) deleteSelection();
+        // 前半を入れなかったサロゲートペアの後半も入れない
+        if (Character.isLowSurrogate(filtered.charAt(0)) && (caret == 0 || !Character.isHighSurrogate(text.charAt(caret - 1)))) {
+            filtered.deleteCharAt(0);
+        }
         final int room = maxLength - text.length();
-        if (room <= 0) return;
-        if (filtered.length() > room) filtered.setLength(room);
-        text.insert(caret, filtered);
-        caret += filtered.length();
-        anchor = caret;
+        if (filtered.length() > room) filtered.setLength(Math.max(0, room));
+        // 入りきらないサロゲートペアの前半は入れない (1 文字ずつ入力されるときも、後半が入る場所がなければ入れない)
+        if (filtered.length() >= room) filtered.setLength(cut(filtered, filtered.length()));
+        if (filtered.length() > 0) {
+            text.insert(caret, filtered);
+            caret += filtered.length();
+            anchor = caret;
+        } else if (!replaced) {
+            return;
+        }
         changed();
     }
 
@@ -128,10 +167,10 @@ public class TextField extends Widget {
         final boolean ctrl = (modifiers & Key.MOD_CTRL) != 0;
         switch (key) {
             case Key.LEFT:
-                moveCaret(caret - 1, shift);
+                moveCaret(previousBoundary(caret), shift);
                 return true;
             case Key.RIGHT:
-                moveCaret(caret + 1, shift);
+                moveCaret(nextBoundary(caret), shift);
                 return true;
             case Key.HOME:
                 moveCaret(0, shift);
@@ -144,8 +183,9 @@ public class TextField extends Widget {
                     deleteSelection();
                     changed();
                 } else if (caret > 0) {
-                    text.deleteCharAt(--caret);
-                    anchor = caret;
+                    final int start = previousBoundary(caret);
+                    text.delete(start, caret);
+                    caret = anchor = start;
                     changed();
                 }
                 return true;
@@ -154,7 +194,7 @@ public class TextField extends Widget {
                     deleteSelection();
                     changed();
                 } else if (caret < text.length()) {
-                    text.deleteCharAt(caret);
+                    text.delete(caret, nextBoundary(caret));
                     changed();
                 }
                 return true;
@@ -200,7 +240,8 @@ public class TextField extends Widget {
         final int target = mx - x - PADDING + scroll;
         int best = 0;
         int bestDistance = Integer.MAX_VALUE;
-        for (int i = 0; i <= text.length(); i++) {
+        final BreakIterator iterator = characters();
+        for (int i = iterator.first(); i != BreakIterator.DONE; i = iterator.next()) {
             final int distance = Math.abs(widthTo(i) - target);
             if (distance < bestDistance) {
                 bestDistance = distance;
@@ -241,6 +282,9 @@ public class TextField extends Widget {
         if (focused) {
             if (caretX - scroll > inner) scroll = caretX - inner;
             if (caretX - scroll < 0) scroll = caretX;
+            // 文字が短くなったら (置き換えや削除)、右に空きを残さず、左に隠れた文字を見せる。
+            // そのままでは、キャレットより前の文字がすべて左に隠れたままになることがある
+            scroll = Math.max(0, Math.min(scroll, widthTo(text.length()) - inner));
         }
 
         final Shape clip = g.getClip();

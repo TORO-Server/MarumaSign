@@ -1,0 +1,134 @@
+{
+ "asset": {
+  "version": "2.0",
+  "generator": "MarumaSign seed"
+ },
+ "buffers": [
+  {
+   "byteLength": 92,
+   "uri": "data:application/octet-stream;base64,AAAAAAAAAAAAAAAAAACAPwAAAAAAAAAAAAAAAAAAgD8AAAAAAACAPwAAgD8AAAAAAAAAAAAAgD8AAIA/AACAPwAAAAAAAAAAAACAPwAAAAAAAAEAAgACAAEAAwA="
+  }
+ ],
+ "bufferViews": [
+  {
+   "buffer": 0,
+   "byteOffset": 0,
+   "byteLength": 48
+  },
+  {
+   "buffer": 0,
+   "byteOffset": 48,
+   "byteLength": 32
+  },
+  {
+   "buffer": 0,
+   "byteOffset": 80,
+   "byteLength": 12
+  }
+ ],
+ "accessors": [
+  {
+   "componentType": 5126,
+   "count": 4,
+   "type": "VEC3",
+   "bufferView": 0,
+   "min": [
+    0,
+    0,
+    0
+   ],
+   "max": [
+    1,
+    1,
+    0
+   ]
+  },
+  {
+   "componentType": 5126,
+   "count": 4,
+   "type": "VEC2",
+   "bufferView": 1
+  },
+  {
+   "componentType": 5123,
+   "count": 6,
+   "type": "SCALAR",
+   "bufferView": 2
+  }
+ ],
+ "images": [
+  {
+   "uri": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAQAAAAECAYAAACp8Z5+AAAAS0lEQVR4nAXBMRXAMAgFwL8y1EAEEAPdGdijgfewQD1gJQNmEICW3sGFkMIoUbQY4MHIoKfCVodu+FXktVWX3r584GPI0V3Dp4e+H8HWF61551exAAAAAElFTkSuQmCC"
+  }
+ ],
+ "textures": [
+  {
+   "source": 0
+  }
+ ],
+ "materials": [
+  {
+   "pbrMetallicRoughness": {
+    "baseColorTexture": {
+     "index": 0
+    }
+   },
+   "alphaMode": "BLEND",
+   "doubleSided": true
+  }
+ ],
+ "meshes": [
+  {
+   "primitives": [
+    {
+     "attributes": {
+      "POSITION": 0,
+      "TEXCOORD_0": 1
+     },
+     "indices": 2,
+     "material": 0
+    }
+   ]
+  }
+ ],
+ "nodes": [
+  {
+   "children": [
+    1
+   ],
+   "matrix": [
+    2,
+    0,
+    0,
+    0,
+    0,
+    2,
+    0,
+    0,
+    0,
+    0,
+    2,
+    0,
+    0,
+    0,
+    0,
+    1
+   ]
+  },
+  {
+   "mesh": 0,
+   "translation": [
+    -0.5,
+    -0.5,
+    0
+   ]
+  }
+ ],
+ "scenes": [
+  {
+   "nodes": [
+    0
+   ]
+  }
+ ]
+}

@@ -111,18 +111,29 @@ public final class Http {
         return readRest(input, new byte[0], -1, limit);
     }
 
+    // 知らされた大きさ (Content-Length) を信じて、先に確保してよい大きさ。これより大きいものは、届いた量に合わせて広げる
+    static final int TRUSTED_PREALLOCATION = 4 * 1024 * 1024;
+
     /**
      * head に続く残りを読み、head とつなげて返す。全体が limit バイトを超えたら IOException。
      * 大きさ (contentLength) が分かっていれば、その大きさの配列に直接読む (大きなファイルで、配列を何度も広げて写さないように)。
+     * ただし先に確保するのは TRUSTED_PREALLOCATION までにし、その先は届いた量に合わせて (最大で contentLength まで) 広げる。
+     * Content-Length はサーバーが自由に書けるので、そのまま確保すると、大きさだけを大きく書いて何も送らないサーバーの
+     * いくつもの看板で、1 つあたり上限 (スプラットなら 200 MB) ずつメモリを確保させられていた。
      */
     private static byte[] readRest(InputStream input, byte[] head, long contentLength, int limit) throws IOException {
         if (contentLength >= head.length && contentLength <= limit) {
-            final byte[] all = new byte[(int) contentLength];
+            // limit (int) 以下なので int に収まる
+            final int expected = (int) contentLength;
+            byte[] all = new byte[Math.min(expected, Math.max(TRUSTED_PREALLOCATION, head.length))];
             System.arraycopy(head, 0, all, 0, head.length);
             int filled = head.length;
-            while (filled < all.length) {
+            while (filled < expected) {
+                if (filled == all.length) all = java.util.Arrays.copyOf(all, (int) Math.min(expected, 2L * all.length));
                 final int read = input.read(all, filled, all.length - filled);
-                if (read < 0) return java.util.Arrays.copyOf(all, filled);
+                // 知らされた大きさより前に接続が切れた。途中までのものを全体として扱うと、
+                // 壊れたファイルを表示し、残しておく仕組み (DownloadCache) にも残して、次からも使ってしまう
+                if (read < 0) throw new IOException("Connection closed after " + filled + " of " + contentLength + " bytes");
                 filled += read;
             }
             // 知らされた大きさより長く送られてきたら、大きさが分からない場合と同じく、上限までは読む
@@ -280,7 +291,7 @@ public final class Http {
         guard.until = deadline != 0 && deadline - now < RESPONSE_NANOS ? deadline : now + RESPONSE_NANOS;
         final ScheduledFuture<?> watch = WATCHDOG.scheduleWithFixedDelay(guard, 1, 1, TimeUnit.SECONDS);
         try {
-            return download(url, check, defaultMaxSize, deadline, guard);
+            return download(url, check, defaultMaxSize, deadline, guard, true);
         } catch (IOException e) {
             if (guard.expired) throw new IOException("Download timed out", e);
             throw e;
@@ -289,11 +300,15 @@ public final class Http {
         }
     }
 
-    private static byte[] download(String url, ContentCheck check, int defaultMaxSize, long deadline, Guard guard) throws IOException {
+    /**
+     * @param useCache 残しておいたもの (DownloadCache) を使ってよいか。false なら、問い合わせずに本体を受け取る
+     */
+    private static byte[] download(String url, ContentCheck check, int defaultMaxSize, long deadline, Guard guard,
+                                   boolean useCache) throws IOException {
         // 看板の URL は誰でも書けるので、手元や家の中のネットワークは読まない (UrlPolicy)
         if (!UrlPolicy.isAllowed(url)) throw new IOException("Blocked URL: " + url);
         // 前にダウンロードして残しておいたもの (DownloadCache)。あれば、変わったかだけを問い合わせる
-        final DownloadCache.Entry cached = DownloadCache.lookup(url);
+        final DownloadCache.Entry cached = useCache ? DownloadCache.lookup(url) : null;
         String currentUrl = url;
         HttpURLConnection connection = null;
         // 最後まで読めた接続は切らずに残し、同じサーバーへの次のダウンロードで使い回させる (接続と TLS の準備を省く)
@@ -328,7 +343,15 @@ public final class Http {
                     } catch (IOException e) {
                         // 接続を使い回せないだけ
                     }
-                    return fromCache(cached, check, defaultMaxSize);
+                    final byte[] kept;
+                    try {
+                        kept = cached.read();
+                    } catch (IOException e) {
+                        // 問い合わせている間に、残しておいたものが消されたか書き換えられた (ほかのダウンロードで上限を超えたときなど)。
+                        // サーバーにはつながっているので、失敗にせず、残しておいたものを使わずに本体を受け取り直す
+                        return download(url, check, defaultMaxSize, deadline, guard, false);
+                    }
+                    return checkCached(kept, cached.name, check, defaultMaxSize);
                 }
                 if (status == 301 || status == 302 || status == 303 || status == 307 || status == 308) {
                     if (redirects >= 5) throw new IOException("Too many redirects");
@@ -382,11 +405,14 @@ public final class Http {
 
     // 残しておいたものを、ダウンロードしたものと同じように確かめて返す
     private static byte[] fromCache(DownloadCache.Entry cached, ContentCheck check, int defaultMaxSize) throws IOException {
-        final byte[] content = cached.read();
+        return checkCached(cached.read(), cached.name, check, defaultMaxSize);
+    }
+
+    private static byte[] checkCached(byte[] content, String name, ContentCheck check, int defaultMaxSize) throws IOException {
         int maxSize = defaultMaxSize;
         if (check != null) {
             final byte[] head = java.util.Arrays.copyOf(content, Math.min(512, content.length));
-            maxSize = check.maxBytes(head, head.length, cached.name);
+            maxSize = check.maxBytes(head, head.length, name);
             if (maxSize <= 0) return null;
         }
         if (content.length > maxSize) throw new IOException("Content size exceeds the limit of " + maxSize + " bytes.");

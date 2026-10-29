@@ -15,9 +15,13 @@ public final class Json {
 
     // 入れ子の深さの上限
     private static final int MAX_DEPTH = 256;
+    // 値の数の上限。小さな値 ({} や 0) は、文字の数の数十倍のメモリを使うので、
+    // 大きなファイルで値をとても多く並べてメモリを使い切らせないようにする
+    private static final int MAX_VALUES = 1 << 21;
 
     private final String text;
     private int pos;
+    private int values;
 
     private Json(String text) {
         this.text = text;
@@ -47,6 +51,7 @@ public final class Json {
 
     private Object value(int depth) throws IOException {
         if (depth > MAX_DEPTH) throw error("Too deep");
+        if (++values > MAX_VALUES) throw error("Too many values");
         skipSpace();
         if (pos >= text.length()) throw error("Unexpected end");
         final char c = text.charAt(pos);
@@ -258,14 +263,20 @@ public final class Json {
         return array(parent.get(name));
     }
 
+    // int の範囲の外の数は、範囲の端にする (4294967297 のような数が、桁があふれて 1 などの別の数にならないように)
     public static int integer(Map<String, Object> parent, String name, int fallback) {
         final Object value = parent.get(name);
-        return value instanceof Double ? (int) Math.round((Double) value) : fallback;
+        if (!(value instanceof Double)) return fallback;
+        final long rounded = Math.round((Double) value);
+        return (int) Math.max(Integer.MIN_VALUE, Math.min(Integer.MAX_VALUE, rounded));
     }
 
+    // float にすると無限大になる数 (1e39 など) は、書かれていないものとして扱う
     public static float number(Map<String, Object> parent, String name, float fallback) {
         final Object value = parent.get(name);
-        return value instanceof Double ? ((Double) value).floatValue() : fallback;
+        if (!(value instanceof Double)) return fallback;
+        final float number = ((Double) value).floatValue();
+        return Float.isInfinite(number) ? fallback : number;
     }
 
     public static String string(Map<String, Object> parent, String name, String fallback) {
@@ -287,6 +298,7 @@ public final class Json {
             final Object value = list.get(i);
             if (!(value instanceof Double)) return fallback.clone();
             result[i] = ((Double) value).floatValue();
+            if (Float.isInfinite(result[i])) return fallback.clone();
         }
         return result;
     }
@@ -298,6 +310,7 @@ public final class Json {
         for (int i = 0; i < result.length; i++) {
             final Object item = list.get(i);
             result[i] = item instanceof Double ? ((Double) item).floatValue() : 0f;
+            if (Float.isInfinite(result[i])) result[i] = 0f;
         }
         return result;
     }

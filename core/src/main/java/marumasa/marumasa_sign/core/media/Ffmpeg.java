@@ -5,17 +5,32 @@ import marumasa.marumasa_sign.core.MarumaSign;
 import java.io.File;
 import java.io.IOException;
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
+import java.util.Set;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 
 /**
  * 動画と音声の再生に使う FFmpeg の実行ファイルを探す。
  * 探す順番: システムプロパティ marumasign.ffmpeg、ゲームフォルダの marumasign/ffmpeg、PATH、よくあるインストール先。
+ * システムプロパティ marumasign.ffmpeg を none にすると、FFmpeg を使わない。
  */
 public final class Ffmpeg {
 
     private static final boolean WINDOWS = System.getProperty("os.name", "").toLowerCase(Locale.ROOT).contains("win");
+
+    // 動かしている FFmpeg と ffprobe。ゲームを終えるときに止める (ゲームの後も通信を続けて残らないように)
+    private static final Set<Process> RUNNING = new HashSet<Process>();
+    private static boolean shutdownHook;
+    // 時間を限って動かすプロセスを、時間が来たら止める
+    private static final ScheduledExecutorService WATCHDOG = Executors.newSingleThreadScheduledExecutor(r -> {
+        final Thread thread = new Thread(r, "MarumaSign FFmpeg watchdog");
+        thread.setDaemon(true);
+        return thread;
+    });
 
     private static boolean searched;
     private static File ffmpeg;
@@ -56,6 +71,43 @@ public final class Ffmpeg {
         return text.contains("#extm3u") || text.contains("<mpd") || text.contains("ffconcat") || text.contains("<compositionplaylist");
     }
 
+    /**
+     * FFmpeg か ffprobe を動かす。ゲームを終えるときに、まだ動いていれば止める。
+     */
+    public static Process start(ProcessBuilder builder) throws IOException {
+        final Process process = builder.start();
+        synchronized (RUNNING) {
+            RUNNING.removeIf(running -> !running.isAlive());
+            RUNNING.add(process);
+            if (!shutdownHook) {
+                Runtime.getRuntime().addShutdownHook(new Thread(Ffmpeg::stopAll, "MarumaSign FFmpeg cleanup"));
+                shutdownHook = true;
+            }
+        }
+        return process;
+    }
+
+    /**
+     * 時間を限って動かす。seconds 秒たっても終わらなければ止める。
+     * 少しずつしか送らないサーバーでは、出力を読み終わらないまま待ち続けるので、読む側ではなくこちらで止める。
+     */
+    public static Process start(ProcessBuilder builder, long seconds) throws IOException {
+        final Process process = start(builder);
+        WATCHDOG.schedule(() -> {
+            if (process.isAlive()) process.destroyForcibly();
+        }, seconds, TimeUnit.SECONDS);
+        return process;
+    }
+
+    private static void stopAll() {
+        synchronized (RUNNING) {
+            for (Process process : RUNNING) {
+                if (process.isAlive()) process.destroyForcibly();
+            }
+            RUNNING.clear();
+        }
+    }
+
     private static String executable(String name) {
         return WINDOWS ? name + ".exe" : name;
     }
@@ -63,6 +115,8 @@ public final class Ffmpeg {
     private static void search() {
         if (searched) return;
         searched = true;
+        // marumasign.ffmpeg=none なら、FFmpeg を使わない (パソコンに入っていても)
+        if ("none".equalsIgnoreCase(System.getProperty("marumasign.ffmpeg", ""))) return;
         try {
             searchDirectories();
         } catch (RuntimeException e) {

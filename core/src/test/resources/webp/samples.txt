@@ -1,0 +1,16 @@
+# 名前 幅 高さ フレーム数 RGBAのSHA-256 (先頭32文字) 表示時間 繰り返し回数。値は PIL (libwebp) で展開した結果から作った
+# アニメーションのハッシュは、完全に透明な画素を 0 にそろえてから計算する
+anim_manual_36x28.webp 36 28 5 020de4bb10ce6f5f8b243b5519b35736 40,100,60,30,100 0
+anim_pil_32x24.webp 32 24 3 b9ad2eecd7d8cec90f2addb1bae50b86 100,20,120 3
+lossless_1x1.webp 1 1 1 6b8c141082d4259c5b9174e88d98be82 - 0
+lossless_alpha_41x23.webp 41 23 1 69b9ef121baa19efddddaf932ff9f1bf - 0
+lossless_palette16_37x21.webp 37 21 1 d77ce38de7b494b4c3fa9d798824220c - 0
+lossless_palette_50x30.webp 50 30 1 df5387e27945083616a4cb0fb483b83a - 0
+lossless_photo_48x40.webp 48 40 1 42b6662b83d145c417338b590ea8373e - 0
+lossy_13x7_q20.webp 13 7 1 7137b0ae799fe883d7eb1a870e39ce0e - 0
+lossy_1x1.webp 1 1 1 8474d6d84003345911e86514e4ebadfa - 0
+lossy_67x45.webp 67 45 1 b1a3553793c9f96d34c86f1f15b19ebb - 0
+lossy_alpha_40x30.webp 40 30 1 75075f548e108f07bd2d90e62657e6fe - 0
+lossy_rawalpha_f1.webp 24 18 1 06ce0031033b0d7ef86f650961c50edb - 0
+lossy_rawalpha_f2.webp 24 18 1 06ce0031033b0d7ef86f650961c50edb - 0
+lossy_rawalpha_f3.webp 24 18 1 06ce0031033b0d7ef86f650961c50edb - 0

@@ -10,6 +10,8 @@ import java.util.Arrays;
 public final class ZstdDecoder {
 
     private static final int MAGIC = 0xFD2FB528;
+    // ブロックの大きさ (展開する前と後) の上限 (RFC 8878 3.1.1.2.4 の Block_Maximum_Size)
+    private static final int MAX_BLOCK_SIZE = 128 * 1024;
 
     // 長さの符号ごとの、基準の値と追加のビット数
     private static final int[] LL_BASE = {0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15,
@@ -205,6 +207,8 @@ public final class ZstdDecoder {
 
         private byte[] out = new byte[1 << 16];
         private int outSize;
+        // 今のフレームの出力が始まる位置。前のフレームの出力はさかのぼって写せない
+        private int frameStart;
 
         private final int[] repeat = {1, 4, 8};
         private FseTable llTable, ofTable, mlTable;
@@ -235,7 +239,7 @@ public final class ZstdDecoder {
                 pos += 4;
                 readFrame();
             }
-            return Arrays.copyOf(out, outSize);
+            return outSize == out.length ? out : Arrays.copyOf(out, outSize);
         }
 
         private void readFrame() throws IOException {
@@ -254,13 +258,16 @@ public final class ZstdDecoder {
                 pos += dictionaryBytes;
             }
             final int fcsBytes = fcsFlag == 0 ? (singleSegment ? 1 : 0) : fcsFlag == 1 ? 2 : fcsFlag == 2 ? 4 : 8;
+            long contentSize = -1;
             if (fcsBytes > 0) {
                 long size = 0;
                 for (int i = 0; i < fcsBytes; i++) size |= (long) u8(pos + i) << (8 * i);
                 if (fcsBytes == 2) size += 256;
-                if (size > maxSize - outSize) throw new IOException("Zstandard content is too large");
+                if (size < 0 || size > maxSize - outSize) throw new IOException("Zstandard content is too large");
+                contentSize = size;
                 pos += fcsBytes;
             }
+            frameStart = outSize;
 
             // フレームごとに、繰り返しの距離と表を初めに戻す
             repeat[0] = 1;
@@ -276,6 +283,9 @@ public final class ZstdDecoder {
                 final boolean last = (header & 1) != 0;
                 final int type = (header >> 1) & 3;
                 final int size = header >>> 3;
+                // ブロックは 128 KB を超えない (RLE のブロックは、3 バイトの見出しと 1 バイトで 2 MB 近くに増やせてしまう)
+                if (size > MAX_BLOCK_SIZE) throw new IOException("Zstandard block is too large");
+                final int blockStart = outSize;
                 if (type == 0) {
                     if (size > end - pos) throw new IOException("Truncated Zstandard block");
                     ensure(size);
@@ -295,9 +305,15 @@ public final class ZstdDecoder {
                 } else {
                     throw new IOException("Reserved Zstandard block type");
                 }
+                if (outSize - blockStart > MAX_BLOCK_SIZE) throw new IOException("Zstandard block is too large");
                 if (last) break;
             }
-            if (checksum) pos += 4;
+            // 書かれていた展開後の大きさと違えば壊れている
+            if (contentSize >= 0 && outSize - frameStart != contentSize) throw new IOException("Zstandard content size mismatch");
+            if (checksum) {
+                if (end - pos < 4) throw new IOException("Truncated Zstandard checksum");
+                pos += 4;
+            }
         }
 
         private void readCompressedBlock(int start, int blockEnd) throws IOException {
@@ -422,7 +438,7 @@ public final class ZstdDecoder {
                 if (literalLength > literals.length - literalPos) throw new IOException("Zstandard literals overflow");
                 append(literals, literalPos, literalLength);
                 literalPos += literalLength;
-                if (offset <= 0 || offset > outSize) throw new IOException("Invalid Zstandard match offset");
+                if (offset <= 0 || offset > outSize - frameStart) throw new IOException("Invalid Zstandard match offset");
                 ensure(matchLength);
                 int from = outSize - offset;
                 for (int k = 0; k < matchLength; k++) {

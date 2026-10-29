@@ -1,19 +1,26 @@
 package marumasa.marumasa_sign.core;
 
-import org.apache.logging.log4j.Logger;
+import java.io.PrintStream;
+import java.io.PrintWriter;
+import java.io.StringWriter;
 
 /**
- * 記録 (ログ) に書く文字を無害にしてから、Minecraft のロガー (Log4j) に渡す。
+ * 記録 (ログ)。ライブラリ (Log4j など) は使わず、標準出力と標準エラー出力に 1 行ずつ書く。
+ * Minecraft は標準出力と標準エラー出力を自分の記録 (latest.log) に流すので、ゲームの記録にも残る。
+ * <p>
  * 看板の URL やサーバーの返事など、記録には誰でも書ける文字が入る。
- * 古い Minecraft (1.18 まで) の Log4j は、記録する文字の中の「${jndi:...}」を実行してしまう (Log4Shell) ことがあるので、
+ * 標準出力の先は古い Minecraft (1.18 まで) の Log4j で、記録する文字の中の「${jndi:...}」を実行してしまう (Log4Shell) ことがあるので、
  * 「${」は「$ {」に変える。改行などの制御文字は「\n」のような書き方に変え、記録の行を偽れないようにする。
+ * 詳しい記録 (debug / trace) は、システムプロパティ marumasign.debug を true にしたときだけ書く。
  */
 public final class SafeLog {
 
-    private final Logger logger;
+    private static final boolean DEBUG = Boolean.getBoolean("marumasign.debug");
 
-    SafeLog(Logger logger) {
-        this.logger = logger;
+    private final String name;
+
+    SafeLog(String name) {
+        this.name = name;
     }
 
     // 記録に書いてよい形にした文字
@@ -29,9 +36,10 @@ public final class SafeLog {
                 replacement = "\\n";
             } else if (c == '\r') {
                 replacement = "\\r";
-            } else if ((c < 0x20 && c != '\t') || (c >= 0x7F && c <= 0x9F) || (c >= 0x202A && c <= 0x202E)
-                    || (c >= 0x2066 && c <= 0x2069)) {
-                // 端末の色を変える文字や、文字の向きを入れ替える文字も、そのままでは書かない
+            } else if ((c < 0x20 && c != '\t') || (c >= 0x7F && c <= 0x9F) || c == 0x2028 || c == 0x2029
+                    || (c >= 0x202A && c <= 0x202E) || (c >= 0x2066 && c <= 0x2069)) {
+                // 端末の色を変える文字や、文字の向きを入れ替える文字も、そのままでは書かない。
+                // 行の区切り (U+2028) と段落の区切り (U+2029) も、記録を見るソフトによっては改行になるので書かない
                 replacement = String.format("\\u%04x", (int) c);
             } else {
                 if (result != null) result.append(c);
@@ -44,38 +52,53 @@ public final class SafeLog {
     }
 
     public boolean isDebugEnabled() {
-        return logger.isDebugEnabled();
+        return DEBUG;
     }
 
     public boolean isTraceEnabled() {
-        return logger.isTraceEnabled();
+        return DEBUG;
     }
 
     public void trace(String message) {
-        if (logger.isTraceEnabled()) logger.trace(clean(message));
+        if (DEBUG) write(System.out, "TRACE", message, null);
     }
 
     public void debug(String message) {
-        if (logger.isDebugEnabled()) logger.debug(clean(message));
+        if (DEBUG) write(System.out, "DEBUG", message, null);
     }
 
     public void debug(String message, Throwable error) {
-        if (logger.isDebugEnabled()) logger.debug(clean(message), error);
+        if (DEBUG) write(System.out, "DEBUG", message, error);
     }
 
     public void info(String message) {
-        logger.info(clean(message));
+        write(System.out, "INFO", message, null);
     }
 
     public void warn(String message) {
-        logger.warn(clean(message));
+        write(System.err, "WARN", message, null);
     }
 
     public void error(String message) {
-        logger.error(clean(message));
+        write(System.err, "ERROR", message, null);
     }
 
     public void error(String message, Throwable error) {
-        logger.error(clean(message), error);
+        write(System.err, "ERROR", message, error);
+    }
+
+    private void write(PrintStream out, String level, String message, Throwable error) {
+        final StringBuilder text = new StringBuilder("[").append(name).append('/').append(level).append("] ").append(clean(message));
+        if (error != null) {
+            // 例外の説明にも外から来た文字が入るので、1 行ずつ無害にする
+            final StringWriter trace = new StringWriter();
+            error.printStackTrace(new PrintWriter(trace));
+            for (String line : trace.toString().split("\r?\n")) {
+                if (!line.isEmpty()) text.append(System.lineSeparator()).append(clean(line));
+            }
+        }
+        synchronized (out) {
+            out.println(text);
+        }
     }
 }

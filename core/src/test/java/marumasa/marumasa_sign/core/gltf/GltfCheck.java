@@ -58,13 +58,9 @@ public final class GltfCheck {
         if (failures > 0) System.exit(1);
     }
 
+    // URI の %XX (空白の %20 など) を戻して読む (Mod と同じ読み方)
     private static GltfLoader.Resources resources(final File file) {
-        return new GltfLoader.Resources() {
-            @Override
-            public byte[] load(String uri) throws IOException {
-                return Files.readAllBytes(new File(file.getParentFile(), uri).toPath());
-            }
-        };
+        return marumasa.marumasa_sign.core.image.ImageLoader.fileResources(file);
     }
 
     private static int[] render(GltfScene scene, float time) {

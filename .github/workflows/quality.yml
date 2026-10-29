@@ -1,0 +1,160 @@
+name: Quality
+
+# 不具合を探す検査。CI (PR) から呼ばれるほか、毎晩ファジングを長くして動かす。
+# - no-libraries: ライブラリ (第三者のコード) を使っていないこと、配布物に入っていないこと
+# - core-checks: core をコンパイルし (警告も検査)、試験とファジングを動かす (Java 25 と、古い Minecraft が使う Java 8 の両方)
+# - codeql: GitHub の CodeQL による静的解析 (セキュリティの問題を含む)
+on:
+  workflow_call:
+    inputs:
+      mode:
+        description: quick (PR) か long (毎晩)
+        type: string
+        default: quick
+  schedule:
+    # 毎晩 (日本時間の 3 時 17 分)
+    - cron: '17 18 * * *'
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: quick か long
+        type: choice
+        options: [quick, long]
+        default: long
+
+permissions:
+  contents: read
+
+jobs:
+  no-libraries:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Check that no third-party library is used
+        run: python3 .github/scripts/check-no-libraries.py
+
+      - name: Check that the Python tools compile
+        run: python3 -m compileall -q tools .github/scripts
+
+  core-checks:
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    strategy:
+      fail-fast: false
+      matrix:
+        java: ['25', '8']
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      # Java 8 の javac は --release を知らないので、コンパイルはいつも Java 25 で行い、試験だけを各版の java で動かす
+      - name: Set up JDK ${{ matrix.java }}
+        if: matrix.java != '25'
+        uses: actions/setup-java@v5
+        with:
+          java-version: ${{ matrix.java }}
+          distribution: 'temurin'
+
+      - name: Remember the test runtime
+        if: matrix.java != '25'
+        run: echo "TEST_JAVA_HOME=$JAVA_HOME" >> "$GITHUB_ENV"
+
+      - name: Set up JDK 25
+        uses: actions/setup-java@v5
+        with:
+          java-version: '25'
+          distribution: 'temurin'
+
+      # 動画と音声の試験 (再生の数の上限、止めたときの後片付け、通信の行き先の確認) に使う
+      - name: Install FFmpeg
+        run: sudo apt-get update -q && sudo apt-get install -y -q ffmpeg
+
+      - name: Run core checks
+        env:
+          MODE: ${{ inputs.mode || (github.event_name == 'schedule' && 'long') || 'quick' }}
+        run: |
+          if [ -n "${TEST_JAVA_HOME:-}" ]; then
+            # javac は Java 25、java は試験する版にする
+            mkdir -p "$RUNNER_TEMP/bin"
+            ln -sf "$JAVA_HOME/bin/javac" "$RUNNER_TEMP/bin/javac"
+            ln -sf "$TEST_JAVA_HOME/bin/java" "$RUNNER_TEMP/bin/java"
+            export PATH="$RUNNER_TEMP/bin:$PATH"
+          fi
+          java -version
+          bash .github/scripts/run-core-checks.sh "$MODE"
+
+      - name: Upload failing fuzz inputs
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: fuzz-failures-java${{ matrix.java }}
+          path: |
+            core/build/*-fuzz
+            core/build/fuzz*
+          if-no-files-found: ignore
+          retention-days: 14
+
+  codeql:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    permissions:
+      contents: read
+      security-events: write
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Set up JDK 25
+        uses: actions/setup-java@v5
+        with:
+          java-version: '25'
+          distribution: 'temurin'
+
+      # build-mode: none でも、依存を調べるために Gradle を動かし、すべての版の Minecraft の準備に 2 時間以上かかる。
+      # そこで、配布する Mod の中身の core と bootstrap だけを javac でコンパイルして解析する
+      # (adapters は Minecraft がないとコンパイルできない。Minecraft とつなぐだけの薄い部分)
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@v4
+        with:
+          languages: java-kotlin
+          build-mode: manual
+          queries: security-extended
+
+      - name: Compile core and bootstrap
+        run: |
+          out="$RUNNER_TEMP/codeql-classes"
+          mkdir -p "$out/core" "$out/boot" "$out/generated/marumasa/marumasa_sign/boot"
+          javac --release 8 -encoding UTF-8 -nowarn -d "$out/core" $(find core/src/main/java -name '*.java')
+          # Gradle が作る BootInfo の代わり
+          printf 'package marumasa.marumasa_sign.boot;\n\npublic final class BootInfo {\n    public static final String VERSION = "ci";\n\n    private BootInfo() {\n    }\n}\n' \
+            > "$out/generated/marumasa/marumasa_sign/boot/BootInfo.java"
+          javac --release 8 -encoding UTF-8 -nowarn -cp "$out/core" -d "$out/boot" \
+            $(find bootstrap/src -name '*.java') "$out/generated/marumasa/marumasa_sign/boot/BootInfo.java"
+
+      - name: Analyze
+        uses: github/codeql-action/analyze@v4
+        with:
+          category: /language:java-kotlin
+          output: codeql-results
+
+      # 見つけた問題を、ジョブの記録にも一覧で書き出す (Security のタブを見られない人も確かめられるように)
+      - name: List findings
+        if: always()
+        run: |
+          python3 - <<'PY'
+          import glob, json
+          count = 0
+          for path in glob.glob('codeql-results/*.sarif'):
+              for run in json.load(open(path, encoding='utf-8')).get('runs', []):
+                  for result in run.get('results', []):
+                      location = result.get('locations', [{}])[0].get('physicalLocation', {})
+                      file = location.get('artifactLocation', {}).get('uri', '?')
+                      line = location.get('region', {}).get('startLine', '?')
+                      message = result.get('message', {}).get('text', '').replace('\n', ' ')
+                      print(f"{result.get('ruleId')}  {file}:{line}  {message[:200]}")
+                      count += 1
+          print(f"{count} findings")
+          PY

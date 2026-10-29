@@ -228,12 +228,15 @@ final class SpecialModels {
         final Object bedrock = entity.get(front ? "FrontText" : "BackText");
         if (java instanceof Map) {
             final Map<String, Object> text = Nbt.compound(java);
-            for (Object line : Nbt.list(text, "messages")) lines.add(SignTexts.parse(line));
+            // 描くのは 4 行まで (それより多い行は読まない)
+            final List<Object> messages = Nbt.list(text, "messages");
+            for (int i = 0; i < messages.size() && i < 4; i++) lines.add(SignTexts.parse(messages.get(i)));
             color = dyeTextColor(Nbt.string(text, "color", "black"));
             glowing = Nbt.integer(text, "has_glowing_text", 0) != 0;
         } else if (bedrock instanceof Map || (front && entity.get("Text") instanceof String && source == Structure.Source.BEDROCK)) {
             final Map<String, Object> text = bedrock instanceof Map ? Nbt.compound(bedrock) : entity;
-            for (String line : Nbt.string(text, "Text", "").split("\n", -1)) lines.add(SignTexts.parse(line));
+            final String[] split = Nbt.string(text, "Text", "").split("\n", 5);
+            for (int i = 0; i < split.length && i < 4; i++) lines.add(SignTexts.parse(split[i]));
             color = Nbt.integer(text, "SignTextColor", 0xFF000000) & 0xFFFFFF;
             glowing = Nbt.integer(text, "IgnoreLighting", 0) != 0;
         } else if (front && (entity.containsKey("Text1") || entity.containsKey("Text2"))) {

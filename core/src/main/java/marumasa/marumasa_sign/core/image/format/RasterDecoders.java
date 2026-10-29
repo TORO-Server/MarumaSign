@@ -29,10 +29,15 @@ final class RasterDecoders {
         FormatUtil.checkSize(width, height);
         if (channels < 1 || channels > 4) throw new IOException("Unsupported SGI channels");
 
-        // チャンネルごと・行ごとの値 (0 から 65535)。行は下から上へ並ぶ
-        final int[][] plane = new int[channels][width * height];
+        // チャンネルごと・行ごとの値 (0 から 65535)。行は下から上へ並ぶ。
+        // チャンネルごとの領域は作らず、8 ビットにして結果に直接書く (小さな RLE のファイルで大きな領域を使わないように)
+        final long max = bytes == 1 ? 255 : 65535;
+        final int[] result = new int[width * height];
+        if (channels != 2 && channels != 4) java.util.Arrays.fill(result, 0xFF000000);
         final int[] row = new int[width];
         for (int c = 0; c < channels; c++) {
+            // 1 つ目は灰色か赤、2 つ目は (灰色のとき) 透明度か緑、3 つ目は青、4 つ目は透明度
+            final int[] shifts = channels < 3 ? (c == 0 ? new int[]{16, 8, 0} : new int[]{24}) : new int[]{c == 3 ? 24 : 16 - 8 * c};
             for (int y = 0; y < height; y++) {
                 if (rle) {
                     final int table = 512 + (y + c * height) * 4;
@@ -45,18 +50,11 @@ final class RasterDecoders {
                         row[x] = bytes == 1 ? d[(int) offset + x] & 0xFF : FormatUtil.u16be(d, (int) offset + x * 2);
                     }
                 }
-                System.arraycopy(row, 0, plane[c], (height - 1 - y) * width, width);
-            }
-        }
-        final long max = bytes == 1 ? 255 : 65535;
-        final int[] result = new int[width * height];
-        for (int i = 0; i < result.length; i++) {
-            final int v0 = FormatUtil.to8(plane[0][i], max);
-            if (channels >= 3) {
-                result[i] = FormatUtil.argb(channels == 4 ? FormatUtil.to8(plane[3][i], max) : 255, v0,
-                        FormatUtil.to8(plane[1][i], max), FormatUtil.to8(plane[2][i], max));
-            } else {
-                result[i] = FormatUtil.argb(channels == 2 ? FormatUtil.to8(plane[1][i], max) : 255, v0, v0, v0);
+                final int target = (height - 1 - y) * width;
+                for (int x = 0; x < width; x++) {
+                    final int v = FormatUtil.to8(row[x], max);
+                    for (int shift : shifts) result[target + x] |= v << shift;
+                }
             }
         }
         return FormatUtil.still(width, height, result);
@@ -103,6 +101,8 @@ final class RasterDecoders {
         if (depth != 1 && depth != 8 && depth != 24 && depth != 32) throw new IOException("Unsupported Sun Raster depth");
         if (type > 3) throw new IOException("Unsupported Sun Raster type");
         int p = 32;
+        // 色の一覧の長さは、領域を確保する前にファイルの中に収まるか確かめる
+        if (mapType != 0 && (mapLength < 0 || mapLength > d.length - p)) throw new IOException("Invalid Sun Raster color map");
         int[] palette = null;
         if (mapType == 1) {
             final int n = mapLength / 3;

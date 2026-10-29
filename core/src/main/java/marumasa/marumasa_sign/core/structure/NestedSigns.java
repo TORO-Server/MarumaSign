@@ -71,6 +71,8 @@ final class NestedSigns {
     // 読み込んだもの (URL ごと。読めなかったものは NOTHING)
     private static final Object NOTHING = new Object();
     private final Map<String, Object> loaded = new ConcurrentHashMap<String, Object>();
+    // 読み込んだモデルのテクスチャを縮めたもの。同じ URL の看板がいくつあっても、まとめた画像には 1 回だけ入れる
+    private final Map<GltfScene, List<Sprite>> modelSprites = new java.util.IdentityHashMap<GltfScene, List<Sprite>>();
 
     // 看板の文字 (表、裏の順に行をつなげたもの) が MarumaSign の形式なら、その内容。そうでなければ null
     static SignSpec spec(List<List<SignTexts.Run>> lines) {
@@ -108,33 +110,28 @@ final class NestedSigns {
     private static Object fetch(String url, long deadline) throws Exception {
         final int[] kind = {0};
         final String[] name = {url};
+        final long[] used = USED.get();
+        // 読んでよい大きさ (合計の上限の残りまで)。読み始める前に、合計に足しておく (大きすぎて途中でやめたものも、読んだ分は数える)
+        final long[] granted = {0};
         final byte[] content = Http.downloadBefore(url, new Http.ContentCheck() {
             @Override
             public int maxBytes(byte[] head, int length, String resolved) {
                 name[0] = resolved;
-                if (ImageLoader.isSupportedImage(head, length, resolved)) {
-                    kind[0] = 1;
-                    return Http.MAX_SIZE;
-                }
-                if (PdfFile.isPdf(head, length)) {
-                    kind[0] = 2;
-                    return PdfFile.MAX_SIZE;
-                }
-                if (GltfLoader.isGlb(head, length) || StructureLoader.isStructure(head, length)) {
-                    kind[0] = 3;
-                    return Math.max(ImageLoader.MAX_MODEL_SIZE, StructureLoader.MAX_SIZE);
-                }
-                if (ImageLoader.isSplat(head, length, resolved)) return 0;
-                if (GltfLoader.looksLikeJson(head, length)) {
-                    kind[0] = 3;
-                    return ImageLoader.MAX_MODEL_SIZE;
-                }
-                return 0;
+                final int limit = limit(head, length, resolved, kind);
+                if (limit <= 0) return 0;
+                used[1] -= granted[0];
+                granted[0] = Math.max(0, Math.min(limit, MAX_BYTES - used[1]));
+                used[1] += granted[0];
+                return (int) granted[0];
             }
         }, deadline);
         // 動画や音声は描かない (構造物は止まった形として描くので)
-        if (content == null) return null;
-        USED.get()[1] += content.length;
+        if (content == null) {
+            used[1] -= granted[0];
+            return null;
+        }
+        // 足しておいた分を、読んだ大きさに直す
+        used[1] += content.length - granted[0];
         switch (kind[0]) {
             case 1:
                 return sprite(url, ImageLoader.decode(content, name[0]));
@@ -152,6 +149,28 @@ final class NestedSigns {
             default:
                 return null;
         }
+    }
+
+    // 中身の種類 (1: 絵、2: PDF、3: モデルか構造物) を kind[0] に入れ、その種類の大きさの上限を返す。描かないものは 0
+    private static int limit(byte[] head, int length, String resolved, int[] kind) {
+        if (ImageLoader.isSupportedImage(head, length, resolved)) {
+            kind[0] = 1;
+            return Http.MAX_SIZE;
+        }
+        if (PdfFile.isPdf(head, length)) {
+            kind[0] = 2;
+            return PdfFile.MAX_SIZE;
+        }
+        if (GltfLoader.isGlb(head, length) || StructureLoader.isStructure(head, length)) {
+            kind[0] = 3;
+            return Math.max(ImageLoader.MAX_MODEL_SIZE, StructureLoader.MAX_SIZE);
+        }
+        if (ImageLoader.isSplat(head, length, resolved)) return 0;
+        if (GltfLoader.looksLikeJson(head, length)) {
+            kind[0] = 3;
+            return ImageLoader.MAX_MODEL_SIZE;
+        }
+        return 0;
     }
 
     // 絵を、まとめた画像に入る大きさに縮めてテクスチャにする。アニメーションは tick 単位の表示時間にする
@@ -265,6 +284,23 @@ final class NestedSigns {
         }
     }
 
+    private synchronized List<Sprite> sprites(GltfScene scene) {
+        List<Sprite> sprites = modelSprites.get(scene);
+        if (sprites != null) return sprites;
+        final GltfModel model = scene.model();
+        sprites = new ArrayList<Sprite>();
+        for (int i = 0; i < model.textureCount(); i++) {
+            final GltfModel.Texture texture = model.texture(i);
+            final int longest = Math.max(texture.width, texture.height);
+            final int divisor = (longest + MAX_TEXTURE - 1) / MAX_TEXTURE;
+            final int width = Math.max(1, texture.width / Math.max(1, divisor)), height = Math.max(1, texture.height / Math.max(1, divisor));
+            sprites.add(Sprite.of("model:" + System.identityHashCode(scene) + ":" + i, width, height,
+                    shrink(texture.pixels, texture.width, texture.height, width, height)));
+        }
+        modelSprites.put(scene, sprites);
+        return sprites;
+    }
+
     // モデルの四角形を、絵の色ごと書き出す (アニメーションするモデルは最初の姿勢)
     private void emitModel(StructureMesher mesher, GltfScene scene, float[] placement, float[] origin, float scale) {
         final GltfScene.Group[] groups = scene.groups();
@@ -284,16 +320,7 @@ final class NestedSigns {
             scene.pose(0);
             scene.emit(placement, vertices, colors);
         }
-        final GltfModel model = scene.model();
-        final List<Sprite> sprites = new ArrayList<Sprite>();
-        for (int i = 0; i < model.textureCount(); i++) {
-            final GltfModel.Texture texture = model.texture(i);
-            final int longest = Math.max(texture.width, texture.height);
-            final int divisor = (longest + MAX_TEXTURE - 1) / MAX_TEXTURE;
-            final int width = Math.max(1, texture.width / Math.max(1, divisor)), height = Math.max(1, texture.height / Math.max(1, divisor));
-            sprites.add(Sprite.of("model:" + System.identityHashCode(scene) + ":" + i, width, height,
-                    shrink(texture.pixels, texture.width, texture.height, width, height)));
-        }
+        final List<Sprite> sprites = sprites(scene);
         final float[] positions = new float[12];
         final float[] uvs = new float[8];
         final int[] quadColors = new int[4];

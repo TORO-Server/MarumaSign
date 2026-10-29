@@ -2,6 +2,7 @@ package marumasa.marumasa_sign.core.sign;
 
 import marumasa.marumasa_sign.core.gltf.GltfScene;
 import marumasa.marumasa_sign.core.splat.SplatScene;
+import marumasa.marumasa_sign.core.util.Clock;
 
 /**
  * URL ごとの画像テクスチャ。読み込み中・失敗の場合は代わりの画像を指す。
@@ -24,7 +25,7 @@ public final class TextureEntry {
     private int repetitions;
     private long loadedAt;
     // 看板が初めて描かれようとした時刻と、そこから表示できるようになるまでの時間 (ミリ秒、まだなら -1)
-    private final long requestedAt = System.currentTimeMillis();
+    private final long requestedAt = Clock.millis();
     private volatile long loadMillis = -1;
     // 状態が変わるたびに増える。SignImage が頂点を作り直すために使う
     private volatile int revision;
@@ -38,8 +39,8 @@ public final class TextureEntry {
     private GltfScene model;
     // ガウシアンスプラッティング。画像や 3D モデルなら null
     private SplatScene splat;
-    // 最後に看板として引かれた時刻 (System.currentTimeMillis)。使われていないものを消すのに使う
-    private volatile long lastUsed = System.currentTimeMillis();
+    // 最後に看板として引かれた時刻 (Clock.millis。経った時間を測るためのもの)。使われていないものを消すのに使う
+    private volatile long lastUsed = Clock.millis();
     // 使っているメモリのおおよその量 (バイト)
     private long bytes;
 
@@ -54,7 +55,7 @@ public final class TextureEntry {
         this.frameEnd = frameEnd;
         this.repetitions = repetitions;
         this.ownsTextures = ownsTextures;
-        this.loadedAt = System.currentTimeMillis();
+        this.loadedAt = Clock.millis();
         if (state == LOADED && loadMillis < 0) loadMillis = loadedAt - requestedAt;
         this.state = state;
         this.revision++;
@@ -89,8 +90,8 @@ public final class TextureEntry {
     }
 
     // 読み込んでからの時間 (秒)。アニメーションの時刻に使う
-    float modelTime() {
-        return (System.currentTimeMillis() - loadedAt) / 1000f;
+    double modelTime() {
+        return (Clock.millis() - loadedAt) / 1000.0;
     }
 
     void setMedia(MediaSession media) {
@@ -147,7 +148,7 @@ public final class TextureEntry {
     }
 
     void touch() {
-        lastUsed = System.currentTimeMillis();
+        lastUsed = Clock.millis();
     }
 
     long lastUsed() {
@@ -182,7 +183,7 @@ public final class TextureEntry {
         final int total = frameEnd[frameEnd.length - 1];
         if (total <= 0) return frames[0];
 
-        final long elapsed = System.currentTimeMillis() - loadedAt;
+        final long elapsed = Clock.millis() - loadedAt;
         if (repetitions > 0 && elapsed >= (long) total * repetitions) {
             return frames[frames.length - 1];
         }

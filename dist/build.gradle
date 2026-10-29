@@ -1,18 +1,4 @@
-import org.objectweb.asm.ClassReader
-import org.objectweb.asm.ClassWriter
-import org.objectweb.asm.commons.ClassRemapper
-import org.objectweb.asm.commons.Remapper
-
 import java.util.zip.ZipFile
-
-buildscript {
-    repositories {
-        mavenCentral()
-    }
-    dependencies {
-        classpath 'org.ow2.asm:asm-commons:9.8'
-    }
-}
 
 plugins {
     id 'base'
@@ -42,6 +28,91 @@ def remappedJar = { target, String loaderName ->
 }
 
 /**
+ * クラスファイルの中のクラスの名前を、パッケージの前置きごと付け替える (ライブラリ (ASM など) は使わない)。
+ * <p>
+ * クラスの名前と型の記述 (descriptor / signature) は、どれも定数プールの CONSTANT_Utf8 に入っている。
+ * 定数プールの後ろには位置を指す値がないので、Utf8 の中身を書き換えて長さが変わっても、残りはそのまま写せばよい。
+ * 文字列の定数 (CONSTANT_String が指す Utf8) は書き換えない (ASM の ClassRemapper と同じ)。
+ */
+class ClassRelocator {
+    static byte[] relocate(byte[] bytes, String from, String to) {
+        def input = new DataInputStream(new ByteArrayInputStream(bytes))
+        def output = new ByteArrayOutputStream(bytes.length + 256)
+        def out = new DataOutputStream(output)
+        // Groovy では 0xCAFEBABE は int に収まらないので Long になる。int にしてから比べる
+        final int magic = 0xCAFEBABE as int
+        if (input.readInt() != magic) throw new GradleException('Not a class file')
+        out.writeInt(magic)
+        out.writeShort(input.readUnsignedShort())
+        out.writeShort(input.readUnsignedShort())
+        int count = input.readUnsignedShort()
+        out.writeShort(count)
+        // 1 回目: 定数プールを読み、文字列の定数が指す Utf8 を集める
+        def tags = new int[count]
+        def utf = new String[count]
+        def raw = new byte[count][]
+        def strings = new HashSet<Integer>()
+        for (int i = 1; i < count; i++) {
+            int tag = input.readUnsignedByte()
+            tags[i] = tag
+            def buffer = new ByteArrayOutputStream()
+            def entry = new DataOutputStream(buffer)
+            switch (tag) {
+                case 1: utf[i] = input.readUTF(); break
+                case 3: case 4: entry.writeInt(input.readInt()); break
+                case 5: case 6: entry.writeLong(input.readLong()); break
+                case 7: case 16: case 19: case 20: entry.writeShort(input.readUnsignedShort()); break
+                case 8:
+                    int target = input.readUnsignedShort()
+                    strings.add(target)
+                    entry.writeShort(target)
+                    break
+                case 9: case 10: case 11: case 12: case 17: case 18:
+                    entry.writeShort(input.readUnsignedShort())
+                    entry.writeShort(input.readUnsignedShort())
+                    break
+                case 15:
+                    entry.writeByte(input.readUnsignedByte())
+                    entry.writeShort(input.readUnsignedShort())
+                    break
+                default: throw new GradleException("Unknown constant pool tag ${tag}")
+            }
+            raw[i] = buffer.toByteArray()
+            if (tag == 5 || tag == 6) i++ // 8 バイトの定数は 2 つ分の場所を使う
+        }
+        // 2 回目: 書き換えて書き出す
+        for (int i = 1; i < count; i++) {
+            int tag = tags[i]
+            if (tag == 0) continue
+            out.writeByte(tag)
+            if (tag == 1) {
+                def value = utf[i]
+                def mapped = map(value, from, to)
+                if (mapped != value && strings.contains(i)) {
+                    // 文字列の定数と型の記述が同じ Utf8 を共有している。どちらに合わせても壊れるので止める
+                    throw new GradleException("Constant ${value} is used both as a string and as a type name")
+                }
+                out.writeUTF(strings.contains(i) ? value : mapped)
+            } else {
+                out.write(raw[i])
+            }
+        }
+        // 残り (フィールド、メソッド、属性) はそのまま
+        out.write(input.readAllBytes())
+        out.flush()
+        return output.toByteArray()
+    }
+
+    // 内部名 (a/b/C) と型の記述 (La/b/C;) の中の前置きを付け替える
+    static String map(String value, String from, String to) {
+        if (value == from) return to
+        if (value.startsWith(from + '/')) return to + value.substring(from.length())
+        def marker = 'L' + from + '/'
+        return value.contains(marker) ? value.replace(marker, 'L' + to + '/') : value
+    }
+}
+
+/**
  * jar の中のクラスを、パッケージ名を変えて取り出す。
  * 同じ実装でもローダーごとに実行時の名前 (SRG / 公式 / intermediary) が違うため、
  * 1 つの jar に同居させるにはローダーごとに別のパッケージへ移す必要がある。
@@ -67,119 +138,22 @@ abstract class RelocateJar extends DefaultTask {
 
         def from = fromPrefix.get()
         def to = toPrefix.get()
-        def remapper = new Remapper() {
-            @Override
-            String map(String internalName) {
-                if (internalName == from || internalName.startsWith(from + '/')) {
-                    return to + internalName.substring(from.length())
-                }
-                return internalName
-            }
-        }
-
         new ZipFile(input.get().asFile).withCloseable { zip ->
             zip.entries().each { entry ->
                 if (entry.directory || !entry.name.startsWith(from + '/') || !entry.name.endsWith('.class')) return
-                def reader = new ClassReader(zip.getInputStream(entry).bytes)
-                def writer = new ClassWriter(0)
-                reader.accept(new ClassRemapper(writer, remapper), 0)
+                def bytes = ClassRelocator.relocate(zip.getInputStream(entry).bytes, from, to)
                 def file = new File(outputDir, to + entry.name.substring(from.length()))
                 file.parentFile.mkdirs()
-                file.bytes = writer.toByteArray()
+                file.bytes = bytes
             }
         }
     }
 }
 
-/**
- * core のクラスと、core が使うライブラリ (PDFBox) を 1 か所にまとめる。
- * ライブラリは、他の Mod や Minecraft 自身が持つ同じライブラリとぶつからないよう、パッケージ名を変える。
- * jar の中のファイル (フォントなど) も同じように移し、それを指す文字列 ("/org/apache/pdfbox/..." など) も書き換える。
- */
-abstract class ShadeCore extends DefaultTask {
-    @InputFiles
-    abstract ConfigurableFileCollection getClasses()
-
-    @InputFiles
-    abstract ConfigurableFileCollection getLibraries()
-
-    // 移す前のパッケージ (/ 区切り) -> 移した先
-    @Input
-    abstract MapProperty<String, String> getPackages()
-
-    @OutputDirectory
-    abstract DirectoryProperty getOutput()
-
-    @TaskAction
-    void shade() {
-        def outputDir = output.get().asFile
-        outputDir.deleteDir()
-        outputDir.mkdirs()
-
-        def packages = packages.get()
-        def mapPath = { String path ->
-            for (entry in packages) {
-                if (path == entry.key || path.startsWith(entry.key + '/')) return entry.value + path.substring(entry.key.length())
-            }
-            return path
-        }
-        def remapper = new Remapper() {
-            @Override
-            String map(String internalName) {
-                return mapPath(internalName)
-            }
-
-            @Override
-            Object mapValue(Object value) {
-                // jar の中のファイルを指す絶対パス
-                if (value instanceof String && value.startsWith('/')) return '/' + mapPath(value.substring(1))
-                return super.mapValue(value)
-            }
-        }
-        def write = { String path, byte[] bytes ->
-            def file = new File(outputDir, path)
-            file.parentFile.mkdirs()
-            file.bytes = bytes
-        }
-        def remap = { byte[] bytes ->
-            def writer = new ClassWriter(0)
-            new ClassReader(bytes).accept(new ClassRemapper(writer, remapper), 0)
-            return writer.toByteArray()
-        }
-
-        classes.files.each { root ->
-            if (!root.isDirectory()) return
-            root.eachFileRecurse(groovy.io.FileType.FILES) { file ->
-                def path = root.toPath().relativize(file.toPath()).toString().replace('\\', '/')
-                write(path.endsWith('.class') ? mapPath(path) : path, path.endsWith('.class') ? remap(file.bytes) : file.bytes)
-            }
-        }
-        libraries.files.each { jar ->
-            // ライセンスの全文は、ほかの取り込んだライブラリと同じ場所に、ライブラリの名前を付けて置く
-            def library = jar.name.replaceAll(/-[0-9][^-]*\.jar$/, '')
-            new ZipFile(jar).withCloseable { zip ->
-                zip.entries().each { entry ->
-                    if (entry.directory) return
-                    def bytes = zip.getInputStream(entry).bytes
-                    if (entry.name.startsWith('META-INF/')) {
-                        if (entry.name == 'META-INF/LICENSE') write("marumasa_sign/licenses/${library}.txt", bytes)
-                        if (entry.name == 'META-INF/NOTICE') write("marumasa_sign/licenses/${library}-notice.txt", bytes)
-                        return
-                    }
-                    write(mapPath(entry.name), entry.name.endsWith('.class') ? remap(bytes) : bytes)
-                }
-            }
-        }
-    }
-}
-
-def shadeCore = tasks.register('shadeCore', ShadeCore) {
-    classes.from(project(':core').sourceSets.main.output.classesDirs)
-    libraries.from(project(':core').configurations.bundled)
-    packages.put('org/apache/pdfbox', "${basePackage}/lib/pdfbox")
-    packages.put('org/apache/fontbox', "${basePackage}/lib/fontbox")
-    packages.put('org/apache/commons/logging', "${basePackage}/lib/logging")
-    output = layout.buildDirectory.dir('shaded/core')
+// core のクラス (ライブラリは同梱しない)
+def shadeCore = tasks.register('shadeCore', Sync) {
+    from(project(':core').sourceSets.main.output.classesDirs)
+    into layout.buildDirectory.dir('shaded/core')
 }
 
 // ---------- 統合 jar (Forge / NeoForge / Fabric) ----------

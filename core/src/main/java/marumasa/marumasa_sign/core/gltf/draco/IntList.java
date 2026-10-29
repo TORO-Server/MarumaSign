@@ -1,162 +1,72 @@
 package marumasa.marumasa_sign.core.gltf.draco;
+
+import java.util.Arrays;
+
 /**
- *  Used to simulate std::vector&lt;int&gt;
- *  here we don't use List&lt;int&gt; because we need to simulate some behavior from C++ version.
- *
+ * 伸びる int の並び。展開の途中の作業用と、面の頂点番号を外へ渡すのに使う。
  */
-public class IntList
-{    
+public final class IntList {
+
+    private int[] data;
     private int count;
-    int[] data;
-    public int getCount()
-    {
+
+    public IntList() {
+        this(16);
+    }
+
+    IntList(int capacity) {
+        data = new int[Math.max(4, capacity)];
+    }
+
+    IntList(int[] values) {
+        data = values;
+        count = values.length;
+    }
+
+    public int getCount() {
         return count;
     }
-    
-    public IntList()
-    {
-        this.data = new int[10];
+
+    public int get(int index) {
+        if (index < 0 || index >= count) throw new IndexOutOfBoundsException("index " + index + " / " + count);
+        return data[index];
     }
-    
-    public IntList(int size)
-    {
-        this.data = new int[size];
-        this.count = size;
+
+    public int[] toArray() {
+        return Arrays.copyOf(data, count);
     }
-    
-    public int getCapacity()
-    {
-        return data.length;
+
+    void set(int index, int value) {
+        if (index < 0 || index >= count) throw new IndexOutOfBoundsException("index " + index + " / " + count);
+        data[index] = value;
     }
-    
-    public void setCapacity(int value)
-    {
-        if (value <= data.length)
-            return;
-        int[] newData = new int[value];
-        System.arraycopy(data, 0, newData, 0, data.length);
-        this.data = newData;
-    }
-    
-    public void add(int v)
-    {
-        this.ensureCapacity(count + 1);
-        data[count++] = v;
-    }
-    
-    public void addRange(int[] v)
-    {
-        this.addRange(v, v.length);
-    }
-    
-    public void addRange(IntList v)
-    {
-        this.addRange(v.data, v.count);
-    }
-    
-    public void addRange(int[] v, int length)
-    {
-        this.addRange(IntSpan.wrap(v, 0, length));
-    }
-    
-    public void addRange(IntSpan v)
-    {
-        if (v.size() > 0)
-        {
-            this.ensureCapacity(count + v.size());
-            v.copyTo(IntSpan.wrap(data, count, v.size()));
-            count += v.size();
+
+    void add(int value) {
+        if (count == data.length) {
+            data = Arrays.copyOf(data, data.length + (data.length >> 1) + 1);
         }
-        
+        data[count++] = value;
     }
-    
-    public void clear()
-    {
-        this.count = 0;
+
+    int last() {
+        return get(count - 1);
     }
-    
-    public void removeAt(int idx)
-    {
-        if (idx == (count - 1))
-        {
-            count--;
-        }
-        else
-        {
-            System.arraycopy(data, idx + 1, data, idx, count - idx - 1);
-            count--;
-        }
-        
+
+    int removeLast() {
+        final int value = get(count - 1);
+        count--;
+        return value;
     }
-    
-    public int get(int idx)
-    {
-        return data[idx];
+
+    void setLast(int value) {
+        set(count - 1, value);
     }
-    
-    public void set(int idx, int value)
-    {
-        data[idx] = value;
+
+    boolean isEmpty() {
+        return count == 0;
     }
-    
-    public int getBack()
-    {
-        return data[count - 1];
+
+    void clear() {
+        count = 0;
     }
-    
-    public void popBack()
-    {
-        if (count > 0)
-        {
-            count--;
-        }
-        
-    }
-    
-    public void reverse()
-    {
-                for (int i = 0, j = count - 1; i < j; i++, j--) {
-            int tmp = data[i];
-            data[i] = data[j];
-            data[j] = tmp;
-        }
-    }
-    
-    public void resize(int newSize)
-    {
-        this.ensureCapacity(newSize);
-        this.count = newSize;
-    }
-    
-    public void resize(int newSize, int newValue)
-    {
-        this.ensureCapacity(newSize);
-        for (int i = count; i < newSize; i++)
-        {
-            data[i] = newValue;
-        }
-        
-        this.count = newSize;
-    }
-    
-    private void ensureCapacity(int newSize)
-    {
-        if (newSize < data.length)
-            return;
-        int capacity = data.length;
-        while (capacity < newSize)
-        {
-            capacity += capacity >> 1;
-        }
-        
-        this.setCapacity(capacity);
-    }
-    
-    public int[] toArray()
-    {
-        int[] ret = new int[count];
-        System.arraycopy(data, 0, ret, 0, count);
-        return ret;
-    }
-    
 }

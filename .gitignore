@@ -127,3 +127,6 @@ decompiled/
 
 # Python のキャッシュ
 __pycache__/
+
+# Claude Code の作業用の worktree
+.claude/worktrees/

@@ -1,0 +1,13 @@
+<?xml version="1.0"?>
+<!DOCTYPE svg PUBLIC "-//W3C//DTD SVG 1.1//EN" "http://127.0.0.1:9/svg11.dtd" [
+<!ENTITY secret SYSTEM "file:///etc/passwd">
+<!ENTITY % remote SYSTEM "http://127.0.0.1:9/remote.dtd">
+%remote;
+]>
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" xmlns:xi="http://www.w3.org/2001/XInclude" width="100" height="100">
+<text x="0" y="50" font-size="40" fill="black">&secret;</text>
+<xi:include href="file:///etc/passwd" parse="text"/>
+<image width="100" height="100" xlink:href="file:///etc/passwd"/>
+<image width="100" height="100" href="http://127.0.0.1:9/image.png"/>
+<rect width="100" height="100" fill="url(http://127.0.0.1:9/paint.svg#p)"/>
+</svg>

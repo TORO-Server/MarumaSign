@@ -1,7 +1,6 @@
 package marumasa.marumasa_sign.core.structure;
 
 import java.io.IOException;
-import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Map;
 import java.util.Set;
@@ -117,22 +116,21 @@ final class StructureFixer {
         }
     }
 
-    private int paletteId(BlockState state) {
+    private int paletteId(BlockState state) throws IOException {
         final int before = structure.paletteSize();
         final int id = structure.paletteId(state);
-        if (id >= before) {
-            if (stateIndex == null) return id;
-            final int[] grown = java.util.Arrays.copyOf(stateIndex, structure.paletteSize());
+        if (id >= before && stateIndex != null) {
+            // 増えるたびに写し直すと、状態の多い構造物で時間がかかるので、倍ずつ広げる
+            if (id >= stateIndex.length) stateIndex = java.util.Arrays.copyOf(stateIndex, Math.max(id + 1, stateIndex.length * 2));
             final BlockData.Block block = data.block(state.name);
-            grown[id] = block == null ? -1 : data.stateIndex(block, state);
-            stateIndex = grown;
+            stateIndex[id] = block == null ? -1 : data.stateIndex(block, state);
         }
         return id;
     }
 
     // ---------- 1.12 までのブロックエンティティ ----------
 
-    private void applyLegacyBlockEntities() {
+    private void applyLegacyBlockEntities() throws IOException {
         for (Map.Entry<Integer, Map<String, Object>> entry : structure.blockEntities().entrySet()) {
             final int index = entry.getKey();
             final Map<String, Object> nbt = entry.getValue();
@@ -330,7 +328,7 @@ final class StructureFixer {
         return facingAlongX == turnedAlongX;
     }
 
-    private void updateShapes() {
+    private void updateShapes() throws IOException {
         final Map<Integer, Map<String, Object>> entities = structure.blockEntities();
         // 1 回目: 2 段のブロックの上下をそろえる。2 回目: まわりで決まる形
         for (int pass = 0; pass < 2; pass++) {
@@ -526,14 +524,15 @@ final class StructureFixer {
     }
 
     // 1.12 までの形式のチェストは、隣り合う同じ向きのチェストとつながる
-    private void pairChests() {
+    private void pairChests() throws IOException {
         if (structure.source != Structure.Source.LEGACY) return;
-        final Map<Integer, Boolean> done = new HashMap<Integer, Boolean>();
+        // つなげ終えたます目 (チェストだらけの構造物でもメモリを使いすぎないように、ビットで持つ)
+        final java.util.BitSet done = new java.util.BitSet(structure.volume());
         for (int y = 0; y < structure.sizeY; y++) {
             for (int z = 0; z < structure.sizeZ; z++) {
                 for (int x = 0; x < structure.sizeX; x++) {
                     final int index = structure.index(x, y, z);
-                    if (done.containsKey(index)) continue;
+                    if (done.get(index)) continue;
                     final BlockState state = structure.state(structure.id(index));
                     if (!state.path().equals("chest") && !state.path().equals("trapped_chest")) continue;
                     final int facing = direction(state.get("facing"));
@@ -543,13 +542,13 @@ final class StructureFixer {
                         final int nx = x + DX[d], nz = z + DZ[d];
                         if (nx < 0 || nz < 0 || nx >= structure.sizeX || nz >= structure.sizeZ) continue;
                         final int other = structure.index(nx, y, nz);
-                        if (done.containsKey(other)) continue;
+                        if (done.get(other)) continue;
                         final BlockState neighbor = structure.state(structure.id(other));
                         if (!neighbor.name.equals(state.name) || !state.get("facing").equals(neighbor.get("facing"))) continue;
                         structure.setId(index, paletteId(state.with("type", side == 0 ? "left" : "right")));
                         structure.setId(other, paletteId(neighbor.with("type", side == 0 ? "right" : "left")));
-                        done.put(index, true);
-                        done.put(other, true);
+                        done.set(index);
+                        done.set(other);
                         break;
                     }
                 }

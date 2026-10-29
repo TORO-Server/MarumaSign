@@ -1,8 +1,14 @@
 package marumasa.marumasa_sign.core.image.format;
 
+import marumasa.marumasa_sign.core.anim.DecodedAnimation;
+import marumasa.marumasa_sign.core.anim.GifDecoder;
+import marumasa.marumasa_sign.core.image.ArgbPixels;
 import marumasa.marumasa_sign.core.image.DecodedImage;
+import marumasa.marumasa_sign.core.image.ImageBytes;
 import marumasa.marumasa_sign.core.image.ImageLoader;
+import marumasa.marumasa_sign.core.image.jpeg.JpegReader;
 
+import java.awt.image.BufferedImage;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 
@@ -25,6 +31,66 @@ final class FormatUtil {
 
     static DecodedImage still(int width, int height, int[] argb) {
         return new DecodedImage(width, height, new int[][]{argb}, new int[]{1}, 0);
+    }
+
+    /**
+     * ほかの形式の中に入っている画像 (ICO と ICNS の中の PNG、SVG の data: URI) を読む。読めない形式なら null。
+     * ImageIO は大きさを確かめずに領域を確保したり、BMP や TIFF の中の JPEG を libjpeg で読んだりするので、
+     * PNG は大きさを確かめてから渡し、JPEG・BMP・GIF は自分のデコーダで読む。それ以外の形式は読まない。
+     */
+    static BufferedImage readEmbedded(byte[] data) throws IOException {
+        return readEmbedded(data, (long) ImageLoader.MAX_STATIC_SIZE * ImageLoader.MAX_STATIC_SIZE);
+    }
+
+    /**
+     * readEmbedded と同じだが、ピクセル数が maxPixels を超える画像は、展開する前に断る (先頭に書かれた大きさで確かめる)。
+     */
+    static BufferedImage readEmbedded(byte[] data, long maxPixels) throws IOException {
+        final long[] size = embeddedSize(data);
+        if (size == null) return null;
+        checkSize(size[0], size[1]);
+        if (size[0] * size[1] > maxPixels) throw new IOException("Embedded image is too large: " + size[0] + "x" + size[1]);
+        if (data.length >= 8 && (data[0] & 0xFF) == 0x89 && data[1] == 'P' && data[2] == 'N' && data[3] == 'G') {
+            return ImageBytes.read(data);
+        }
+        final DecodedImage image;
+        if (ImageBytes.isJpeg(data)) {
+            image = JpegDecoder.decode(data);
+        } else if (data.length >= 2 && data[0] == 'B' && data[1] == 'M') {
+            BmpDecoder.checkHeader(data);
+            image = BmpDecoder.decodeFile(data);
+        } else if (ImageLoader.isGif(data)) {
+            final DecodedAnimation gif = GifDecoder.read(data);
+            if (gif.getFrames().isEmpty()) throw new IOException("GIF has no frames");
+            checkSize(gif.getWidth(), gif.getHeight());
+            image = still(gif.getWidth(), gif.getHeight(), gif.getFrames().get(0).getPixels());
+        } else {
+            return null;
+        }
+        return ArgbPixels.wrap(image.width, image.height, image.frames[0]);
+    }
+
+    // 埋め込まれた画像の、先頭に書かれた大きさ ({幅, 高さ})。readEmbedded が読まない形式なら null。壊れていれば IOException
+    private static long[] embeddedSize(byte[] data) throws IOException {
+        if (data.length >= 8 && (data[0] & 0xFF) == 0x89 && data[1] == 'P' && data[2] == 'N' && data[3] == 'G') {
+            if (data.length < 24 || !matchesAt(data, data.length, 12, "IHDR")) throw new IOException("Invalid embedded PNG");
+            return new long[]{u32be(data, 16), u32be(data, 20)};
+        }
+        if (ImageBytes.isJpeg(data)) {
+            final int[] size = JpegReader.size(data);
+            if (size == null) throw new IOException("Invalid embedded JPEG");
+            return new long[]{size[0], size[1]};
+        }
+        if (data.length >= 2 && data[0] == 'B' && data[1] == 'M') {
+            if (data.length < 26) throw new IOException("Truncated BMP");
+            if (s32le(data, 14) == 12) return new long[]{u16le(data, 18), u16le(data, 20)};
+            return new long[]{s32le(data, 18), Math.abs((long) s32le(data, 22))};
+        }
+        if (ImageLoader.isGif(data)) {
+            if (data.length < 10) throw new IOException("Truncated GIF");
+            return new long[]{u16le(data, 6), u16le(data, 8)};
+        }
+        return null;
     }
 
     static int argb(int a, int r, int g, int b) {
@@ -51,10 +117,12 @@ final class FormatUtil {
         return argb(255, r, g, b);
     }
 
-    // value を 0 から max の範囲から 0 から 255 に直す
+    // value を 0 から max (2^32 - 1 まで) の範囲から 0 から 255 に直す
     static int to8(long value, long max) {
-        if (max == 255) return (int) value;
-        return (int) ((value * 255 + max / 2) / max);
+        if (max <= 0 || max > 0xFFFFFFFFL) return 0;
+        // 範囲の外の値 (壊れたファイル) は端に寄せる。0xFFFFFFFF * 255 は long に収まり、結果は 0 から 255
+        final long v = Math.max(0, Math.min(value, max));
+        return Math.toIntExact((v * 255 + max / 2) / max);
     }
 
     static int u8(byte[] d, int p) {

@@ -125,6 +125,14 @@ public final class GltfModel {
         float texOffsetX = 0, texOffsetY = 0;
         float texScaleX = 1, texScaleY = 1;
         float texRotation = 0;
+        // KHR_animation_pointer で動かす値の、ファイルに書かれた元の値 (光の強さに比例する値)。
+        // 読み込みでは表示用の色に直してテクスチャや color に入れているので、GltfScene は動かした値とこれとの比を掛けて反映する
+        final float[] baseFactor = {1, 1, 1, 1};
+        final float[] emissiveFactor = {0, 0, 0};
+        float emissiveStrength = 1;
+        float metallicFactor = 1, roughnessFactor = 1;
+        // 発光色を emissive (頂点の色に足す値) で表しているかどうか。テクスチャに焼き込んだ場合は false で、発光色は動かせない
+        boolean emissiveInColor;
     }
 
     public static final class Texture {

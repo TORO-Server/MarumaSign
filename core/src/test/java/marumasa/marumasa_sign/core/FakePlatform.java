@@ -133,9 +133,12 @@ final class FakePlatform implements Platform {
 
     // 照準の視線。確認する側が決める (null ならワールドに入っていない扱い)
     double[] crosshair;
+    // 照準を求めるときに投げる例外。描画の途中で例外が出ても、ゲームに渡さないことを確かめるのに使う
+    RuntimeException crosshairError;
 
     @Override
     public double[] crosshair() {
+        if (crosshairError != null) throw crosshairError;
         return crosshair;
     }
 

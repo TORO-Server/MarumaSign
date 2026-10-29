@@ -4,44 +4,37 @@ import java.io.IOException;
 
 /**
  * Basis Universal の ETC1S (KTX2 の BasisLZ 超圧縮) を RGBA に展開する。
- * Basis Universal (https://github.com/BinomialLLC/basis_universal, Apache License 2.0) の
- * transcoder (basisu_lowlevel_etc1s_transcoder) の処理を Java に書き直したもの。
- * ライセンスの全文は jar の marumasa_sign/licenses/basis_universal.txt にある。
+ * KTX 2.0 仕様の付録「BasisLZ Global Data」「BasisLZ/ETC1S Bitstream Specification」と、
+ * Khronos Data Format Specification の ETC1 の節に沿って書いたもの。
  */
 final class BasisEtc1s {
 
-    // ETC1 の明るさの変化の表
-    private static final int[][] INTEN_TABLES = {
-            {-8, -2, 2, 8}, {-17, -5, 5, 17}, {-29, -9, 9, 29}, {-42, -13, 13, 42},
-            {-60, -18, 18, 60}, {-80, -24, 24, 80}, {-106, -33, 33, 106}, {-183, -47, 47, 183}
+    // ETC1 の明るさの変化の表 (a, b)。選択子 0 - 3 は -b, -a, +a, +b を表す
+    private static final int[][] MODIFIERS = {
+            {2, 8}, {5, 17}, {9, 29}, {13, 42}, {18, 60}, {24, 80}, {33, 106}, {47, 183}
     };
 
-    private static final int COLOR5_PAL0_PREV_HI = 9;
-    private static final int COLOR5_PAL1_PREV_HI = 21;
-    private static final int ENDPOINT_PRED_TOTAL_SYMBOLS = 4 * 4 * 4 * 4 + 1;
-    private static final int ENDPOINT_PRED_REPEAT_LAST_SYMBOL = ENDPOINT_PRED_TOTAL_SYMBOLS - 1;
-    private static final int ENDPOINT_PRED_MIN_REPEAT_COUNT = 3;
-    private static final int ENDPOINT_PRED_COUNT_VLC_BITS = 4;
-    private static final int SELECTOR_HISTORY_BUF_RLE_COUNT_THRESH = 3;
-    private static final int SELECTOR_HISTORY_BUF_RLE_COUNT_TOTAL = 1 << 6;
+    // 端点の予測の記号。4 ブロック分の 2 ビットずつと、直前の記号の繰り返し
+    private static final int ENDPOINT_PRED_SYMBOLS = 4 * 4 * 4 * 4 + 1;
+    private static final int ENDPOINT_PRED_REPEAT = ENDPOINT_PRED_SYMBOLS - 1;
+    private static final int ENDPOINT_PRED_MIN_REPEAT = 3;
+    private static final int ENDPOINT_PRED_COUNT_BITS = 4;
+    // 選択子の履歴の繰り返し
+    private static final int SELECTOR_RLE_MIN = 3;
+    private static final int SELECTOR_RLE_SYMBOLS = 64;
 
-    // 符号の長さを表す符号の並び順
-    private static final int[] SORTED_CODELENGTH_CODES = {17, 18, 19, 20, 0, 8, 7, 9, 6, 10, 5, 11, 4, 12, 3, 13, 2, 14, 1, 15, 16};
-    private static final int MAX_SYMS_LOG2 = 14;
-    private static final int MAX_CODE_SIZE = 31;
-
-    // 色の端点 (5 ビットの RGB と、明るさの表の番号)
-    private final int[] endpointColor;
-    private final int[] endpointInten;
-    // 4x4 の選択子。1 行が 1 バイト (2 ビット x 4)
-    private final byte[] selectors;
-    private final int selectorCount;
     private final int endpointCount;
+    private final int selectorCount;
+    // 端点ごとの 5 ビットの RGB と、明るさの表の番号
+    private final int[] endpointRgb;
+    private final int[] endpointInten;
+    // 選択子ごとの 4 行分 (1 行が 1 バイト、左の画素が下位の 2 ビット)
+    private final byte[] selectors;
 
     private final Huffman endpointPredModel;
-    private final Huffman deltaEndpointModel;
+    private final Huffman endpointDeltaModel;
     private final Huffman selectorModel;
-    private final Huffman selectorHistoryRleModel;
+    private final Huffman selectorRleModel;
     private final int selectorHistorySize;
 
     /**
@@ -50,72 +43,54 @@ final class BasisEtc1s {
     BasisEtc1s(int endpointCount, byte[] data, int endpointsOffset, int endpointsLength,
                int selectorCount, int selectorsOffset, int selectorsLength,
                int tablesOffset, int tablesLength) throws IOException {
-        if (endpointCount <= 0 || selectorCount <= 0) throw new IOException("Invalid ETC1S codebook size");
+        if (endpointCount <= 0 || endpointCount > 0xFFFF || selectorCount <= 0 || selectorCount > 0xFFFF) {
+            throw new IOException("Invalid ETC1S codebook size");
+        }
         this.endpointCount = endpointCount;
         this.selectorCount = selectorCount;
 
-        // 表
-        Bits bits = new Bits(data, tablesOffset, tablesLength);
-        endpointPredModel = bits.readHuffman();
-        deltaEndpointModel = bits.readHuffman();
-        selectorModel = bits.readHuffman();
-        selectorHistoryRleModel = bits.readHuffman();
-        if (endpointPredModel == null || deltaEndpointModel == null || selectorModel == null || selectorHistoryRleModel == null) {
-            throw new IOException("Invalid ETC1S tables");
-        }
-        selectorHistorySize = bits.get(13);
-        if (selectorHistorySize == 0) throw new IOException("Invalid ETC1S selector history size");
+        // スライスの展開に使う 4 つのハフマン符号と、選択子の履歴の大きさ
+        BitReader in = new BitReader(data, tablesOffset, tablesLength);
+        endpointPredModel = Huffman.read(in);
+        endpointDeltaModel = Huffman.read(in);
+        selectorModel = Huffman.read(in);
+        selectorRleModel = Huffman.read(in);
+        selectorHistorySize = in.read(13);
 
-        // 端点
-        bits = new Bits(data, endpointsOffset, endpointsLength);
-        final Huffman color5Model0 = bits.readHuffman();
-        final Huffman color5Model1 = bits.readHuffman();
-        final Huffman color5Model2 = bits.readHuffman();
-        final Huffman intenModel = bits.readHuffman();
-        if (color5Model0 == null || color5Model1 == null || color5Model2 == null || intenModel == null) {
-            throw new IOException("Invalid ETC1S endpoint models");
-        }
-        final boolean grayscale = bits.get(1) != 0;
-        endpointColor = new int[endpointCount * 3];
+        // 端点: 明るさの番号と色を、1 つ前との差で並べてある
+        in = new BitReader(data, endpointsOffset, endpointsLength);
+        final Huffman[] colorModels = {Huffman.read(in), Huffman.read(in), Huffman.read(in)};
+        final Huffman intenModel = Huffman.read(in);
+        final boolean grayscale = in.read(1) != 0;
+        endpointRgb = new int[endpointCount * 3];
         endpointInten = new int[endpointCount];
         final int[] previous = {16, 16, 16};
         int previousInten = 0;
         for (int i = 0; i < endpointCount; i++) {
-            endpointInten[i] = (bits.decode(intenModel) + previousInten) & 7;
-            previousInten = endpointInten[i];
-            for (int c = 0; c < (grayscale ? 1 : 3); c++) {
-                final int delta;
-                if (previous[c] <= COLOR5_PAL0_PREV_HI) delta = bits.decode(color5Model0);
-                else if (previous[c] <= COLOR5_PAL1_PREV_HI) delta = bits.decode(color5Model1);
-                else delta = bits.decode(color5Model2);
-                final int v = (previous[c] + delta) & 31;
-                endpointColor[i * 3 + c] = v;
-                previous[c] = v;
+            previousInten = (previousInten + in.decode(intenModel)) & 7;
+            endpointInten[i] = previousInten;
+            final int channels = grayscale ? 1 : 3;
+            for (int c = 0; c < channels; c++) {
+                // 差の表は、1 つ前の値が 0 - 9、10 - 21、22 - 31 のどれかで使い分ける
+                final int prev = previous[c];
+                final Huffman model = colorModels[prev <= 9 ? 0 : prev <= 21 ? 1 : 2];
+                previous[c] = (prev + in.decode(model)) & 31;
             }
-            if (grayscale) {
-                endpointColor[i * 3 + 1] = endpointColor[i * 3];
-                endpointColor[i * 3 + 2] = endpointColor[i * 3];
-            }
+            for (int c = 0; c < 3; c++) endpointRgb[i * 3 + c] = previous[grayscale ? 0 : c];
         }
 
-        // 選択子
-        bits = new Bits(data, selectorsOffset, selectorsLength);
+        // 選択子: 最初の 2 ビットは 0 と決まっている。続く 1 ビットが立っていればそのまま並んでいる
+        in = new BitReader(data, selectorsOffset, selectorsLength);
+        if (in.read(2) != 0) throw new IOException("Unsupported ETC1S selector codebook");
         selectors = new byte[selectorCount * 4];
-        if (bits.get(1) == 1) throw new IOException("ETC1S global selector codebooks are not supported");
-        if (bits.get(1) == 1) throw new IOException("ETC1S hybrid selector codebooks are not supported");
-        if (bits.get(1) == 1) {
-            // そのまま並んでいる
-            for (int i = 0; i < selectorCount * 4; i++) selectors[i] = (byte) bits.get(8);
+        if (in.read(1) != 0) {
+            for (int i = 0; i < selectors.length; i++) selectors[i] = (byte) in.read(8);
         } else {
-            final Huffman deltaModel = bits.readHuffman();
-            if (selectorCount > 1 && deltaModel == null) throw new IOException("Invalid ETC1S selector model");
-            final int[] previousBytes = new int[4];
-            for (int i = 0; i < selectorCount; i++) {
-                for (int j = 0; j < 4; j++) {
-                    final int value = i == 0 ? bits.get(8) : bits.decode(deltaModel) ^ previousBytes[j];
-                    previousBytes[j] = value & 0xFF;
-                    selectors[i * 4 + j] = (byte) value;
-                }
+            final Huffman deltaModel = Huffman.read(in);
+            for (int j = 0; j < 4; j++) selectors[j] = (byte) in.read(8);
+            // 2 つ目からは、1 つ前の同じ行との排他的論理和
+            for (int i = 4; i < selectors.length; i++) {
+                selectors[i] = (byte) (in.decode(deltaModel) ^ selectors[i - 4]);
             }
         }
     }
@@ -124,119 +99,124 @@ final class BasisEtc1s {
      * 1 枚分のデータを展開して、ARGB の画素に書く。alpha が true なら、透明度の画像 (緑の値を透明度にする) として書く。
      */
     void decodeSlice(byte[] data, int offset, int length, int width, int height, int[] argb, boolean alpha) throws IOException {
+        if (width <= 0 || height <= 0 || (long) width * height > argb.length) throw new IOException("Invalid ETC1S slice size");
         final int blocksX = (width + 3) / 4;
         final int blocksY = (height + 3) / 4;
-        final Bits bits = new Bits(data, offset, length);
+        final long totalBlocks = (long) blocksX * blocksY;
+        final BitReader in = new BitReader(data, offset, length);
+
+        // 選択子の記号のうち、selectorCount 以上は履歴の位置、その次の 1 つが履歴の繰り返しを表す
+        final int historyRleSymbol = selectorCount + selectorHistorySize;
         final int[] history = new int[selectorHistorySize];
         int historyRover = selectorHistorySize / 2;
-        final int historyFirstSymbol = selectorCount;
-        final int historyRleSymbol = selectorHistorySize + historyFirstSymbol;
 
-        // 1 つ上の行と今の行の、端点の番号と予測の指定
-        final int[][] predEndpoint = new int[2][blocksX];
-        final int[][] predBits = new int[2][blocksX];
-        int curPredBits = 0;
-        int prevEndpointPredSym = 0;
-        int endpointPredRepeatCount = 0;
-        int prevEndpointIndex = 0;
-        int curSelectorRleCount = 0;
+        // 1 つ上の行と今の行の端点の番号、奇数の行で使う予測のビット
+        final int[][] rowEndpoints = new int[2][blocksX];
+        final int[] oddRowPredBits = new int[blocksX];
+        int predBits = 0;
+        int previousPredSymbol = 0;
+        long predRepeat = 0;
+        int previousEndpoint = 0;
+        long selectorRepeat = 0;
         final int[] colors = new int[4];
 
         for (int blockY = 0; blockY < blocksY; blockY++) {
-            final int cur = blockY & 1;
+            final int[] current = rowEndpoints[blockY & 1];
+            final int[] above = rowEndpoints[(blockY & 1) ^ 1];
             for (int blockX = 0; blockX < blocksX; blockX++) {
+                // 予測のビットは 2x2 ブロックごとに 1 つの記号 (8 ビット) で、下の行の分は覚えておく
                 if ((blockX & 1) == 0) {
                     if ((blockY & 1) == 0) {
-                        if (endpointPredRepeatCount > 0) {
-                            endpointPredRepeatCount--;
-                            curPredBits = prevEndpointPredSym;
+                        if (predRepeat > 0) {
+                            predRepeat--;
+                            predBits = previousPredSymbol;
                         } else {
-                            curPredBits = bits.decode(endpointPredModel);
-                            if (curPredBits == ENDPOINT_PRED_REPEAT_LAST_SYMBOL) {
-                                endpointPredRepeatCount = bits.decodeVlc(ENDPOINT_PRED_COUNT_VLC_BITS) + ENDPOINT_PRED_MIN_REPEAT_COUNT - 1;
-                                curPredBits = prevEndpointPredSym;
+                            predBits = in.decode(endpointPredModel);
+                            if (predBits > ENDPOINT_PRED_REPEAT) throw new IOException("Invalid ETC1S endpoint prediction");
+                            if (predBits == ENDPOINT_PRED_REPEAT) {
+                                predRepeat = in.readVlc(ENDPOINT_PRED_COUNT_BITS) + ENDPOINT_PRED_MIN_REPEAT - 1;
+                                predBits = previousPredSymbol;
                             } else {
-                                prevEndpointPredSym = curPredBits;
+                                previousPredSymbol = predBits;
                             }
                         }
-                        predBits[cur ^ 1][blockX] = curPredBits >> 4;
+                        oddRowPredBits[blockX] = predBits >> 4;
                     } else {
-                        curPredBits = predBits[cur][blockX];
+                        predBits = oddRowPredBits[blockX];
                     }
                 }
 
-                // 端点の番号 (左、上、左上のどれかと同じか、差分)
-                final int pred = curPredBits & 3;
-                curPredBits >>= 2;
-                int endpointIndex;
+                // 端点の番号: 0 は左、1 は上、2 は左上と同じ。3 は直前の番号との差
+                final int pred = predBits & 3;
+                predBits >>= 2;
+                int endpoint;
                 if (pred == 0) {
-                    if (blockX == 0) throw new IOException("Invalid ETC1S data stream (0)");
-                    endpointIndex = prevEndpointIndex;
+                    if (blockX == 0) throw new IOException("Invalid ETC1S endpoint prediction (left)");
+                    endpoint = previousEndpoint;
                 } else if (pred == 1) {
-                    if (blockY == 0) throw new IOException("Invalid ETC1S data stream (1)");
-                    endpointIndex = predEndpoint[cur ^ 1][blockX];
+                    if (blockY == 0) throw new IOException("Invalid ETC1S endpoint prediction (above)");
+                    endpoint = above[blockX];
                 } else if (pred == 2) {
-                    if (blockX == 0 || blockY == 0) throw new IOException("Invalid ETC1S data stream (2)");
-                    endpointIndex = predEndpoint[cur ^ 1][blockX - 1];
+                    if (blockX == 0 || blockY == 0) throw new IOException("Invalid ETC1S endpoint prediction (upper left)");
+                    endpoint = above[blockX - 1];
                 } else {
-                    endpointIndex = bits.decode(deltaEndpointModel) + prevEndpointIndex;
-                    if (endpointIndex >= endpointCount) endpointIndex -= endpointCount;
+                    endpoint = previousEndpoint + in.decode(endpointDeltaModel);
+                    if (endpoint >= endpointCount) endpoint -= endpointCount;
+                    if (endpoint >= endpointCount) throw new IOException("Invalid ETC1S endpoint index");
                 }
-                predEndpoint[cur][blockX] = endpointIndex;
-                prevEndpointIndex = endpointIndex;
+                current[blockX] = endpoint;
+                previousEndpoint = endpoint;
 
-                // 選択子の番号 (最近使ったものの履歴と、その繰り返し)
-                int selectorSym;
-                if (curSelectorRleCount > 0) {
-                    curSelectorRleCount--;
-                    selectorSym = selectorCount;
+                // 選択子の番号: 表の番号か、最近使ったものの履歴の位置か、履歴の先頭の繰り返し
+                int symbol;
+                if (selectorRepeat > 0) {
+                    selectorRepeat--;
+                    symbol = selectorCount;
                 } else {
-                    selectorSym = bits.decode(selectorModel);
-                    if (selectorSym == historyRleSymbol) {
-                        final int run = bits.decode(selectorHistoryRleModel);
-                        if (run == SELECTOR_HISTORY_BUF_RLE_COUNT_TOTAL - 1) {
-                            curSelectorRleCount = bits.decodeVlc(7) + SELECTOR_HISTORY_BUF_RLE_COUNT_THRESH;
+                    symbol = in.decode(selectorModel);
+                    if (symbol == historyRleSymbol) {
+                        final int run = in.decode(selectorRleModel);
+                        if (run == SELECTOR_RLE_SYMBOLS - 1) {
+                            selectorRepeat = in.readVlc(7) + SELECTOR_RLE_MIN;
                         } else {
-                            curSelectorRleCount = run + SELECTOR_HISTORY_BUF_RLE_COUNT_THRESH;
+                            selectorRepeat = (long) run + SELECTOR_RLE_MIN;
                         }
-                        if (curSelectorRleCount > blocksX * blocksY) throw new IOException("Invalid ETC1S data stream (3)");
-                        selectorSym = selectorCount;
-                        curSelectorRleCount--;
+                        if (selectorRepeat > totalBlocks) throw new IOException("Invalid ETC1S selector run");
+                        symbol = selectorCount;
+                        selectorRepeat--;
                     }
                 }
-                int selectorIndex;
-                if (selectorSym >= selectorCount) {
-                    final int historyIndex = selectorSym - selectorCount;
-                    if (historyIndex >= selectorHistorySize) throw new IOException("Invalid ETC1S data stream (4)");
-                    selectorIndex = history[historyIndex];
-                    if (historyIndex != 0) {
-                        // 使ったものを前の方へ寄せる
-                        final int swap = history[historyIndex / 2];
-                        history[historyIndex / 2] = history[historyIndex];
-                        history[historyIndex] = swap;
+                final int selector;
+                if (symbol < selectorCount) {
+                    selector = symbol;
+                    if (selectorHistorySize > 0) {
+                        history[historyRover++] = selector;
+                        if (historyRover == selectorHistorySize) historyRover = selectorHistorySize / 2;
                     }
                 } else {
-                    selectorIndex = selectorSym;
-                    history[historyRover++] = selectorIndex;
-                    if (historyRover == selectorHistorySize) historyRover = selectorHistorySize / 2;
-                }
-                if (endpointIndex < 0 || endpointIndex >= endpointCount || selectorIndex < 0 || selectorIndex >= selectorCount) {
-                    throw new IOException("Invalid ETC1S data stream (5)");
+                    final int position = symbol - selectorCount;
+                    if (position >= selectorHistorySize) throw new IOException("Invalid ETC1S selector history index");
+                    selector = history[position];
+                    // 使った項目を前の方へ寄せる (半分の位置と入れ替える)
+                    if (position > 0) {
+                        history[position] = history[position / 2];
+                        history[position / 2] = selector;
+                    }
                 }
 
                 // 4 色を作り、選択子で選ぶ
-                final int inten = endpointInten[endpointIndex];
+                final int[] modifier = MODIFIERS[endpointInten[endpoint]];
                 for (int k = 0; k < 4; k++) {
-                    final int[] table = INTEN_TABLES[inten];
-                    final int r = clamp(expand5(endpointColor[endpointIndex * 3]) + table[k]);
-                    final int g = clamp(expand5(endpointColor[endpointIndex * 3 + 1]) + table[k]);
-                    final int b = clamp(expand5(endpointColor[endpointIndex * 3 + 2]) + table[k]);
-                    colors[k] = alpha ? g : (0xFF000000 | (r << 16) | (g << 8) | b);
+                    final int delta = k == 0 ? -modifier[1] : k == 1 ? -modifier[0] : k == 2 ? modifier[0] : modifier[1];
+                    final int r = clamp(expand5(endpointRgb[endpoint * 3]) + delta);
+                    final int g = clamp(expand5(endpointRgb[endpoint * 3 + 1]) + delta);
+                    final int b = clamp(expand5(endpointRgb[endpoint * 3 + 2]) + delta);
+                    colors[k] = alpha ? g : 0xFF000000 | (r << 16) | (g << 8) | b;
                 }
                 for (int y = 0; y < 4; y++) {
                     final int py = blockY * 4 + y;
                     if (py >= height) break;
-                    final int row = selectors[selectorIndex * 4 + y] & 0xFF;
+                    final int row = selectors[selector * 4 + y] & 0xFF;
                     for (int x = 0; x < 4; x++) {
                         final int px = blockX * 4 + x;
                         if (px >= width) break;
@@ -257,137 +237,192 @@ final class BasisEtc1s {
         return v < 0 ? 0 : v > 255 ? 255 : v;
     }
 
-    // ---------- ビットの読み出しとハフマン符号 ----------
+    // ---------- ビットの読み出し ----------
 
-    // 正規ハフマン符号。長さごとの最初の符号と、符号の順に並べた記号
-    private static final class Huffman {
-        final int[] firstCode = new int[MAX_CODE_SIZE + 2];
-        final int[] firstIndex = new int[MAX_CODE_SIZE + 2];
-        final int[] counts = new int[MAX_CODE_SIZE + 2];
-        int[] symbols;
-        int maxLength;
-
-        static Huffman build(int[] codeSizes, int total) throws IOException {
-            final Huffman table = new Huffman();
-            int used = 0;
-            for (int i = 0; i < total; i++) {
-                final int size = codeSizes[i];
-                if (size > MAX_CODE_SIZE) throw new IOException("Invalid Huffman code size");
-                if (size > 0) {
-                    table.counts[size]++;
-                    used++;
-                    table.maxLength = Math.max(table.maxLength, size);
-                }
-            }
-            if (used == 0) return null;
-            // 符号の割り当て (短いものから順に)
-            long code = 0;
-            int index = 0;
-            for (int length = 1; length <= MAX_CODE_SIZE; length++) {
-                table.firstCode[length] = (int) code;
-                table.firstIndex[length] = index;
-                code = (code + table.counts[length]) << 1;
-                index += table.counts[length];
-            }
-            if (used > 1 && code != (1L << (MAX_CODE_SIZE + 1))) throw new IOException("Invalid Huffman code sizes");
-            table.symbols = new int[used];
-            final int[] next = new int[MAX_CODE_SIZE + 2];
-            for (int length = 1; length <= MAX_CODE_SIZE; length++) next[length] = table.firstIndex[length];
-            for (int s = 0; s < total; s++) {
-                if (codeSizes[s] > 0) table.symbols[next[codeSizes[s]]++] = s;
-            }
-            return table;
-        }
-    }
-
-    // 前から下位ビット順に読む。範囲を超えた分は 0 として読む
-    private static final class Bits {
+    // 前から、各バイトの下位のビットから順に読む。範囲の外を使う読み出しは壊れたデータとして失敗にする
+    private static final class BitReader {
         private final byte[] data;
-        private final int end;
+        private final long endBit;
         private long position;
 
-        Bits(byte[] data, int offset, int length) throws IOException {
+        BitReader(byte[] data, int offset, int length) throws IOException {
             if (offset < 0 || length < 0 || (long) offset + length > data.length) throw new IOException("ETC1S data out of range");
             this.data = data;
-            this.end = offset + length;
             this.position = (long) offset * 8;
+            this.endBit = ((long) offset + length) * 8;
         }
 
-        int get(int count) {
+        // count ビット (25 まで) を先読みする。範囲の外は 0 として読む
+        int peek(int count) {
             int result = 0;
-            for (int i = 0; i < count; i++) {
-                final int index = (int) (position >> 3);
-                final int bit = index < end ? (data[index] >> (position & 7)) & 1 : 0;
-                result |= bit << i;
-                position++;
+            long bit = position;
+            int filled = 0;
+            while (filled < count) {
+                final int index = (int) (bit >> 3);
+                final int shift = (int) (bit & 7);
+                final int available = Math.min(8 - shift, count - filled);
+                final int b = bit < endBit ? (data[index] & 0xFF) >> shift : 0;
+                result |= (b & ((1 << available) - 1)) << filled;
+                filled += available;
+                bit += available;
             }
             return result;
         }
 
-        int decode(Huffman table) throws IOException {
-            if (table == null) throw new IOException("Missing Huffman table");
-            if (table.symbols.length == 1) {
-                // 記号が 1 つだけの表は、その符号の長さのビットを読み飛ばす
-                get(table.maxLength);
-                return table.symbols[0];
-            }
-            // 符号は上位のビットから 1 ビットずつ並んでいる
-            int code = 0;
-            for (int length = 1; length <= table.maxLength; length++) {
-                code = (code << 1) | get(1);
-                final int offset = code - table.firstCode[length];
-                if (table.counts[length] > 0 && offset >= 0 && offset < table.counts[length]) {
-                    return table.symbols[table.firstIndex[length] + offset];
-                }
-            }
-            throw new IOException("Invalid Huffman code");
+        void skip(int count) throws IOException {
+            position += count;
+            if (position > endBit) throw new IOException("Truncated ETC1S data");
         }
 
-        int decodeVlc(int chunkBits) {
-            final int chunkSize = 1 << chunkBits;
-            int value = 0;
-            int shift = 0;
-            for (;;) {
-                final int s = get(chunkBits + 1);
-                value |= (s & (chunkSize - 1)) << shift;
-                shift += chunkBits;
-                if ((s & chunkSize) == 0 || shift >= 32) break;
-            }
+        int read(int count) throws IOException {
+            final int value = peek(count);
+            skip(count);
             return value;
         }
 
-        Huffman readHuffman() throws IOException {
-            final int totalUsed = get(MAX_SYMS_LOG2);
-            if (totalUsed == 0) return null;
-            final int lengthCodes = get(5);
-            if (lengthCodes < 1 || lengthCodes > 21) throw new IOException("Invalid Huffman table");
-            final int[] lengthSizes = new int[21];
-            for (int i = 0; i < lengthCodes; i++) lengthSizes[SORTED_CODELENGTH_CODES[i]] = get(3);
-            final Huffman lengthTable = Huffman.build(lengthSizes, 21);
-            if (lengthTable == null) throw new IOException("Invalid Huffman table");
-            final int[] sizes = new int[totalUsed];
-            int cur = 0;
-            while (cur < totalUsed) {
-                final int c = decode(lengthTable);
-                if (c <= 16) {
-                    sizes[cur++] = c;
-                } else if (c == 17) {
-                    cur += get(3) + 3;
-                } else if (c == 18) {
-                    cur += get(7) + 11;
-                } else {
-                    if (cur == 0) throw new IOException("Invalid Huffman table");
-                    int count = c == 19 ? get(2) + 3 : get(7) + 7;
-                    final int previous = sizes[cur - 1];
-                    if (previous == 0) throw new IOException("Invalid Huffman table");
-                    while (count-- > 0) {
-                        if (cur >= totalUsed) throw new IOException("Invalid Huffman table");
-                        sizes[cur++] = previous;
-                    }
+        // 小さな塊に分けた可変長の数 (各塊の上のビットが続きの印)。最大でも 32 ビット分で止める
+        long readVlc(int chunkBits) throws IOException {
+            long value = 0;
+            for (int shift = 0; shift < 32; shift += chunkBits) {
+                final int chunk = read(chunkBits + 1);
+                value |= (long) (chunk & ((1 << chunkBits) - 1)) << shift;
+                if ((chunk >> chunkBits) == 0) break;
+            }
+            return value & 0xFFFFFFFFL;
+        }
+
+        int decode(Huffman table) throws IOException {
+            if (table == null) throw new IOException("Missing ETC1S Huffman table");
+            return table.decode(this);
+        }
+    }
+
+    // ---------- ハフマン符号 ----------
+
+    // Deflate と同じ正規ハフマン符号。符号は上位のビットから順に並んでいる
+    private static final class Huffman {
+        private static final int MAX_LENGTH = 16;
+        private static final int MAX_SYMBOLS = (1 << 14) - 1;
+        private static final int FAST_BITS = 10;
+        // 符号の長さの表の、長さを送る順番
+        private static final int[] LENGTH_ORDER = {17, 18, 19, 20, 0, 8, 7, 9, 6, 10, 5, 11, 4, 12, 3, 13, 2, 14, 1, 15, 16};
+
+        // 長さごとの符号の数と、符号の順に並べた記号
+        private final int[] counts = new int[MAX_LENGTH + 1];
+        private final int[] symbols;
+        // 先頭の FAST_BITS ビット (読んだ順) -> 記号 << 8 | 長さ。長い符号は -1
+        private final int[] fast = new int[1 << FAST_BITS];
+        private final int singleLength;
+
+        private Huffman(int[] lengths, int total) throws IOException {
+            int used = 0;
+            int maxLength = 0;
+            for (int s = 0; s < total; s++) {
+                final int length = lengths[s];
+                if (length > MAX_LENGTH) throw new IOException("Invalid ETC1S Huffman code length");
+                if (length > 0) {
+                    counts[length]++;
+                    used++;
+                    maxLength = Math.max(maxLength, length);
                 }
             }
-            if (cur != totalUsed) throw new IOException("Invalid Huffman table");
-            return Huffman.build(sizes, totalUsed);
+            if (used == 0) throw new IOException("Empty ETC1S Huffman table");
+            // 2 つ以上の記号があるときは、符号がちょうど埋まっていなければならない (足りない・多すぎるのは壊れたデータ)
+            int remaining = 1;
+            for (int length = 1; length <= MAX_LENGTH; length++) {
+                remaining = (remaining << 1) - counts[length];
+                if (remaining < 0) throw new IOException("Over-subscribed ETC1S Huffman code");
+            }
+            if (used > 1 && remaining != 0) throw new IOException("Incomplete ETC1S Huffman code");
+            singleLength = used == 1 ? maxLength : 0;
+
+            final int[] offsets = new int[MAX_LENGTH + 2];
+            for (int length = 1; length <= MAX_LENGTH; length++) offsets[length + 1] = offsets[length] + counts[length];
+            symbols = new int[used];
+            for (int s = 0; s < total; s++) {
+                if (lengths[s] > 0) symbols[offsets[lengths[s]]++] = s;
+            }
+
+            // 短い符号の引き表。符号は上位のビットから読まれるので、読んだ順のビット列は符号を反転したものになる
+            java.util.Arrays.fill(fast, -1);
+            int code = 0;
+            int index = 0;
+            for (int length = 1; length <= Math.min(FAST_BITS, MAX_LENGTH); length++) {
+                for (int i = 0; i < counts[length]; i++, index++, code++) {
+                    final int reversed = Integer.reverse(code) >>> (32 - length);
+                    for (int fill = reversed; fill < fast.length; fill += 1 << length) {
+                        fast[fill] = (symbols[index] << 8) | length;
+                    }
+                }
+                code <<= 1;
+            }
+        }
+
+        int decode(BitReader in) throws IOException {
+            if (singleLength > 0) {
+                // 記号が 1 つだけの表は、符号の値を見ずにその長さだけ読み飛ばす
+                in.skip(singleLength);
+                return symbols[0];
+            }
+            final int entry = fast[in.peek(FAST_BITS)];
+            if (entry >= 0) {
+                in.skip(entry & 0xFF);
+                return entry >>> 8;
+            }
+            // 長い符号は 1 ビットずつたどる
+            final int bits = in.peek(MAX_LENGTH);
+            int code = 0;
+            int first = 0;
+            int index = 0;
+            for (int length = 1; length <= MAX_LENGTH; length++) {
+                code |= (bits >> (length - 1)) & 1;
+                final int count = counts[length];
+                if (code >= first && code - first < count) {
+                    in.skip(length);
+                    return symbols[index + code - first];
+                }
+                index += count;
+                first = (first + count) << 1;
+                code <<= 1;
+            }
+            throw new IOException("Invalid ETC1S Huffman code");
+        }
+
+        // 符号の長さの並びを、長さの表 (これもハフマン符号) と繰り返しの記号から読む。記号が 0 個なら null
+        static Huffman read(BitReader in) throws IOException {
+            final int total = in.read(14);
+            if (total == 0) return null;
+            if (total > MAX_SYMBOLS) throw new IOException("Invalid ETC1S Huffman table");
+            final int lengthCodes = in.read(5);
+            if (lengthCodes < 1 || lengthCodes > LENGTH_ORDER.length) throw new IOException("Invalid ETC1S Huffman table");
+            final int[] lengthLengths = new int[LENGTH_ORDER.length];
+            for (int i = 0; i < lengthCodes; i++) lengthLengths[LENGTH_ORDER[i]] = in.read(3);
+            final Huffman lengthTable = new Huffman(lengthLengths, LENGTH_ORDER.length);
+
+            final int[] lengths = new int[total];
+            int count = 0;
+            while (count < total) {
+                final int symbol = lengthTable.decode(in);
+                if (symbol <= 16) {
+                    lengths[count++] = symbol;
+                    continue;
+                }
+                final int run;
+                if (symbol == 17) run = in.read(3) + 3;
+                else if (symbol == 18) run = in.read(7) + 11;
+                else if (symbol == 19) run = in.read(2) + 3;
+                else run = in.read(7) + 7;
+                if (count + run > total) throw new IOException("Invalid ETC1S Huffman table");
+                if (symbol >= 19) {
+                    // 1 つ前の長さの繰り返し。先頭や、前の長さが 0 のときは使えない
+                    if (count == 0 || lengths[count - 1] == 0) throw new IOException("Invalid ETC1S Huffman table");
+                    final int previous = lengths[count - 1];
+                    for (int i = 0; i < run; i++) lengths[count++] = previous;
+                } else {
+                    count += run;
+                }
+            }
+            return new Huffman(lengths, total);
         }
     }
 }

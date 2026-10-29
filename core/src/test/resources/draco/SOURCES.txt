@@ -1,0 +1,27 @@
+DracoCheck で使う Draco のサンプル。期待するハッシュは、Google の Draco のデコーダ
+(npm の draco3d 1.5.7) で展開した結果から求めた。
+
+■ Draco のテスト用データ (https://github.com/google/draco の testdata、Apache License 2.0、Copyright The Draco Authors)
+  cube_att.obj.edgebreaker.cl10.2.2.drc   版 2.2、EdgeBreaker (価数)、平行四辺形 (制約付き複数)、UV、法線
+  cube_att.obj.edgebreaker.cl4.2.2.drc    版 2.2、EdgeBreaker (標準)
+  cube_att.obj.sequential.cl3.2.2.drc     版 2.2、順番に並べる方式
+  test_nm.obj.edgebreaker.0.9.1.drc       版 1.1
+  test_nm.obj.edgebreaker.1.0.0.drc       版 2.0
+  test_nm.obj.edgebreaker.cl10.2.2.drc    版 2.2、EdgeBreaker (価数)
+  test_nm.obj.sequential.1.1.0.drc        版 2.1、順番に並べる方式
+  test_nm_quant.0.9.0.drc                 版 1.2、量子化と法線の変換
+
+■ Khronos の glTF-Sample-Assets (https://github.com/KhronosGroup/glTF-Sample-Assets)
+  avocado.drc   Models/Avocado/glTF-Draco/Avocado.bin の先頭 8722 バイト (CC0 1.0)
+  box.metadata.drc, rigged_simple.eb_valence.drc, rigged_simple.sequential.drc
+                Models/Box と Models/RiggedSimple (CC BY 4.0、© 2017 Cesium) の glTF-Draco を展開し、
+                draco3d 1.5.7 の符号化器で設定を変えて符号化し直したもの
+
+■ 古い形式・使われなくなった方式を通すために、上のデータを書き換えたもの
+  box.predictive_edgebreaker.drc           Box を、EdgeBreaker の予測付きの方式 (廃止) で書き直したもの
+  rigged_simple.multi_parallelogram.drc    位置の予測を、複数の平行四辺形 (廃止) にしたもの
+  test_nm.1.1.0.multi_parallelogram.drc    同上 (版 2.1)
+  cube_att.octahedron_transform.drc        法線の予測の変換を、正規化しない正八面体の変換 (廃止) にしたもの
+  test_nm_quant.octahedron_transform.drc   同上 (版 1.2)
+  cube_att.tex_coords_deprecated.drc       UV の予測を、古い (float の) 方式にしたもの
+  cube_att.sequential_compressed.drc       順番に並べる方式の面を、rANS で圧縮した形にしたもの

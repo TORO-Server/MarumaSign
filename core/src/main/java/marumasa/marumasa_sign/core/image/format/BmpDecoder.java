@@ -18,11 +18,16 @@ final class BmpDecoder {
         final int headerSize = FormatUtil.s32le(d, 14);
         if (headerSize == 12) {
             FormatUtil.checkSize(FormatUtil.u16le(d, 18), FormatUtil.u16le(d, 20));
-        } else if (headerSize >= 40 && d.length >= 30) {
+        } else if (headerSize >= 40 && d.length >= 34) {
             final long height = Math.abs((long) FormatUtil.s32le(d, 22));
             FormatUtil.checkSize(FormatUtil.s32le(d, 18), height);
             final long colors = FormatUtil.u32le(d, 46 > d.length - 4 ? 0 : 46);
             if (colors > 65536) throw new IOException("Invalid BMP color count");
+            // 中に JPEG や PNG が入った BMP は読まない。ImageIO は、中の JPEG を libjpeg で、PNG を大きさを確かめずに読むため
+            final int compression = FormatUtil.s32le(d, 30);
+            if (compression == 4 || compression == 5) throw new IOException("Embedded image in BMP");
+        } else {
+            throw new IOException("Unsupported BMP header: " + headerSize);
         }
     }
 

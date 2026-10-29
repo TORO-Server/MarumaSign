@@ -71,7 +71,8 @@ public final class SignSpec {
     }
 
     public String toText() {
-        return url.replace("|", "")
+        // 区切りの「|」は、URL の中では %7C にする (取り除くと別の URL になる。サーバーは %7C を「|」として扱う)
+        return url.replace("|", "%7C")
                 + '|' + number(x) + '|' + number(y) + '|' + number(z)
                 + '|' + number(scaleX) + '|' + number(scaleY)
                 + '|' + number(roll) + '|' + number(yaw) + '|' + number(pitch);
@@ -88,7 +89,8 @@ public final class SignSpec {
         s = s.substring(0, end);
         if (s.startsWith("0.")) return s.substring(1);
         if (s.startsWith("-0.")) return "-" + s.substring(2);
-        return s.isEmpty() || s.equals("-") ? "0" : s;
+        // -0.0004 などは "-0" になるので、"0" にする
+        return s.isEmpty() || s.equals("-") || s.equals("-0") ? "0" : s;
     }
 
     // 文字列を看板の 4 行に均等に分ける。入りきらない場合は null
@@ -98,13 +100,20 @@ public final class SignSpec {
         if (len > maxLineLength * 4) return null;
 
         final String[] result = new String[4];
-        final int base = len / 4;
-        final int remainder = len % 4;
         int start = 0;
         for (int i = 0; i < 4; i++) {
-            final int size = base + (i < remainder ? 1 : 0);
-            result[i] = text.substring(start, start + size);
-            start += size;
+            // 残りの文字を、残りの行に均等に分ける。前の行の区切りをずらした分も、後の行で分け直す
+            // (最初に決めた区切りのままでは、前の行を短くした分だけ後の行が長くなり、入りきる文字列でも入らなくなる)
+            final int lines = 4 - i;
+            int cut = start + (len - start + lines - 1) / lines;
+            // サロゲートペア (絵文字など) を 2 行に分けない (片方だけの行は、保存や送信で別の文字に置き換わる)。
+            // 行が長くなりすぎない向きにずらす
+            if (cut > start && cut < len && Character.isHighSurrogate(text.charAt(cut - 1)) && Character.isLowSurrogate(text.charAt(cut))) {
+                cut = cut - start + 1 <= maxLineLength ? cut + 1 : cut - 1;
+            }
+            if (cut - start > maxLineLength) return null;
+            result[i] = text.substring(start, cut);
+            start = cut;
         }
         return result;
     }

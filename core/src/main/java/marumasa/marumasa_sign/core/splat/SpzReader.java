@@ -327,7 +327,10 @@ final class SpzReader {
         }
 
         final long totalExpected = posBytesLen + alphaBytesLen + colorBytesLen + scaleBytesLen + rotBytesLen + (shDegree > 0 ? shBytesLen : 0);
-        if (totalExpected > MAX_UNCOMPRESSED_BYTES) {
+        // Zstandard は、同じバイトの並びを数バイトで 128 KB に増やせる。gzip の版と同じく、展開後の大きさと圧縮率の上限を確かめる
+        // (小さなファイルで、展開する領域と点ごとの配列でメモリを使い切らせないように)
+        if (totalExpected > MAX_UNCOMPRESSED_BYTES
+                || (totalExpected > 65536L && totalExpected > (long) content.length * 100L)) {
             throw new IOException("SPZ uncompressed size exceeds safety limits: " + totalExpected);
         }
 

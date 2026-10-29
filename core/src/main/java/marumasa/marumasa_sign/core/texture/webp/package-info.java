@@ -1,7 +1,6 @@
 /**
- * WebP の中身 (VP8 / VP8L) の展開。
- * TwelveMonkeys ImageIO (https://github.com/haraldk/TwelveMonkeys, BSD 3-Clause License,
- * Copyright (c) 2008-2020, Harald Kuhr) の WebP プラグインのデコーダ部分をもとにしている。
- * ライセンスの全文は jar の marumasa_sign/licenses/twelvemonkeys-imageio.txt と、各ファイルの先頭にある。
+ * WebP の中身の展開。非可逆 (VP8、RFC 6386) は Vp8Decoder、可逆 (VP8L、RFC 9649 3 節) は LosslessDecoder、
+ * 透明度のチャンク (ALPH) は AlphaDecoder が扱う。仕様書をもとに書いたもので、
+ * 結果は参照デコーダ libwebp と同じになるようにしてある (RIFF のチャンクの読み分けは texture.WebpDecoder)。
  */
 package marumasa.marumasa_sign.core.texture.webp;

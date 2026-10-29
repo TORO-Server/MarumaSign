@@ -502,9 +502,11 @@ public final class SplatScene {
                 final float c21 = p1 * p8 - p0 * p9;
                 final float c22 = p0 * p5 - p1 * p4;
                 final float tx = cameraX - p12, ty = cameraY - p13, tz = cameraZ - p14;
-                camMx = (c00 * tx + c01 * ty + c02 * tz) * invDet;
-                camMy = (c10 * tx + c11 * ty + c12 * tz) * invDet;
-                camMz = (c20 * tx + c21 * ty + c22 * tz) * invDet;
+                // cRC は (行 R, 列 C) の余因子。逆行列は余因子行列の転置を行列式で割ったもの
+                // (転置を忘れると、回転した看板 (90 度など) で視線の向きが逆になり、見る向きで変わる色が違ってしまう)
+                camMx = (c00 * tx + c10 * ty + c20 * tz) * invDet;
+                camMy = (c01 * tx + c11 * ty + c21 * tz) * invDet;
+                camMz = (c02 * tx + c12 * ty + c22 * tz) * invDet;
             }
         }
 

@@ -123,6 +123,13 @@ public final class SignPdfCheck {
         image.batches(0f, false, 3.0, 0.5f, 0.5f, 4.5f, BX, BY, BZ);
         check(controls.hoveredPage()[0] == 0, "back on page 1 (cached)");
 
+        // 看板が描かれないうちに照準が外れても (看板が視界の外に出たときなど)、クリックはゲームに渡す
+        aim(eye, next);
+        image.batches(0f, false, 3.0, 0.5f, 0.5f, 4.5f, BX, BY, BZ);
+        platform.crosshair = new double[]{eye[0], eye[1], eye[2], 0, 1, 0, -1};
+        check(!MarumaSign.useClicked(), "click passed to the game when looking away before the sign is drawn again");
+        check(controls.hoveredPage() == null, "page controls released when looking away before the sign is drawn again");
+
         // 照準を外すと帯は消え、クリックはゲームに渡す
         platform.crosshair = new double[]{eye[0], eye[1], eye[2], 0, 1, 0, -1};
         check(image.batches(0f, false, 3.0, 0.5f, 0.5f, 4.5f, BX, BY, BZ).length == 1, "page controls hidden when looking away");
@@ -161,6 +168,16 @@ public final class SignPdfCheck {
         // 指定だけが違う看板は、それぞれのページを表示したまま、ほかの看板のページ送りに影響されない
         check(Arrays.equals(shown(url + "#page=2|0|0|0|1|1|0|0|0"), page2), "a sign with #page=2 still shows page 2");
         check(Arrays.equals(shown(text), page1), "the sign without #page still shows page 1");
+
+        // 描くための計算で例外が出ても外には出さず (ゲームが落ちないように)、その看板は以後描かない (看板そのものを表示する)
+        aim(eye, previous);
+        final SignImage failing = MarumaSign.sign(text);
+        check(failing.batches(0f, false, 3.0, 0.5f, 0.5f, 4.5f, BX, BY, BZ).length == 2, "page controls shown again");
+        platform.crosshairError = new IllegalStateException("crosshair failed (expected by the check)");
+        check(!MarumaSign.useClicked(), "a click that fails is passed to the game");
+        check(failing.batches(0f, false, 3.0, 0.5f, 0.5f, 4.5f, BX, BY, BZ).length == 0, "a sign that fails to draw draws nothing");
+        platform.crosshairError = null;
+        check(MarumaSign.sign(text) == null, "a sign that failed to draw is not drawn again");
 
         System.out.println("ALL OK");
         MarumaSign.signs().clearCache();

@@ -98,7 +98,7 @@ public final class SecurityCheck {
                 "http://0.0.0.0/", "http://10.1.2.3/", "http://172.16.0.1/", "http://172.31.255.255/", "http://192.168.0.1/",
                 "http://169.254.169.254/latest/meta-data/", "http://100.64.0.1/", "http://198.18.0.1/", "http://224.0.0.1/",
                 "http://[fd00::1]/", "http://[fe80::1]/", "http://[::ffff:192.168.0.1]/", "http://printer.local/",
-                "http://router.lan/", "http://nas.home.arpa/", "file:///C:/Windows/win.ini", "ftp://example.com/a.png",
+                "http://router.lan/", "http://nas.home.arpa/", "http://printer.local./", "http://localhost../", "file:///C:/Windows/win.ini", "ftp://example.com/a.png",
                 "jar:http://example.com/a.jar!/a.png", "gopher://example.com/", "", "http:///a.png",
         };
         for (String url : blocked) check("blocked: " + url, !UrlPolicy.isAllowed(url));
@@ -106,10 +106,16 @@ public final class SecurityCheck {
         final String[] alsoBlocked = {
                 "http://[::127.0.0.1]/", "http://[64:ff9b::c0a8:1]/", "http://[2002:c0a8:0101::1]/", "http://[2002:7f00:1::1]/",
                 "http://example.com:25/", "https://example.com:22/a.png", "http://93.184.215.14:6667/",
+                // IPv4 を訳した書き方 (::ffff:0:a.b.c.d)、組織の中だけで使う NAT64 (64:ff9b:1::/48)、
+                // Teredo (2001::/32。中のサーバーまたは利用者の IPv4 が手元や家の中のもの)
+                "http://[::ffff:0:7f00:1]/", "http://[::ffff:0:c0a8:101]/", "http://[64:ff9b:1::7f00:1]/",
+                "http://[64:ff9b:1::5db8:d70e]/", "http://[2001:0:4136:e378:8000:63bf:80ff:fffe]/",
+                "http://[2001:0:7f00:1:8000:63bf:a2d6:1a2b]/",
         };
         for (String url : alsoBlocked) check("blocked: " + url, !UrlPolicy.isAllowed(url));
         check("allowed: a usual port", UrlPolicy.isAllowed("https://example.com:8443/a.png"));
-        final String[] allowed = {"https://example.com/a.png", "http://93.184.215.14/a.png", "https://[2606:4700::6810:84e5]/"};
+        final String[] allowed = {"https://example.com/a.png", "http://93.184.215.14/a.png", "https://[2606:4700::6810:84e5]/",
+                "http://[2001:0:4136:e378:8000:63bf:a2d6:1a2b]/"};
         for (String url : allowed) check("allowed: " + url, UrlPolicy.isAllowed(url));
         check("172.32.0.1 is on the internet", UrlPolicy.isAllowed("http://172.32.0.1/"));
     }
@@ -127,10 +133,12 @@ public final class SecurityCheck {
 
     // 記録に書く文字に、Log4j に解釈させる書き方や、行を偽る文字が残らないこと
     private static void checkLogText() {
-        final String cleaned = SafeLog.clean("https://a/${jndi:ldap://x/a}|${${lower:j}ndi:x}\nFAKE LINE\r\u001b[31m\u202e");
+        final String cleaned = SafeLog.clean("https://a/${jndi:ldap://x/a}|${${lower:j}ndi:x}\nFAKE LINE\r\u001b[31m\u202e"
+                + "\u2028FAKE LINE\u2029FAKE LINE");
         check("log text has no lookups", !cleaned.contains("${"));
         check("log text has no line breaks or control characters", cleaned.indexOf('\n') < 0 && cleaned.indexOf('\r') < 0
-                && cleaned.indexOf('\u001b') < 0 && cleaned.indexOf('\u202e') < 0);
+                && cleaned.indexOf('\u001b') < 0 && cleaned.indexOf('\u202e') < 0
+                && cleaned.indexOf('\u2028') < 0 && cleaned.indexOf('\u2029') < 0);
         check("ordinary log text is unchanged", SafeLog.clean("Load: https://a/b.png?x=$1 (12 ms)").equals("Load: https://a/b.png?x=$1 (12 ms)"));
     }
 
@@ -312,8 +320,61 @@ public final class SecurityCheck {
             check("FFmpeg plays https through the proxy", play("https://127.0.0.1:" + securePort + "/v.mp4", true) == 0 && hits.get() > 0);
             hits.set(0);
             check("FFmpeg plays a playlist through the proxy", play(playlist.getPath(), true) == 0 && hits.get() > 0);
+            check("stopping a player also stops its ffprobe", stoppedProbeEnds());
         } finally {
             System.clearProperty("marumasign.allowLocalUrls");
+        }
+    }
+
+    // 少しずつしか送らないサーバーを ffprobe が調べている間に再生を止めたら、ffprobe も終わる (つながりが切れる) こと。
+    // 終わらないと、看板が見えたり見えなくなったりするたびに ffprobe が増え、同時に再生する数の上限を超えて残り続ける
+    private static boolean stoppedProbeEnds() throws Exception {
+        final java.net.ServerSocket server = new java.net.ServerSocket(0, 1, java.net.InetAddress.getByName("127.0.0.1"));
+        final java.util.concurrent.CountDownLatch connected = new java.util.concurrent.CountDownLatch(1);
+        final java.util.concurrent.CountDownLatch closed = new java.util.concurrent.CountDownLatch(1);
+        final Thread thread = new Thread(new Runnable() {
+            @Override
+            public void run() {
+                try {
+                    final Socket socket = server.accept();
+                    connected.countDown();
+                    final OutputStream output = socket.getOutputStream();
+                    output.write("HTTP/1.1 200 OK\r\nContent-Type: video/mp4\r\n\r\n".getBytes(StandardCharsets.US_ASCII));
+                    while (true) {
+                        Thread.sleep(300);
+                        output.write(0);
+                        output.flush();
+                    }
+                } catch (Exception e) {
+                    // 読む側が切った
+                    closed.countDown();
+                }
+            }
+        });
+        thread.setDaemon(true);
+        thread.start();
+        final marumasa.marumasa_sign.core.media.MediaPlayer player = new marumasa.marumasa_sign.core.media.MediaPlayer(
+                "http://127.0.0.1:" + server.getLocalPort() + "/slow.mp4", new marumasa.marumasa_sign.core.media.MediaPlayer.Listener() {
+            @Override
+            public void onReady(int width, int height) {
+            }
+
+            @Override
+            public void onFailed(String reason) {
+            }
+        });
+        try {
+            player.start();
+            if (!connected.await(15, TimeUnit.SECONDS)) {
+                System.out.println("  ffprobe did not connect to the slow server");
+                return false;
+            }
+            Thread.sleep(1000);
+            player.stop();
+            return closed.await(10, TimeUnit.SECONDS);
+        } finally {
+            player.stop();
+            server.close();
         }
     }
 

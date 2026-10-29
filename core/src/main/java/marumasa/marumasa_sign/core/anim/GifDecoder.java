@@ -1,5 +1,7 @@
 package marumasa.marumasa_sign.core.anim;
 
+import marumasa.marumasa_sign.core.image.ImageLoader;
+
 import java.io.IOException;
 import java.io.InputStream;
 import java.util.ArrayList;
@@ -85,14 +87,14 @@ public final class GifDecoder {
             initTableSize = fr.endOfInfoCode + 1;
             nextCode = initTableSize;
             for (int c = 0; c < fr.clearCode; c++) {
-                table[c][0] = 0;
-            }
-            for (int c = numColors - 1; c >= 0; c--) {
-                table[c][0] = activeColTbl[c];
+                // 前のフレームで (符号の長さが違ったため) 長い列に置き換わった番号も、1 色だけの列に戻す
+                if (table[c].length != 1) table[c] = new int[1];
+                // 色の一覧にない番号は透明にする
+                table[c][0] = c < numColors ? activeColTbl[c] : 0;
             }
             table[fr.clearCode] = new int[]{fr.clearCode};
             table[fr.endOfInfoCode] = new int[]{fr.endOfInfoCode};
-            if (fr.transpColFlag && fr.transpColIndex < numColors) {
+            if (fr.transpColFlag && fr.transpColIndex < fr.clearCode) {
                 table[fr.transpColIndex][0] = 0;
             }
         }
@@ -153,42 +155,41 @@ public final class GifDecoder {
                 code = firstCode;
             }
             int[] pixels = tbl[code];
-            arraycopy(pixels, 0, out, outPos, pixels.length);
-            outPos += pixels.length;
-            try {
-                while (true) {
-                    final int prevCode = code;
+            outPos = put(pixels, out, outPos);
+            // フレームのピクセルが埋まったら終わる (はみ出す分は捨てる。データが途中で終わったときは、残りは透明のまま)
+            while (outPos < out.length) {
+                final int prevCode = code;
+                code = bits.read();
+                if (code == clearCode) {
+                    codes.clear();
                     code = bits.read();
-                    if (code == clearCode) {
-                        codes.clear();
-                        code = bits.read();
-                        pixels = tbl[code];
-                        arraycopy(pixels, 0, out, outPos, pixels.length);
-                        outPos += pixels.length;
-                        continue;
-                    } else if (code == endCode) {
-                        break;
-                    }
-                    final int[] prevVals = tbl[prevCode];
-                    final int[] prevValsAndK = new int[prevVals.length + 1];
-                    arraycopy(prevVals, 0, prevValsAndK, 0, prevVals.length);
-                    if (code < codes.nextCode) {
-                        pixels = tbl[code];
-                        arraycopy(pixels, 0, out, outPos, pixels.length);
-                        outPos += pixels.length;
-                        prevValsAndK[prevVals.length] = tbl[code][0];
-                    } else {
-                        prevValsAndK[prevVals.length] = prevVals[0];
-                        arraycopy(prevValsAndK, 0, out, outPos, prevValsAndK.length);
-                        outPos += prevValsAndK.length;
-                    }
-                    codes.add(prevValsAndK);
+                    pixels = tbl[code];
+                    outPos = put(pixels, out, outPos);
+                    continue;
+                } else if (code == endCode) {
+                    break;
                 }
-            } catch (final ArrayIndexOutOfBoundsException ignored) {
-                System.out.println("DEBUG: ArrayIndexOutOfBoundsException in decode!");
-                ignored.printStackTrace();
+                final int[] prevVals = tbl[prevCode];
+                final int[] prevValsAndK = new int[prevVals.length + 1];
+                arraycopy(prevVals, 0, prevValsAndK, 0, prevVals.length);
+                if (code < codes.nextCode) {
+                    pixels = tbl[code];
+                    outPos = put(pixels, out, outPos);
+                    prevValsAndK[prevVals.length] = tbl[code][0];
+                } else {
+                    prevValsAndK[prevVals.length] = prevVals[0];
+                    outPos = put(prevValsAndK, out, outPos);
+                }
+                codes.add(prevValsAndK);
             }
             return out;
+        }
+
+        // 色の列を書き足して、次の位置を返す
+        private static int put(final int[] pixels, final int[] out, final int outPos) {
+            final int length = Math.min(pixels.length, out.length - outPos);
+            arraycopy(pixels, 0, out, outPos, length);
+            return outPos + length;
         }
 
         private int[] deinterlace(final int[] src, final GifFrame fr) {
@@ -215,12 +216,28 @@ public final class GifDecoder {
             return dest;
         }
 
-        public DecodedAnimation toDecodedAnimation() {
+        public DecodedAnimation toDecodedAnimation() throws IOException {
+            // 全体の大きさは、ピクセルの領域を確保する前に確かめる (大きさを偽ったファイルでメモリ不足にならないように)
+            if (w <= 0 || h <= 0 || w > ImageLoader.MAX_STATIC_SIZE || h > ImageLoader.MAX_STATIC_SIZE) {
+                throw new IOException("GIF exceeds safety limits: " + w + "x" + h);
+            }
             AnimationCanvas canvas = new AnimationCanvas(w, h);
             List<AnimationFrame> animFrames = new ArrayList<>(frames.size());
+            // 作るフレームと、展開するフレームのピクセル数の合計 (小さなファイルに、たくさんのフレームを入れられるため)
+            long canvasPixels = 0, framePixels = 0;
 
             for (GifFrame fr : frames) {
+                // 絵のない制御の拡張 (最後に付いたものや、文字の拡張に付いたもの) は、コマにしない (ブラウザと同じ)。
+                // 以前はデータのないまま展開しようとして例外になり、GIF 全体が読めなかった
+                if (fr.data == null) continue;
                 final int[] activeColTbl = fr.hasLocColTbl ? fr.localColTbl : globalColTbl;
+                if (activeColTbl == null) throw new IOException("GIF frame has no color table");
+                canvasPixels += wh;
+                framePixels += fr.wh;
+                if (animFrames.size() >= ImageLoader.MAX_ANIMATION_FRAMES || canvasPixels > ImageLoader.MAX_ANIMATION_PIXELS
+                        || framePixels > ImageLoader.MAX_ANIMATION_PIXELS) {
+                    throw new IOException("GIF animation exceeds safety limits");
+                }
                 int[] pixels = decode(fr, activeColTbl);
                 if (fr.interlaceFlag) {
                     pixels = deinterlace(pixels, fr);
@@ -242,7 +259,8 @@ public final class GifDecoder {
 
                 // delay is in 1/100 seconds, convert to milliseconds (multiply by 10)
                 int delayMs = fr.delay * 10;
-                if (delayMs < 10) {
+                // ブラウザと同じく、0.01 秒以下は 0.1 秒にする
+                if (delayMs <= 10) {
                     delayMs = 100; // standard fallback
                 }
 
@@ -376,9 +394,11 @@ public final class GifDecoder {
         return 6;
     }
 
-    static int readImgData(final GifFrame fr, final byte[] in, int i) {
+    static int readImgData(final GifFrame fr, final byte[] in, int i) throws IOException {
         final int fileSize = in.length;
         final int minCodeSize = in[i++] & 0xFF;
+        // 符号は 12 ビットまでなので、最初の長さは 11 ビットまで
+        if (minCodeSize > 11) throw new IOException("Invalid GIF LZW code size: " + minCodeSize);
         final int clearCode = 1 << minCodeSize;
         fr.firstCodeSize = minCodeSize + 1;
         fr.clearCode = clearCode;
@@ -428,11 +448,15 @@ public final class GifDecoder {
         return imgDataPos;
     }
 
-    static int readImgDescr(final GifFrame fr, final byte[] in, int i) {
+    static int readImgDescr(final GifFrame fr, final byte[] in, int i) throws IOException {
         fr.x = in[++i] & 0xFF | (in[++i] & 0xFF) << 8;
         fr.y = in[++i] & 0xFF | (in[++i] & 0xFF) << 8;
         fr.w = in[++i] & 0xFF | (in[++i] & 0xFF) << 8;
         fr.h = in[++i] & 0xFF | (in[++i] & 0xFF) << 8;
+        // 1 つのフレームは静止画の上限まで (65535 x 65535 は int に収まらず、メモリも足りない)
+        if ((long) fr.w * fr.h > (long) ImageLoader.MAX_STATIC_SIZE * ImageLoader.MAX_STATIC_SIZE) {
+            throw new IOException("GIF frame exceeds safety limits: " + fr.w + "x" + fr.h);
+        }
         fr.wh = fr.w * fr.h;
         final byte b = in[++i];
         fr.hasLocColTbl = (b & 0b10000000) >>> 7 == 1;

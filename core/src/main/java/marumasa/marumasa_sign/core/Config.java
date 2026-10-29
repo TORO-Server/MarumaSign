@@ -1,9 +1,14 @@
 package marumasa.marumasa_sign.core;
 
+import marumasa.marumasa_sign.core.util.Json;
+
 import java.io.File;
 import java.io.IOException;
+import java.math.BigInteger;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.AtomicMoveNotSupportedException;
 import java.nio.file.Files;
+import java.nio.file.StandardCopyOption;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -68,21 +73,29 @@ public final class Config {
         try {
             final String json = new String(Files.readAllBytes(file.toPath()), StandardCharsets.UTF_8);
 
-            Matcher matcher = MAX_THREADS_PATTERN.matcher(json);
+            // 壊れた値 (int に収まらない数など) があっても、ほかの項目は読む
+            maxThreads = number(MAX_THREADS_PATTERN, json, maxThreads, MIN_THREADS, MAX_THREADS);
+            volume = number(VOLUME_PATTERN, json, volume, 0, 100);
+            final Matcher matcher = LAST_DIRECTORY_PATTERN.matcher(json);
             if (matcher.find()) {
-                maxThreads = Math.max(MIN_THREADS, Math.min(MAX_THREADS, Integer.parseInt(matcher.group(1))));
-            }
-            matcher = VOLUME_PATTERN.matcher(json);
-            if (matcher.find()) {
-                volume = Math.max(0, Math.min(100, Integer.parseInt(matcher.group(1))));
-            }
-            matcher = LAST_DIRECTORY_PATTERN.matcher(json);
-            if (matcher.find()) {
-                lastDirectory = matcher.group(1).replace("\\\"", "\"").replace("\\\\", "\\");
+                // \n や \u00e9 などの書き方も、JSON として読む
+                final Object value = Json.parse("\"" + matcher.group(1) + "\"");
+                if (value instanceof String) lastDirectory = (String) value;
             }
         } catch (IOException | RuntimeException e) {
             MarumaSign.LOGGER.error("Failed to deserialize config", e);
         }
+    }
+
+    // 数の項目を読み、min - max に収める。なければ fallback
+    private static int number(Pattern pattern, String json, int fallback, int min, int max) {
+        final Matcher matcher = pattern.matcher(json);
+        if (!matcher.find()) return fallback;
+        // int に収まらない数も、そのまま比べて端に寄せる
+        final BigInteger value = new BigInteger(matcher.group(1));
+        if (value.compareTo(BigInteger.valueOf(min)) < 0) return min;
+        if (value.compareTo(BigInteger.valueOf(max)) > 0) return max;
+        return value.intValue();
     }
 
     private void serialize() {
@@ -93,8 +106,15 @@ public final class Config {
             }
             final String json = "{\"MaxThreads\":" + maxThreads
                     + ",\"Volume\":" + volume
-                    + ",\"LastDirectory\":\"" + lastDirectory.replace("\\", "\\\\").replace("\"", "\\\"") + "\"}";
-            Files.write(file.toPath(), json.getBytes(StandardCharsets.UTF_8));
+                    + ",\"LastDirectory\":" + Json.write(lastDirectory) + "}";
+            // 書いている途中で止まっても設定が消えないように、別のファイルに書いてから置き換える
+            final File temporary = new File(file.getPath() + ".tmp");
+            Files.write(temporary.toPath(), json.getBytes(StandardCharsets.UTF_8));
+            try {
+                Files.move(temporary.toPath(), file.toPath(), StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE);
+            } catch (AtomicMoveNotSupportedException e) {
+                Files.move(temporary.toPath(), file.toPath(), StandardCopyOption.REPLACE_EXISTING);
+            }
         } catch (IOException | RuntimeException e) {
             MarumaSign.LOGGER.error("Failed to serialize config", e);
         }

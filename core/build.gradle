@@ -2,29 +2,7 @@ plugins {
     id 'java-library'
 }
 
-repositories {
-    mavenCentral()
-}
-
-configurations {
-    // 配布する jar に、パッケージ名を変えて同梱するライブラリ (dist の shadeCore で取り込む)
-    bundled {
-        transitive = false
-    }
-}
-
-dependencies {
-    // 1.7.10 に同梱されている版。これより新しい API は使わない
-    compileOnly 'org.apache.logging.log4j:log4j-api:2.0-beta9'
-    testImplementation 'org.apache.logging.log4j:log4j-api:2.0-beta9'
-
-    // PDF の読み込みと描画。Java 6 以降で動く 2.0 系を使う。
-    // ログの出力先 (Commons Logging) は同梱せず、marumasa.marumasa_sign.lib.logging の代わりのクラスに付け替える
-    bundled 'org.apache.pdfbox:pdfbox:2.0.37'
-    bundled 'org.apache.pdfbox:fontbox:2.0.37'
-    compileOnly 'org.apache.pdfbox:pdfbox:2.0.37'
-    testImplementation 'org.apache.pdfbox:pdfbox:2.0.37'
-}
+// ライブラリは使わない (JDK の標準の機能だけで書く)。依存するものを足さないこと (CI の dependency-free の検査で確かめる)
 
 // Minecraft を起動せずに画面の見た目を PNG に書き出す
 tasks.register('uiPreview', JavaExec) {
@@ -61,12 +39,58 @@ tasks.register('dracoCheck', JavaExec) {
     javaLauncher = javaToolchains.launcherFor(java.toolchain)
 }
 
+// 壊した glTF / GLB と KTX2 / DDS を読ませて、想定外の例外や長い時間、メモリの使い切りにならないかを確かめる。
+// 引数は -PgltfFuzzArgs="回数 ファイルまたはフォルダ..." で渡す (ファイルを省くと src/test/resources/gltf を種にする)
+tasks.register('gltfFuzz', JavaExec) {
+    classpath = sourceSets.test.runtimeClasspath
+    mainClass = 'marumasa.marumasa_sign.core.gltf.GltfFuzz'
+    javaLauncher = javaToolchains.launcherFor(java.toolchain)
+    maxHeapSize = '1g'
+    jvmArgs '-Xss512k'
+    args = providers.gradleProperty('gltfFuzzArgs').getOrElse('2000').tokenize(' ')
+}
+
+// 3D モデルとテクスチャの読み込みで直した不具合が、もう一度起きないことを確かめる
+tasks.register('gltfRegressionCheck', JavaExec) {
+    classpath = sourceSets.test.runtimeClasspath
+    mainClass = 'marumasa.marumasa_sign.core.gltf.GltfRegressionCheck'
+    javaLauncher = javaToolchains.launcherFor(java.toolchain)
+    maxHeapSize = '1g'
+    jvmArgs '-Xss512k'
+}
+
+// WebP デコーダの単体テスト・安全性検査を実行する。壊したデータを読ませる回数は -PwebpFuzz=回数 で変えられる (既定は 3000)
+tasks.register('webpCheck', JavaExec) {
+    classpath = sourceSets.test.runtimeClasspath
+    mainClass = 'marumasa.marumasa_sign.core.texture.WebpCheck'
+    javaLauncher = javaToolchains.launcherFor(java.toolchain)
+    maxHeapSize = '2g'
+    args = [providers.gradleProperty('webpFuzz').getOrElse('3000')]
+}
+
 // テクスチャデコーダの動作を確認する。引数は -PtextureArgs="出力先 ファイル..." で渡す
 tasks.register('textureCheck', JavaExec) {
     classpath = sourceSets.test.runtimeClasspath
     mainClass = 'marumasa.marumasa_sign.core.texture.TextureCheck'
     javaLauncher = javaToolchains.launcherFor(java.toolchain)
     args = providers.gradleProperty('textureArgs').getOrElse('').tokenize(' ')
+}
+
+// meshopt の展開を、テスト用の符号化との往復と、壊したデータで確かめる。引数は -PmeshoptCheckArgs="壊したデータを試す秒数"
+tasks.register('meshoptCheck', JavaExec) {
+    classpath = sourceSets.test.runtimeClasspath
+    mainClass = 'marumasa.marumasa_sign.core.gltf.meshopt.MeshoptCheck'
+    javaLauncher = javaToolchains.launcherFor(java.toolchain)
+    args = providers.gradleProperty('meshoptCheckArgs').getOrElse('').tokenize(' ')
+}
+
+// BC6H / BC7 / UASTC / ETC1S の展開を、乱数のブロックと小さな KTX2 のハッシュ、壊したデータで確かめる。
+// 引数は -PcompressedTextureArgs="壊したデータを試す秒数"
+tasks.register('compressedTextureCheck', JavaExec) {
+    classpath = sourceSets.test.runtimeClasspath
+    mainClass = 'marumasa.marumasa_sign.core.texture.CompressedTextureCheck'
+    javaLauncher = javaToolchains.launcherFor(java.toolchain)
+    args = providers.gradleProperty('compressedTextureArgs').getOrElse('').tokenize(' ')
 }
 
 // ガウシアンスプラッティングを PNG に描く。引数は -PsplatPreviewArgs="出力先 スプラットのファイル..." で渡す
@@ -111,12 +135,35 @@ tasks.register('formatFuzz', JavaExec) {
     args = providers.gradleProperty('imageFuzzArgs').getOrElse('').tokenize(' ')
 }
 
-// PDF の代わりのフォントを探す一覧 (SystemFonts) が、PDFBox の標準の一覧と同じになるかを確かめる (フォントが多いと 1 分ほどかかる)
-tasks.register('fontListCheck', JavaExec) {
+// PDF の読み込みと描画 (core/pdf) の試験: 部品、試験用の PDF、悪意のある PDF (輪、爆弾、深い入れ子など)。
+// メモリとスタックを小さくして、使い切りや深すぎる再帰を見つける
+tasks.register('pdfEngineCheck', JavaExec) {
     classpath = sourceSets.test.runtimeClasspath
-    mainClass = 'marumasa.marumasa_sign.core.pdf.FontListCheck'
+    mainClass = 'marumasa.marumasa_sign.core.pdf.PdfCheck'
     javaLauncher = javaToolchains.launcherFor(java.toolchain)
-    maxHeapSize = '2g'
+    maxHeapSize = '512m'
+    jvmArgs '-Xss512k'
+}
+
+// 壊した PDF を読ませて、想定外の例外や長い時間にならないかを確かめる。
+// 引数は -PpdfFuzzArgs="回数 ファイルまたはフォルダ..." (ファイルを渡さなければ試験用の PDF を種にする)。乱数の種は -PfuzzSeed で決められる
+tasks.register('pdfFuzz', JavaExec) {
+    classpath = sourceSets.test.runtimeClasspath
+    mainClass = 'marumasa.marumasa_sign.core.pdf.PdfFuzz'
+    javaLauncher = javaToolchains.launcherFor(java.toolchain)
+    maxHeapSize = '768m'
+    jvmArgs '-Xss512k'
+    args = providers.gradleProperty('pdfFuzzArgs').getOrElse('300').tokenize(' ')
+    if (providers.gradleProperty('fuzzSeed').isPresent()) systemProperty 'fuzz.seed', providers.gradleProperty('fuzzSeed').get()
+}
+
+// JPEG の読み込み (libjpeg を使わない、Java だけで書いたもの) を、libjpeg (Pillow) で戻した結果と比べる
+tasks.register('jpegCheck', JavaExec) {
+    classpath = sourceSets.test.runtimeClasspath
+    mainClass = 'marumasa.marumasa_sign.core.image.format.JpegCheck'
+    javaLauncher = javaToolchains.launcherFor(java.toolchain)
+    maxHeapSize = '512m'
+    args 'src/test/resources/jpeg'
 }
 
 // ダウンロードしたファイルを残しておく仕組み (DownloadCache) を、手元の HTTP サーバーで確かめる
@@ -141,6 +188,14 @@ tasks.register('signLimitsCheck', JavaExec) {
     maxHeapSize = '3g'
 }
 
+// 看板の読み込みの流れ (ダウンロード、残しておく仕組み、順番待ち、テクスチャ、メモリの上限、動画) で直した不具合を確かめる
+tasks.register('runtimeRegressionCheck', JavaExec) {
+    classpath = sourceSets.test.runtimeClasspath
+    mainClass = 'marumasa.marumasa_sign.core.RuntimeRegressionCheck'
+    javaLauncher = javaToolchains.launcherFor(java.toolchain)
+    maxHeapSize = '2g'
+}
+
 // 看板に表示するファイルの、ダウンロードと読み込みの時間を測る。引数は -PloadBenchArgs="回数 ファイル..." で渡す
 tasks.register('loadBenchmark', JavaExec) {
     classpath = sourceSets.test.runtimeClasspath
@@ -163,7 +218,8 @@ tasks.register('structureCheck', JavaExec) {
 }
 
 // 壊した構造物のファイルを読ませて、想定外の例外や長い時間にならないかを確かめる。
-// 引数は -PfuzzArgs="回数 ファイルまたはフォルダ..." で渡す。-PfuzzMesh を付けると、3D モデルにするところまで確かめる
+// 引数は -PfuzzArgs="回数 ファイルまたはフォルダ..." で渡す (ファイルを渡さなければ src/test/resources/structure)。
+// -PfuzzMesh を付けると、3D モデルにするところまで確かめる。-PfuzzSeed=数 で乱数の種を決められる
 tasks.register('structureFuzz', JavaExec) {
     classpath = sourceSets.test.runtimeClasspath
     mainClass = 'marumasa.marumasa_sign.core.structure.StructureFuzz'
@@ -171,8 +227,20 @@ tasks.register('structureFuzz', JavaExec) {
     maxHeapSize = '4g'
     args = providers.gradleProperty('fuzzArgs').getOrElse('').tokenize(' ')
     if (providers.gradleProperty('fuzzMesh').isPresent()) systemProperty 'fuzz.mesh', 'true'
+    if (providers.gradleProperty('fuzzSeed').isPresent()) systemProperty 'fuzz.seed', providers.gradleProperty('fuzzSeed').get()
+    jvmArgs '-Xss512k'
     if (providers.gradleProperty('assetJar').isPresent()) systemProperty 'marumasign.assetJar', providers.gradleProperty('assetJar').get()
     systemProperty 'marumasign.gameDir', layout.buildDirectory.dir('structure-game').get().asFile.path
+}
+
+// 構造物のファイルの読み込みで直した不具合が戻っていないか、種のファイル (src/test/resources/structure) が正しく読めるかを確かめる。
+// Minecraft の jar もネットワークも使わない
+tasks.register('structureRegressionCheck', JavaExec) {
+    classpath = sourceSets.test.runtimeClasspath
+    mainClass = 'marumasa.marumasa_sign.core.structure.StructureRegressionCheck'
+    javaLauncher = javaToolchains.launcherFor(java.toolchain)
+    maxHeapSize = '2g'
+    jvmArgs '-Xss512k'
 }
 
 // 構造物の中にある MarumaSign の看板を、悪用を含めて確かめる。-PassetJar は structureCheck と同じ
@@ -183,6 +251,26 @@ tasks.register('nestedSignCheck', JavaExec) {
     maxHeapSize = '4g'
     if (providers.gradleProperty('assetJar').isPresent()) systemProperty 'marumasign.assetJar', providers.gradleProperty('assetJar').get()
     systemProperty 'marumasign.gameDir', layout.buildDirectory.dir('structure-game').get().asFile.path
+}
+
+// 壊したガウシアンスプラッティングのファイルを読ませて、想定外の例外や長い時間、メモリの使い切りにならないかを確かめる。
+// 引数は -PsplatFuzzArgs="回数 ファイルまたはフォルダ..." で渡す (ファイルを省くと src/test/resources/splat を種にする)
+tasks.register('splatFuzz', JavaExec) {
+    classpath = sourceSets.test.runtimeClasspath
+    mainClass = 'marumasa.marumasa_sign.core.splat.SplatFuzz'
+    javaLauncher = javaToolchains.launcherFor(java.toolchain)
+    maxHeapSize = '1g'
+    jvmArgs '-Xss512k'
+    args = providers.gradleProperty('splatFuzzArgs').getOrElse('5000').tokenize(' ')
+}
+
+// ガウシアンスプラッティングの読み込みで直した不具合が、もう一度起きないことを確かめる
+tasks.register('splatRegressionCheck', JavaExec) {
+    classpath = sourceSets.test.runtimeClasspath
+    mainClass = 'marumasa.marumasa_sign.core.splat.SplatRegressionCheck'
+    javaLauncher = javaToolchains.launcherFor(java.toolchain)
+    maxHeapSize = '1g'
+    jvmArgs '-Xss512k'
 }
 
 // ガウシアンスプラッティングのデコーダの動作と安全性を確認する。

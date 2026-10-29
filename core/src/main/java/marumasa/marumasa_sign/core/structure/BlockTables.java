@@ -21,7 +21,7 @@ final class BlockTables {
     private static volatile Map<String, Integer> legacyIds;
     private static volatile Map<String, BlockState> bedrock;
     // 統合版のブロックの名前ごとの、表に載っている状態
-    private static volatile Map<String, List<String>> bedrockByName;
+    private static volatile Map<String, Candidates> bedrockByName;
 
     private BlockTables() {
     }
@@ -79,7 +79,7 @@ final class BlockTables {
     private static synchronized void loadBedrock() throws IOException {
         if (bedrock != null) return;
         final Map<String, BlockState> table = new HashMap<String, BlockState>();
-        final Map<String, List<String>> byName = new HashMap<String, List<String>>();
+        final Map<String, List<BlockState[]>> lists = new HashMap<String, List<BlockState[]>>();
         final BufferedReader reader = open("bedrock.txt.gz");
         try {
             String line;
@@ -87,21 +87,107 @@ final class BlockTables {
                 if (line.isEmpty() || line.charAt(0) == '#') continue;
                 final int space = line.indexOf(' ');
                 final String key = line.substring(0, space);
-                table.put(key, BlockState.parse(line.substring(space + 1)));
-                final int bracket = key.indexOf('[');
-                final String name = bracket < 0 ? key : key.substring(0, bracket);
-                List<String> list = byName.get(name);
+                final BlockState java = BlockState.parse(line.substring(space + 1));
+                table.put(key, java);
+                final BlockState parsed = BlockState.parse(key);
+                List<BlockState[]> list = lists.get(parsed.name);
                 if (list == null) {
-                    list = new ArrayList<String>();
-                    byName.put(name, list);
+                    list = new ArrayList<BlockState[]>();
+                    lists.put(parsed.name, list);
                 }
-                list.add(key);
+                list.add(new BlockState[]{parsed, java});
             }
         } finally {
             reader.close();
         }
+        final Map<String, Candidates> byName = new HashMap<String, Candidates>();
+        for (Map.Entry<String, List<BlockState[]>> entry : lists.entrySet()) byName.put(entry.getKey(), new Candidates(entry.getValue()));
         bedrockByName = byName;
         bedrock = table;
+    }
+
+    /**
+     * 統合版のブロックの名前 1 つの、表に載っている状態の一覧。
+     * 近いものを探すのに、状態を 1 つずつ比べると、状態の多いブロック (2000 以上) を値だけ変えてたくさん並べた壊れたファイルで
+     * 時間がかかるので、性質と値ごとに、それを持つ状態の番号を引けるようにしておく。
+     */
+    private static final class Candidates {
+        // 表の順の Java 版の状態と、それぞれの性質の数
+        final BlockState[] java;
+        final int[] propertyCount;
+        // 性質の名前 -> それを持つ状態の番号
+        final Map<String, int[]> withKey = new HashMap<String, int[]>();
+        // 性質の名前 -> 値 -> その値を持つ状態の番号
+        final Map<String, Map<String, int[]>> withValue = new HashMap<String, Map<String, int[]>>();
+
+        Candidates(List<BlockState[]> list) {
+            java = new BlockState[list.size()];
+            propertyCount = new int[list.size()];
+            final Map<String, List<Integer>> keys = new HashMap<String, List<Integer>>();
+            final Map<String, Map<String, List<Integer>>> values = new HashMap<String, Map<String, List<Integer>>>();
+            for (int c = 0; c < list.size(); c++) {
+                final BlockState parsed = list.get(c)[0];
+                java[c] = list.get(c)[1];
+                propertyCount[c] = parsed.size();
+                for (int i = 0; i < parsed.size(); i++) {
+                    List<Integer> withKeyList = keys.get(parsed.key(i));
+                    if (withKeyList == null) {
+                        withKeyList = new ArrayList<Integer>();
+                        keys.put(parsed.key(i), withKeyList);
+                    }
+                    withKeyList.add(c);
+                    Map<String, List<Integer>> byValue = values.get(parsed.key(i));
+                    if (byValue == null) {
+                        byValue = new HashMap<String, List<Integer>>();
+                        values.put(parsed.key(i), byValue);
+                    }
+                    List<Integer> withValueList = byValue.get(parsed.value(i));
+                    if (withValueList == null) {
+                        withValueList = new ArrayList<Integer>();
+                        byValue.put(parsed.value(i), withValueList);
+                    }
+                    withValueList.add(c);
+                }
+            }
+            for (Map.Entry<String, List<Integer>> entry : keys.entrySet()) withKey.put(entry.getKey(), toArray(entry.getValue()));
+            for (Map.Entry<String, Map<String, List<Integer>>> entry : values.entrySet()) {
+                final Map<String, int[]> byValue = new HashMap<String, int[]>();
+                for (Map.Entry<String, List<Integer>> value : entry.getValue().entrySet()) byValue.put(value.getKey(), toArray(value.getValue()));
+                withValue.put(entry.getKey(), byValue);
+            }
+        }
+
+        private static int[] toArray(List<Integer> list) {
+            final int[] result = new int[list.size()];
+            for (int i = 0; i < result.length; i++) result[i] = list.get(i);
+            return result;
+        }
+
+        /**
+         * 値が最も多く一致する状態 (同じなら表で先のもの)。状態ごとの点数は、性質の値が一致すれば 2、性質がなければ -1。
+         * 点数が 0 以上のものがなければ null。
+         */
+        BlockState nearest(Map<String, String> states) {
+            // 点数 = 2 x 一致した数 - (性質の数 - 書かれていた性質の数)
+            final int[] score = new int[java.length];
+            for (int c = 0; c < score.length; c++) score[c] = -propertyCount[c];
+            for (Map.Entry<String, String> entry : states.entrySet()) {
+                final int[] present = withKey.get(entry.getKey());
+                if (present == null) continue;
+                for (int c : present) score[c]++;
+                final int[] matching = withValue.get(entry.getKey()).get(entry.getValue());
+                if (matching == null) continue;
+                for (int c : matching) score[c] += 2;
+            }
+            int best = -1, bestScore = -1;
+            for (int c = 0; c < score.length; c++) {
+                if (score[c] > bestScore) {
+                    bestScore = score[c];
+                    best = c;
+                }
+            }
+            return best < 0 ? null : java[best];
+        }
     }
 
     /**
@@ -113,23 +199,7 @@ final class BlockTables {
         final String key = BlockState.of(name, states).toString();
         final BlockState exact = bedrock.get(key);
         if (exact != null) return exact;
-        final List<String> candidates = bedrockByName.get(BlockState.namespaced(name));
-        if (candidates == null) return null;
-        String best = null;
-        int bestScore = -1;
-        for (String candidate : candidates) {
-            final BlockState parsed = BlockState.parse(candidate);
-            int score = 0;
-            for (int i = 0; i < parsed.size(); i++) {
-                final String value = states.get(parsed.key(i));
-                if (value != null && value.equals(parsed.value(i))) score += 2;
-                else if (value == null) score -= 1;
-            }
-            if (score > bestScore) {
-                bestScore = score;
-                best = candidate;
-            }
-        }
-        return best == null ? null : bedrock.get(best);
+        final Candidates candidates = bedrockByName.get(BlockState.namespaced(name));
+        return candidates == null ? null : candidates.nearest(states);
     }
 }

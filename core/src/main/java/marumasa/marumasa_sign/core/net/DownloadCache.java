@@ -98,12 +98,12 @@ final class DownloadCache {
         final File directory = directory();
         if (directory == null) return;
         synchronized (LOCK) {
+            final String key = key(url);
+            final File temporary = new File(directory, key + ".tmp");
             try {
                 if (!directory.isDirectory() && !directory.mkdirs()) return;
-                final String key = key(url);
                 final File data = new File(directory, key + ".data");
                 final File meta = new File(directory, key + ".meta");
-                final File temporary = new File(directory, key + ".tmp");
                 // 本体を先に置き換え、最後に説明のファイルを書く (途中で止まっても、大きさが合わないものは使われない)
                 meta.delete();
                 Files.write(temporary.toPath(), content);
@@ -114,9 +114,15 @@ final class DownloadCache {
                 trim(directory);
             } catch (IOException | RuntimeException e) {
                 MarumaSign.LOGGER.info("Could not keep a downloaded file (" + e + ")");
+            } finally {
+                // 書きかけのまま失敗したもの (ディスクがいっぱいなど) を残さない。合計の大きさに数えないので、残すとたまり続ける
+                temporary.delete();
             }
         }
     }
+
+    // 書きかけのファイルを消すまでの時間 (ミリ秒)。これより新しいものは、別のゲームが書いている途中かもしれない
+    private static final long STALE_TEMPORARY_MILLIS = 10 * 60 * 1000;
 
     // 合計が上限を超えていれば、最後に使ったのが古いものから消す
     private static void trim(File directory) {
@@ -124,10 +130,14 @@ final class DownloadCache {
         if (files == null) return;
         final List<File> data = new ArrayList<>();
         long total = 0;
+        final long now = System.currentTimeMillis();
         for (File file : files) {
             if (file.getName().endsWith(".data")) {
                 data.add(file);
                 total += file.length();
+            } else if (file.getName().endsWith(".tmp") && Math.abs(now - file.lastModified()) > STALE_TEMPORARY_MILLIS) {
+                // 書いている途中でゲームが止まって残ったもの
+                file.delete();
             }
         }
         if (total <= maxTotal) return;
