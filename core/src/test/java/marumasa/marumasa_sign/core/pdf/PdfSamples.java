@@ -842,6 +842,14 @@ final class PdfSamples {
         final byte[][] large = new byte[6][];
         for (int i = 0; i < large.length; i++) large[i] = deflateRepeated((100 + i) + " 0\n", 1, " ", 100000000, "<< /ca 1 >>", 1);
         samples.add(new String[]{"large-object-streams", objectStreamPage(new int[]{1, 1, 1, 1, 1, 1}, 6, large)});
+        // 内容に 1.2 億バイトの名前と、命令 (Java 8 では、文字列と作業用の領域で 500 MB を超えていた)
+        for (String[] huge : new String[][]{{"huge-name", "/", " gs"}, {"huge-keyword", "", " 0 g"}}) {
+            samples.add(new String[]{huge[0], build(
+                    "<< /Type /Catalog /Pages 2 0 R >>",
+                    "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+                    "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 100 100] /Contents 4 0 R >>",
+                    stream("/Filter /FlateDecode", latin1(deflateRepeated(huge[1], 1, "a", 120000000, huge[2], 1))))});
+        }
         // V 5 (256 ビット) なのに R 4 の暗号化の辞書: R 4 の鍵の作り方に 32 バイトの鍵の長さを渡して、範囲の外を読んでいた
         final String padding = "(" + new String(new char[32]).replace('\0', 'A') + ")";
         samples.add(new String[]{"encrypt-v5-r4", page("<< >>", "0 g", "<< /Filter /Standard /V 5 /R 4 /Length 256 /CF << /StdCF "
