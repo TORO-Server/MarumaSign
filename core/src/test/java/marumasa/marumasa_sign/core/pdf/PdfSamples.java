@@ -249,6 +249,24 @@ final class PdfSamples {
                         + "/CapHeight 1000 /StemV 80 /FontFile 7 0 R >>",
                 stream("/Length1 " + (type1[0].length - 4) + " /Length2 " + type1[1].length + " /Length3 0",
                         latin1(type1[0]) + latin1(type1[1])))});
+        // 最後の検査の値 (Adler-32) だけが壊れた FlateDecode は、戻せた分を全部使う
+        final byte[] badChecksum = deflate("1 0 0 rg 50 50 100 100 re f".getBytes(StandardCharsets.ISO_8859_1));
+        badChecksum[badChecksum.length - 1] ^= 0x55;
+        samples.add(new String[]{"flate-bad-checksum", build(
+                "<< /Type /Catalog /Pages 2 0 R >>",
+                "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+                "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Contents 4 0 R >>",
+                stream("/Filter /FlateDecode", latin1(badChecksum)))});
+        // 埋め込んだ TrueType の、知らないグリフの名前 (post の表がない g1) は、ToUnicode の文字を cmap で引く
+        samples.add(new String[]{"truetype-tounicode-name", page("<< /Font << /F1 5 0 R >> >>", "0 g BT /F1 100 Tf 50 50 Td (a) Tj ET",
+                "<< /Type /Font /Subtype /TrueType /BaseFont /L /FirstChar 97 /LastChar 97 /Widths [1000] /FontDescriptor 6 0 R "
+                        + "/Encoding << /BaseEncoding /WinAnsiEncoding /Differences [97 /g1] >> /ToUnicode 8 0 R >>",
+                "<< /Type /FontDescriptor /FontName /L /Flags 32 /FontBBox [0 0 1000 1000] /ItalicAngle 0 /Ascent 1000 /Descent 0 "
+                        + "/CapHeight 1000 /StemV 80 /FontFile2 7 0 R >>",
+                stream("", latin1(squareTrueType(null, false, 0, true))),
+                stream("", "/CIDInit /ProcSet findresource begin 12 dict begin begincmap /CMapName /U def "
+                        + "1 begincodespacerange <00> <FF> endcodespacerange 1 beginbfchar <61> <0041> endbfchar "
+                        + "endcmap CMapName currentdict /CMap defineresource pop end end"))});
         // OpenType に入った、CID の決まっていない CFF を使う CIDFontType0 の CIDToGIDMap (CID 1 を、四角のグリフ 2 にする)
         samples.add(new String[]{"cff-cidtogidmap", page("<< /Font << /F1 5 0 R >> >>", "0 g BT /F1 100 Tf 50 50 Td <0001> Tj ET",
                 "<< /Type /Font /Subtype /Type0 /BaseFont /T /Encoding /Identity-H /DescendantFonts [6 0 R] >>",
@@ -408,7 +426,7 @@ final class PdfSamples {
      * 2 つのグリフの TrueType。グリフ 1 は x 500 から 900、y 0 から 400 の四角だが、hmtx の lsb は 0。
      */
     static byte[] lsbTrueType() {
-        return squareTrueType(null, false, 0);
+        return squareTrueType(null, false, 0, false);
     }
 
     /**
@@ -416,8 +434,8 @@ final class PdfSamples {
      */
     static byte[] trueTypeCollection() {
         final int header = 12 + 4 * 2;
-        final byte[] first = squareTrueType("Other", true, header);
-        final byte[] second = squareTrueType("L", false, header + first.length);
+        final byte[] first = squareTrueType("Other", true, header, false);
+        final byte[] second = squareTrueType("L", false, header + first.length, false);
         final ByteArrayOutputStream out = new ByteArrayOutputStream();
         final int at = header + first.length;
         write(out, 't', 't', 'c', 'f', 0, 1, 0, 0, 0, 0, 0, 2, 0, 0, 0, header, at >> 24, at >> 16 & 0xFF, at >> 8 & 0xFF, at & 0xFF);
@@ -432,8 +450,9 @@ final class PdfSamples {
      * @param name  PostScript 名 (name の表に書く。null なら name の表なし)
      * @param empty グリフ 1 を空にするか
      * @param base  ファイルの中での、このフォントの位置
+     * @param cmap  Unicode の cmap (A をグリフ 1 に) を付けるか
      */
-    private static byte[] squareTrueType(String name, boolean empty, int base) {
+    private static byte[] squareTrueType(String name, boolean empty, int base, boolean cmap) {
         final byte[] maxp = {0, 0, 0x50, 0, 0, 2};
         // 幅 1000、lsb 0 (グリフ 0)、lsb 0 (グリフ 1)
         final byte[] hmtx = {0x03, (byte) 0xE8, 0, 0, 0, 0};
@@ -443,6 +462,15 @@ final class PdfSamples {
                 0x01, 0xF4, 0x01, 0x90, 0, 0, 0xFE, 0x70, 0, 0, 0, 0, 0x01, 0x90, 0, 0);
         // loca (短い形、2 で割った値): グリフ 0 は空
         final byte[] loca = {0, 0, 0, 0, 0, (byte) (empty ? 0 : glyf.size() / 2)};
+        if (cmap) {
+            // (3, 1) の形式 4: A (0x41) をグリフ 1 に。最後の区切りは 0xFFFF
+            final ByteArrayOutputStream table = new ByteArrayOutputStream();
+            write(table, 0, 0, 0, 1, 0, 3, 0, 1, 0, 0, 0, 12);
+            write(table, 0, 4, 0, 32, 0, 0, 0, 4, 0, 4, 0, 1, 0, 0);
+            write(table, 0, 0x41, 0xFF, 0xFF, 0, 0, 0, 0x41, 0xFF, 0xFF, 0xFF, 0xC0, 0, 1, 0, 0, 0, 0);
+            return sfnt(0x00010000, new String[]{"cmap", "glyf", "head", "hhea", "hmtx", "loca", "maxp"},
+                    new byte[][]{table.toByteArray(), glyf.toByteArray(), head(500, 0, 900, 400), hhea(1), hmtx, loca, maxp}, base);
+        }
         if (name == null) {
             return sfnt(0x00010000, new String[]{"glyf", "head", "hhea", "hmtx", "loca", "maxp"},
                     new byte[][]{glyf.toByteArray(), head(500, 0, 900, 400), hhea(1), hmtx, loca, maxp}, base);

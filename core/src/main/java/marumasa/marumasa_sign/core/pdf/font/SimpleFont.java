@@ -4,9 +4,11 @@ import marumasa.marumasa_sign.core.pdf.Strict;
 import marumasa.marumasa_sign.core.pdf.cos.PdfArray;
 import marumasa.marumasa_sign.core.pdf.cos.PdfDict;
 import marumasa.marumasa_sign.core.pdf.cos.PdfName;
+import marumasa.marumasa_sign.core.pdf.cos.PdfStream;
 
 import java.awt.geom.AffineTransform;
 import java.awt.geom.GeneralPath;
+import java.io.IOException;
 import java.util.Arrays;
 
 /**
@@ -37,6 +39,9 @@ final class SimpleFont extends PdfFont {
     private final boolean hasMissingWidth;
     // コードごとの GID (-1 はまだ求めていない)
     private final int[] gids = new int[256];
+    // ToUnicode (グリフの名前で選べないときに使う)。読んでいなければ toUnicodeRead が false
+    private CMap toUnicode;
+    private boolean toUnicodeRead;
 
     SimpleFont(PdfDict dict) {
         super(dict);
@@ -255,6 +260,11 @@ final class SimpleFont extends PdfFont {
             if (gid == 0) gid = Math.max(0, ttf.gidForName(name));
             // 記号の印がないのに、記号の cmap しか持たないフォントがある
             if (gid == 0 && ttf.hasCmap(3, 0)) gid = symbolCmap(ttf, code);
+            // 知らない名前 (g5167 など) は、ToUnicode の文字を Unicode の cmap で引く (pdf.js と同じ)
+            if (gid == 0) {
+                final int unicode = toUnicode(code);
+                if (unicode > 0) gid = ttf.unicodeLookup(unicode);
+            }
             return gid;
         }
         if (ttf.hasCmap(3, 0)) gid = symbolCmap(ttf, code);
@@ -281,6 +291,24 @@ final class SimpleFont extends PdfFont {
     }
 
     // 代わりの TrueType で、名前からグリフを選ぶ (Type 1 のフォントの代わりとして使うとき)
+    // ToUnicode に書いた、コードの文字。なければ -1
+    private int toUnicode(int code) {
+        if (!toUnicodeRead) {
+            toUnicodeRead = true;
+            final PdfStream stream = dict.stream("ToUnicode");
+            if (stream != null) {
+                try {
+                    toUnicode = CMaps.parse(stream.decode(4 * 1024 * 1024), true);
+                } catch (IOException | RuntimeException e) {
+                    Strict.check(e);
+                    toUnicode = null;
+                }
+            }
+        }
+        final int value = toUnicode == null ? -1 : toUnicode.lookup(code, 1);
+        return value > 0 ? value : -1;
+    }
+
     private int byName(TrueTypeFont ttf, int code, String name) {
         int gid = name == null ? -1 : ttf.gidForName(name);
         if (gid <= 0 && name != null) {

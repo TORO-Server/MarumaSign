@@ -448,6 +448,9 @@ public final class PdfCheck {
                 // a は四角 (ページの 50 から 150)
                 expect(gray(image, 100, 100) < 30, "Type 1 font with a wrong Length1 is not drawn");
                 break;
+            case "flate-bad-checksum":
+                expectColor(image, 100, 100, 0xFF0000, "content with a bad Adler-32");
+                break;
             case "cff-cidtogidmap":
                 // CID 1 は CIDToGIDMap で四角のグリフ 2 (ページの 50 から 150)
                 expect(gray(image, 100, 100) < 30, "CIDToGIDMap of an OpenType CFF font is ignored");
@@ -458,6 +461,7 @@ public final class PdfCheck {
                 break;
             case "truetype-lsb":
             case "truetype-collection":
+            case "truetype-tounicode-name":
                 // 四角は原点 (x = 50) から 40 ポイントの幅
                 expect(gray(image, 60, 130) < 30, "left side bearing is ignored");
                 expect(gray(image, 130, 130) > 230, "glyph is drawn at xMin");
