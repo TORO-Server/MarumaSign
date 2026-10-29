@@ -123,11 +123,13 @@ public final class Http {
      */
     private static byte[] readRest(InputStream input, byte[] head, long contentLength, int limit) throws IOException {
         if (contentLength >= head.length && contentLength <= limit) {
-            byte[] all = new byte[(int) Math.min(contentLength, Math.max(TRUSTED_PREALLOCATION, head.length))];
+            // limit (int) 以下なので int に収まる
+            final int expected = (int) contentLength;
+            byte[] all = new byte[Math.min(expected, Math.max(TRUSTED_PREALLOCATION, head.length))];
             System.arraycopy(head, 0, all, 0, head.length);
             int filled = head.length;
-            while (filled < contentLength) {
-                if (filled == all.length) all = java.util.Arrays.copyOf(all, (int) Math.min(contentLength, 2L * all.length));
+            while (filled < expected) {
+                if (filled == all.length) all = java.util.Arrays.copyOf(all, (int) Math.min(expected, 2L * all.length));
                 final int read = input.read(all, filled, all.length - filled);
                 // 知らされた大きさより前に接続が切れた。途中までのものを全体として扱うと、
                 // 壊れたファイルを表示し、残しておく仕組み (DownloadCache) にも残して、次からも使ってしまう
