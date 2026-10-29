@@ -304,6 +304,9 @@ final class PdfSamples {
                 "<< /Type /FontDescriptor /FontName /L /Flags 32 /FontBBox [0 -200 1000 900] /ItalicAngle 0 /Ascent 900 /Descent -200 "
                         + "/CapHeight 700 /StemV 80 /FontFile2 7 0 R >>",
                 stream("", latin1(withUnitsPerEm(lsbTrueType(), 0))))});
+        // 標準 14 フォントのコード 32 を .notdef にしたもの: 空白の幅にする
+        samples.add(new String[]{"notdef-space", page("<< /Font << /F1 5 0 R >> >>", "0 g BT /F1 100 Tf 50 50 Td (I I) Tj ET",
+                "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding << /Differences [32 /.notdef] >> >>")});
         // OpenType に入った、CID の決まっていない CFF を使う CIDFontType0 の CIDToGIDMap (CID 1 を、四角のグリフ 2 にする)
         samples.add(new String[]{"cff-cidtogidmap", page("<< /Font << /F1 5 0 R >> >>", "0 g BT /F1 100 Tf 50 50 Td <0001> Tj ET",
                 "<< /Type /Font /Subtype /Type0 /BaseFont /T /Encoding /Identity-H /DescendantFonts [6 0 R] >>",

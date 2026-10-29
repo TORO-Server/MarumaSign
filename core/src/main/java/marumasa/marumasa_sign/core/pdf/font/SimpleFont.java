@@ -169,6 +169,8 @@ final class SimpleFont extends PdfFont {
             // WinAnsi と MacRoman の、名前の違う空白とハイフン (寸法の表には space と hyphen しかない)
             if (width == null && "nbspace".equals(name)) width = metrics.widths.get("space");
             if (width == null && "sfthyphen".equals(name)) width = metrics.widths.get("hyphen");
+            // コード 32 を .notdef にした壊れたファイルがある。空白の幅にする (poppler と同じ)
+            if (width == null && code == 32) width = metrics.widths.get("space");
             return width == null ? 0 : width / 1000;
         }
         final FontProgram font = font();

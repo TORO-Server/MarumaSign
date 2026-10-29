@@ -473,6 +473,10 @@ public final class PdfCheck {
                 expect(drawn, "broken embedded font is used instead of a substitute");
                 break;
             }
+            case "notdef-space":
+                // 2 つ目の I は、I と空白の幅 (0.278 + 0.278) の先 (縦棒は x = 115 から 124 のあたり)
+                expect(gray(image, 119, 120) < 64 && gray(image, 91, 120) > 230, "code 32 mapped to .notdef has no space width");
+                break;
             case "cff-cidtogidmap":
                 // CID 1 は CIDToGIDMap で四角のグリフ 2 (ページの 50 から 150)
                 expect(gray(image, 100, 100) < 30, "CIDToGIDMap of an OpenType CFF font is ignored");
