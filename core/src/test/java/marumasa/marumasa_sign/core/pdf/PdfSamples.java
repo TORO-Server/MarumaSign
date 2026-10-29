@@ -358,6 +358,17 @@ final class PdfSamples {
                         + latin1(deflate(new byte[]{(byte) 255, 0, 0, (byte) 255, 0, 0, (byte) 255, 0, 0, (byte) 255, 0, 0}))
                         + " EI Q BT /F1 12 Tf 10 10 Td (café) Tj ET 0 0 1 rg 100 0 100 100 re f",
                 "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>")});
+        // 増分更新でオブジェクトストリームに入れたページ (青) と、参照の切れた番号 (99): 表を作り直しても、新しい版を使う
+        samples.add(new String[]{"incremental-object-stream", objectStreamUpdate()});
+        // 表示しない層の 2 つの区切りの間で、参照の切れた番号 (99) を読む: 表を作り直した後も、層の辞書は同じもので、右も描かない
+        samples.add(new String[]{"hidden-layer-after-repair", build(
+                "<< /Type /Catalog /Pages 2 0 R /OCProperties << /OCGs [5 0 R] /D << /OFF [5 0 R] >> >> >>",
+                "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+                "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Contents 4 0 R "
+                        + "/Resources << /Properties << /OC1 5 0 R /OC2 6 0 R >> /ExtGState << /G 99 0 R >> >> >>",
+                stream("", "/OC /OC1 BDC 1 0 0 rg 0 0 100 200 re f EMC /G gs /OC /OC2 BDC 1 0 0 rg 100 0 100 200 re f EMC"),
+                "<< /Type /OCG /Name (A) >>",
+                "<< /Type /OCMD /OCGs [5 0 R] >>")});
         // 90 の倍数でない Rotate (135) は回さない (pdf.js と poppler と同じ)。左下の赤い四角は左下に描く
         samples.add(new String[]{"rotate-not-multiple-of-90", build(
                 "<< /Type /Catalog /Pages 2 0 R >>",
@@ -365,6 +376,32 @@ final class PdfSamples {
                 "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Rotate 135 /Contents 4 0 R >>",
                 stream("", "1 0 0 rg 0 0 100 50 re f"))});
         return samples;
+    }
+
+    /**
+     * 増分更新のある PDF。最初の版は赤く塗るページ (3 番) で、ページの木 (2 番) に参照の切れた番号 (99) がある。
+     * 2 つ目の版は、相互参照ストリームとオブジェクトストリーム (5 番) で、ページを青く塗るもの (内容は 6 番) に置き換える。
+     */
+    static String objectStreamUpdate() {
+        final StringBuilder out = new StringBuilder(build(
+                "<< /Type /Catalog /Pages 2 0 R >>",
+                "<< /Type /Pages /Kids [3 0 R] /Count 1 /Resources 99 0 R >>",
+                "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Contents 4 0 R >>",
+                stream("", "1 0 0 rg 0 0 200 200 re f")));
+        final int previous = out.lastIndexOf("\nxref\n") + 1;
+        final int objectStream = out.length();
+        out.append("5 0 obj\n").append(stream("/Type /ObjStm /N 1 /First 4",
+                "3 0\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Contents 6 0 R >>")).append("\nendobj\n");
+        final int content = out.length();
+        out.append("6 0 obj\n").append(stream("", "0 0 1 rg 0 0 200 200 re f")).append("\nendobj\n");
+        final int xref = out.length();
+        // /W [1 4 1] の行: 3 番 (5 番の 0 番目)、5 番、6 番、7 番 (この相互参照ストリーム)
+        final ByteArrayOutputStream rows = new ByteArrayOutputStream();
+        final int[][] entries = {{2, 5, 0}, {1, objectStream, 0}, {1, content, 0}, {1, xref, 0}};
+        for (int[] entry : entries) write(rows, entry[0], entry[1] >>> 24, entry[1] >>> 16 & 0xFF, entry[1] >>> 8 & 0xFF, entry[1] & 0xFF, entry[2]);
+        out.append("7 0 obj\n").append(stream("/Type /XRef /Size 8 /Index [3 1 5 3] /W [1 4 1] /Root 1 0 R /Prev " + previous,
+                latin1(rows.toByteArray()))).append("\nendobj\nstartxref\n").append(xref).append("\n%%EOF\n");
+        return out.toString();
     }
 
     /**

@@ -532,6 +532,13 @@ public final class PdfCheck {
                 expectColor(image, 50, 50, 0xFF0000, "inline image");
                 expectColor(image, 150, 150, 0x0000FF, "rectangle after the inline image");
                 break;
+            case "incremental-object-stream":
+                expectColor(image, 100, 100, 0x0000FF, "page updated in an object stream (an older revision is drawn)");
+                break;
+            case "hidden-layer-after-repair":
+                expectColor(image, 50, 100, 0xFFFFFF, "hidden optional content");
+                expectColor(image, 150, 100, 0xFFFFFF, "hidden optional content after the cross-reference table is rebuilt");
+                break;
             case "rotate-not-multiple-of-90":
                 expectColor(image, 50, 175, 0xFF0000, "page with /Rotate 135 is rotated");
                 break;

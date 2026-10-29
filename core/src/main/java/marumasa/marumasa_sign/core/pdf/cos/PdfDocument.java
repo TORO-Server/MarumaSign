@@ -481,7 +481,7 @@ public final class PdfDocument implements Resolver {
         if (entry == null || (entry.type == 1 && locate(entry, number) < 0)) {
             // 表にない番号か、表の指す位置が違う: 表を作り直して探す (1 回だけ)
             if (repaired) return null;
-            repairNow();
+            repairMissing();
             entry = xref.get(number);
             if (entry == null) return null;
         }
@@ -518,6 +518,35 @@ public final class PdfDocument implements Resolver {
         // 位置が "%PDF-" より前の余計なバイトの分だけずれているファイルがある
         if (headerOffset > 0 && headerAt(position + headerOffset, number)) return position + headerOffset;
         return -1;
+    }
+
+    /**
+     * 読めた表にない番号 (どこからか参照だけが残ったものなど) や、表の指す位置が違うものを探すための作り直し。
+     * 作り直した表は、元の表で見つからないものにだけ使う。元の表の正しい項目まで置き換えると、
+     * オブジェクトストリームに入れて更新した新しい版より、前に直接書かれた古い版を選んでしまう
+     * (参照の切れた番号が 1 つあるだけの正しいファイルで、古い版のページを描いていた)。
+     * 読んだオブジェクトとトレーラーもそのまま使う (同じ辞書を読み直して別のものにすると、
+     * 表示しない層 (OCG) のように、辞書そのもので比べるものが合わなくなる)。
+     */
+    private void repairMissing() throws IOException {
+        final Map<Integer, Entry> original = xref;
+        final Map<Integer, Object> loaded = new HashMap<>(cache);
+        final Map<Integer, ObjectStream> streams = new HashMap<>(objectStreams);
+        final PdfDict saved = trailer;
+        repair();
+        for (Map.Entry<Integer, Entry> item : original.entrySet()) {
+            final Entry entry = item.getValue();
+            if (entry.type != 1 || locate(entry, item.getKey()) >= 0) xref.put(item.getKey(), entry);
+        }
+        cache.clear();
+        for (Map.Entry<Integer, Object> item : loaded.entrySet()) {
+            if (item.getValue() != null) cache.put(item.getKey(), item.getValue());
+        }
+        objectStreams.clear();
+        objectStreams.putAll(streams);
+        // 元のトレーラーのカタログが見つかるなら、元のトレーラーを使う
+        final Object root = saved == null ? null : saved.raw("Root");
+        if (root instanceof PdfDict || (root instanceof PdfRef && xref.containsKey(((PdfRef) root).number))) trailer = saved;
     }
 
     private void repairNow() throws IOException {
