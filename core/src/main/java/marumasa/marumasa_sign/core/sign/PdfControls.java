@@ -50,6 +50,9 @@ public final class PdfControls {
     private double hoveredDistance;
     private long hoveredAt;
     private int hoverPart = NONE;
+    // 照準が合っている看板の絵の形 (hitTest の引数)。クリックされたときに、いまの照準で確かめ直すのに使う
+    private final double[] hoveredShape = new double[15];
+    private int hoveredBarUnits;
     // 押されたボタンと、押された見た目を終える時刻
     private int pressedPart = NONE;
     private long pressedUntil;
@@ -86,7 +89,16 @@ public final class PdfControls {
      */
     public boolean click() {
         if (!isHovering()) return false;
-        final int part = hoverPart;
+        // 最後に描いたときから照準が動いていることがある。看板が視界の外に出たり壊されたりして描かれなくなると、
+        // 照準が合っていた記録がしばらく残るので、いまの照準で確かめ直す (外れていれば、クリックはゲームに渡す)
+        final double[] h = hoveredShape;
+        final int part = hitTest(h[0], h[1], h[2], h[3], h[4], h[5], h[6], h[7], h[8], h[9], h[10], h[11], h[12], h[13],
+                h[14], hoveredBarUnits);
+        if (part == NONE) {
+            hovered = null;
+            return false;
+        }
+        hoverPart = part;
         if (part == PREVIOUS || part == NEXT) {
             if (hovered.turn(part == NEXT ? 1 : -1)) {
                 pressedPart = part;
@@ -146,6 +158,10 @@ public final class PdfControls {
         hoveredZ = blockZ;
         hoveredDistance = hitDistance;
         hoverPart = part;
+        final double[] h = hoveredShape;
+        h[0] = p0x; h[1] = p0y; h[2] = p0z; h[3] = ux; h[4] = uy; h[5] = uz; h[6] = vx; h[7] = vy; h[8] = vz;
+        h[9] = nx; h[10] = ny; h[11] = nz; h[12] = uu; h[13] = vv; h[14] = barFraction;
+        hoveredBarUnits = barUnits;
 
         final Object barTexture = barTexture(session, barUnits);
         // 帯を描き直すのに時間がかかることがあるので、描いたあとの時刻にする
@@ -273,7 +289,10 @@ public final class PdfControls {
             if (texture != null && textureWidth == width && textureHeight == height) {
                 platform.updateTexture(texture, width, height, pixels);
             } else {
-                MarumaSign.releaseTexture(platform, texture);
+                // 先に手放してから作ると、作るところで例外が出たとき、手放したテクスチャが texture に残り、次にもう一度手放していた
+                final Object old = texture;
+                texture = null;
+                MarumaSign.releaseTexture(platform, old);
                 texture = platform.createTexture(width, height, pixels);
                 textureWidth = width;
                 textureHeight = height;

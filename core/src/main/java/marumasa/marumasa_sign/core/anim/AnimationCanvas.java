@@ -39,22 +39,24 @@ public class AnimationCanvas {
                         int destColor = canvas[destIdx];
                         int destA = (destColor >>> 24) & 0xFF;
 
-                        int rA = srcA + destA * (255 - srcA) / 255;
-                        if (rA > 0) {
-                            int srcR = (srcColor >>> 16) & 0xFF;
-                            int srcG = (srcColor >>> 8) & 0xFF;
-                            int srcB = srcColor & 0xFF;
+                        // 透明度と色を同じ分母 (透明度の 255 倍) で計算する。別々に切り捨てると、色が 255 を超えて
+                        // となりの成分にあふれていた (半透明の白に半透明の白を重ねると、ほぼ黒になっていた)
+                        int total = srcA * 255 + destA * (255 - srcA);
+                        int rA = (total + 127) / 255;
 
-                            int destR = (destColor >>> 16) & 0xFF;
-                            int destG = (destColor >>> 8) & 0xFF;
-                            int destB = destColor & 0xFF;
+                        int srcR = (srcColor >>> 16) & 0xFF;
+                        int srcG = (srcColor >>> 8) & 0xFF;
+                        int srcB = srcColor & 0xFF;
 
-                            int rR = (srcR * srcA + destR * destA * (255 - srcA) / 255) / rA;
-                            int rG = (srcG * srcA + destG * destA * (255 - srcA) / 255) / rA;
-                            int rB = (srcB * srcA + destB * destA * (255 - srcA) / 255) / rA;
+                        int destR = (destColor >>> 16) & 0xFF;
+                        int destG = (destColor >>> 8) & 0xFF;
+                        int destB = destColor & 0xFF;
 
-                            canvas[destIdx] = (rA << 24) | (rR << 16) | (rG << 8) | rB;
-                        }
+                        int rR = (srcR * srcA * 255 + destR * destA * (255 - srcA)) / total;
+                        int rG = (srcG * srcA * 255 + destG * destA * (255 - srcA)) / total;
+                        int rB = (srcB * srcA * 255 + destB * destA * (255 - srcA)) / total;
+
+                        canvas[destIdx] = (rA << 24) | (rR << 16) | (rG << 8) | rB;
                     }
                 } else {
                     // OVERWRITE: そのままコピー

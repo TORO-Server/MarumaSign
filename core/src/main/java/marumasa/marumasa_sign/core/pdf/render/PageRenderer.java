@@ -1,0 +1,2191 @@
+package marumasa.marumasa_sign.core.pdf.render;
+
+import marumasa.marumasa_sign.core.pdf.Strict;
+import marumasa.marumasa_sign.core.pdf.color.ColorSpaces;
+import marumasa.marumasa_sign.core.pdf.color.DeviceSpaces;
+import marumasa.marumasa_sign.core.pdf.color.PdfColorSpace;
+import marumasa.marumasa_sign.core.pdf.color.SpecialSpaces;
+import marumasa.marumasa_sign.core.pdf.cos.PdfArray;
+import marumasa.marumasa_sign.core.pdf.cos.PdfDict;
+import marumasa.marumasa_sign.core.pdf.cos.PdfDocument;
+import marumasa.marumasa_sign.core.pdf.cos.PdfName;
+import marumasa.marumasa_sign.core.pdf.cos.PdfStream;
+import marumasa.marumasa_sign.core.pdf.cos.PdfString;
+import marumasa.marumasa_sign.core.pdf.font.PdfFont;
+import marumasa.marumasa_sign.core.pdf.font.Type3Font;
+import marumasa.marumasa_sign.core.pdf.function.PdfFunction;
+
+import java.awt.BasicStroke;
+import java.awt.Color;
+import java.awt.Graphics2D;
+import java.awt.Paint;
+import java.awt.Rectangle;
+import java.awt.RenderingHints;
+import java.awt.Shape;
+import java.awt.geom.AffineTransform;
+import java.awt.geom.Area;
+import java.awt.geom.GeneralPath;
+import java.awt.geom.NoninvertibleTransformException;
+import java.awt.geom.Path2D;
+import java.awt.geom.PathIterator;
+import java.awt.geom.Rectangle2D;
+import java.awt.image.BufferedImage;
+import java.awt.image.DataBufferInt;
+import java.io.IOException;
+import java.util.ArrayDeque;
+import java.util.ArrayList;
+import java.util.Deque;
+import java.util.IdentityHashMap;
+import java.util.List;
+import java.util.Map;
+
+/**
+ * ページを画像に描く。内容の命令 (content stream) を順に実行し、Java2D で描く。
+ * <p>
+ * 悪意のある PDF で止まらないよう、次のものに上限を設ける:
+ * 命令の数と描く時間 (超えたらそこまでの絵を返す)、フォーム・パターン・Type 3 のグリフ・ソフトマスクの入れ子の深さ、
+ * 自分自身を描くフォーム、q の積み重ね、細かすぎる点線 (Java2D が膨大な図形を作って止まる)。
+ */
+public final class PageRenderer {
+
+    // 1 ページで実行する命令の数の上限
+    private static final long MAX_OPERATIONS = 20_000_000L;
+    // フォームなどの入れ子の深さの上限
+    private static final int MAX_DEPTH = 24;
+    // q の積み重ねの上限
+    private static final int MAX_STATES = 1024;
+    // 点線の区切りの数の上限 (これより細かい点線は実線で描く)
+    private static final double MAX_DASHES = 200_000;
+    // パターンの 1 周期の絵の、一辺の画素の数の上限
+    private static final int MAX_CELL_SIDE = 2048;
+    // ページの画像の 1 辺と、画素の数の上限 (呼ぶ側の拡大率が大きすぎても、この大きさまでに縮める)
+    private static final int MAX_PAGE_SIDE = 16384;
+    private static final double MAX_PAGE_PIXELS = 64.0 * 1024 * 1024;
+    // 外観のない注釈の形を作るときの、座標の数の上限
+    private static final int MAX_ANNOTATION_POINTS = 200_000;
+
+    /**
+     * 命令の数か時間の上限に達した。
+     */
+    private static final class LimitReached extends RuntimeException {
+        private static final long serialVersionUID = 1L;
+
+        LimitReached() {
+            super(null, null, false, false);
+        }
+    }
+
+    private final DocumentCache cache;
+    private final PdfDocument document;
+    private final long deadline;
+    private long operations;
+    private int depth;
+
+    private Canvas canvas;
+    private GraphicsState gs = new GraphicsState();
+    private final Deque<GraphicsState> stack = new ArrayDeque<>();
+    private PdfDict resources;
+    // 今の内容の、パターンの基準の空間 (ページか、フォームを呼んだときの空間)
+    private AffineTransform patternBase = new AffineTransform();
+
+    // 作っている途中の道 (ユーザー空間)
+    private Path2D.Double path = new Path2D.Double();
+    private double currentX, currentY;
+    private int pendingClip; // 0: なし、1: 非ゼロ、2: 偶奇
+    // 文字
+    private AffineTransform textMatrix = new AffineTransform();
+    private AffineTransform lineMatrix = new AffineTransform();
+    private GeneralPath textClip;
+    // 表示しない層の中にいる深さ
+    private int hiddenDepth;
+    private final Deque<Boolean> markedContent = new ArrayDeque<>();
+    // Type 3 のグリフの中で、色が決められている (d1)
+    private boolean uncolored;
+    // 描いている途中のフォーム (自分自身を描くものを除くため)
+    private final Map<Object, Boolean> activeForms = new IdentityHashMap<>();
+    // 同じ画像を何度も読まないための覚え
+    private final Map<PdfStream, ImageDecoder.Result> images = new IdentityHashMap<>();
+    // 同じパターンの絵を何度も描かないための覚え (パターン、行列、色ごと)
+    private final Map<PdfStream, Map<String, Paint>> tilings = new IdentityHashMap<>();
+
+    private PageRenderer(DocumentCache cache, long timeoutMillis) {
+        this.cache = cache;
+        this.document = cache.document();
+        this.deadline = System.nanoTime() + timeoutMillis * 1_000_000L;
+    }
+
+    /**
+     * ページを描く。
+     *
+     * @param scale         1 ポイントあたりの画素の数
+     * @param timeoutMillis 描く時間の上限。超えたら、そこまでに描いた絵を返す
+     */
+    public static BufferedImage render(DocumentCache cache, PdfDocument.Page page, double scale, long timeoutMillis) {
+        final double[] media = page.mediaBox != null ? page.mediaBox : new double[]{0, 0, 612, 792};
+        double[] crop = page.cropBox != null ? intersect(page.cropBox, media) : media;
+        if (crop == null || crop[2] - crop[0] <= 0 || crop[3] - crop[1] <= 0) crop = media;
+        final double cropWidth = Math.max(1, crop[2] - crop[0]), cropHeight = Math.max(1, crop[3] - crop[1]);
+        // 90 の倍数でない Rotate (仕様の違反) は、pdf.js と poppler と同じく回さない
+        final int normalized = ((page.rotate % 360) + 360) % 360;
+        final int rotate = normalized % 90 == 0 ? normalized : 0;
+        final boolean swap = rotate == 90 || rotate == 270;
+        if (!(scale > 0) || scale == Double.POSITIVE_INFINITY) scale = 1;
+        scale = Math.min(scale, Math.min(MAX_PAGE_SIDE / Math.max(cropWidth, cropHeight), Math.sqrt(MAX_PAGE_PIXELS / (cropWidth * cropHeight))));
+        final int width = (int) Math.max(1, Math.floor((swap ? cropHeight : cropWidth) * scale));
+        final int height = (int) Math.max(1, Math.floor((swap ? cropWidth : cropHeight) * scale));
+
+        // ページの空間から画素へ: 拡大、回転、上下の反転、切り抜く範囲の左下を原点に
+        final AffineTransform base = AffineTransform.getScaleInstance(scale, scale);
+        if (rotate != 0) {
+            final double tx = rotate == 90 ? cropHeight : rotate == 180 ? cropWidth : 0;
+            final double ty = rotate == 270 ? cropWidth : rotate == 180 ? cropHeight : 0;
+            base.translate(tx, ty);
+            base.rotate(Math.toRadians(rotate));
+        }
+        base.translate(0, cropHeight);
+        base.scale(1, -1);
+        base.translate(-crop[0], -crop[1]);
+
+        final PageRenderer renderer = new PageRenderer(cache, timeoutMillis);
+        // ページのグループは、透明な背景の上に描く分離したグループとして描き、最後に白い紙に重ねる (11.4.7)。
+        // 白の上に直接描くと、Multiply や Color などの合成の方法が、何も描いていないところの白と混ざってしまう
+        renderer.canvas = new Canvas(width, height, 0, 0, base, false, true);
+        renderer.gs.clip = new Area(new Rectangle2D.Double(crop[0], crop[1], cropWidth, cropHeight));
+        try {
+            renderer.resources = page.resources;
+            renderer.run(contents(page.dict.get("Contents")));
+            renderer.annotations(page);
+        } catch (LimitReached e) {
+            // 時間か命令の数の上限: ここまでの絵を返す
+        } finally {
+            renderer.canvas.dispose();
+        }
+        // 白の上に描いたので、不透明な RGB にする
+        final BufferedImage result = new BufferedImage(width, height, BufferedImage.TYPE_INT_RGB);
+        final int[] out = ((DataBufferInt) result.getRaster().getDataBuffer()).getData();
+        final int[] in = renderer.canvas.pixels;
+        for (int i = 0; i < out.length; i++) out[i] = Canvas.over(in[i], in[i] >>> 24, 0xFFFFFFFF) & 0xFFFFFF;
+        return result;
+    }
+
+    private static double[] intersect(double[] a, double[] b) {
+        final double[] r = {Math.max(a[0], b[0]), Math.max(a[1], b[1]), Math.min(a[2], b[2]), Math.min(a[3], b[3])};
+        return r[2] > r[0] && r[3] > r[1] ? r : null;
+    }
+
+    // /Contents (ストリームか、ストリームの配列) をつなげたもの。
+    // 大きなデータを何度も写さないように、1 つならそのまま使い、複数なら合計の大きさの配列に 1 度だけ写す
+    private static byte[] contents(Object value) {
+        final List<PdfStream> streams = new ArrayList<>();
+        if (value instanceof PdfStream) {
+            streams.add((PdfStream) value);
+        } else if (value instanceof PdfArray) {
+            final PdfArray array = (PdfArray) value;
+            for (int i = 0; i < array.size(); i++) {
+                final PdfStream stream = array.stream(i);
+                if (stream != null) streams.add(stream);
+            }
+        }
+        final List<byte[]> parts = new ArrayList<>();
+        long total = 0;
+        for (PdfStream stream : streams) {
+            try {
+                final byte[] data = stream.decode(PdfDocument.MAX_DECODED);
+                // ストリームの境目で語がつながらないように、間に改行を入れる
+                if (total + data.length + 1 > PdfDocument.MAX_DECODED) break;
+                total += data.length + 1;
+                parts.add(data);
+            } catch (IOException | RuntimeException e) {
+                Strict.check(e);
+                // 読めないストリームは飛ばす
+            }
+        }
+        if (parts.size() == 1) return parts.get(0);
+        final byte[] out = new byte[(int) total];
+        int p = 0;
+        for (byte[] part : parts) {
+            System.arraycopy(part, 0, out, p, part.length);
+            p += part.length;
+            out[p++] = '\n';
+        }
+        return out;
+    }
+
+    // ---------- 実行 ----------
+
+    private void tick() {
+        if (++operations > MAX_OPERATIONS) throw new LimitReached();
+        if ((operations & 1023) == 0) {
+            if (System.nanoTime() > deadline) throw new LimitReached();
+            if (Thread.currentThread().isInterrupted()) throw new LimitReached();
+        }
+    }
+
+    private void run(byte[] content) {
+        final ContentParser parser = new ContentParser(content, document);
+        final int savedStates = stack.size();
+        final int savedMarked = markedContent.size();
+        // 入れ子の内容 (パターン、フォームなど) の中で、外側の道とクリップの指定を使ってしまわないように
+        final int savedClip = pendingClip;
+        final Path2D.Double savedPath = path;
+        final double savedX = currentX, savedY = currentY;
+        pendingClip = 0;
+        path = new Path2D.Double();
+        try {
+            runOperators(parser);
+        } finally {
+            pendingClip = savedClip;
+            path = savedPath;
+            currentX = savedX;
+            currentY = savedY;
+        }
+        // 閉じられていない q と BDC を戻す
+        while (stack.size() > savedStates) gs = stack.pop();
+        while (markedContent.size() > savedMarked) {
+            if (markedContent.pop()) hiddenDepth--;
+        }
+    }
+
+    private void runOperators(ContentParser parser) {
+        while (parser.next()) {
+            tick();
+            try {
+                execute(parser.operator(), parser.operands(), parser.inlineImage());
+            } catch (LimitReached | Strict.UnexpectedFailure e) {
+                throw e;
+            } catch (IOException | RuntimeException e) {
+                // 1 つの命令の失敗 (壊れた引数など) では止めない (試験の厳しい動作では、想定外の例外を外に出す)
+                Strict.check(e);
+            }
+        }
+    }
+
+    private static double num(List<Object> operands, int index) throws IOException {
+        if (index >= operands.size()) throw new IOException("Missing operand");
+        final Object value = operands.get(index);
+        if (!(value instanceof Number)) throw new IOException("Operand is not a number");
+        final double number = ((Number) value).doubleValue();
+        if (Double.isNaN(number) || Double.isInfinite(number)) throw new IOException("Bad number");
+        return number;
+    }
+
+    // 後ろから数えた引数 (余分な引数が前にあってもよいように)
+    private static double last(List<Object> operands, int fromEnd, int count) throws IOException {
+        if (operands.size() < count) throw new IOException("Missing operand");
+        return num(operands, operands.size() - count + fromEnd);
+    }
+
+    private static String name(List<Object> operands, int index) {
+        if (index < 0 || index >= operands.size()) return null;
+        final Object value = operands.get(index);
+        return value instanceof PdfName ? ((PdfName) value).name : null;
+    }
+
+    private void execute(String op, List<Object> operands, PdfStream inlineImage) throws IOException {
+        switch (op) {
+            // グラフィックス状態
+            case "q":
+                if (stack.size() < MAX_STATES) {
+                    stack.push(gs);
+                    gs = gs.clone();
+                }
+                break;
+            case "Q":
+                if (!stack.isEmpty()) gs = stack.pop();
+                break;
+            case "cm": {
+                final AffineTransform m = new AffineTransform(last(operands, 0, 6), last(operands, 1, 6), last(operands, 2, 6),
+                        last(operands, 3, 6), last(operands, 4, 6), last(operands, 5, 6));
+                gs.ctm.concatenate(m);
+                break;
+            }
+            case "w":
+                gs.lineWidth = Math.abs(last(operands, 0, 1));
+                break;
+            case "J":
+                gs.lineCap = (int) last(operands, 0, 1);
+                break;
+            case "j":
+                gs.lineJoin = (int) last(operands, 0, 1);
+                break;
+            case "M":
+                gs.miterLimit = last(operands, 0, 1);
+                break;
+            case "d":
+                if (operands.size() >= 2 && operands.get(operands.size() - 2) instanceof PdfArray) {
+                    gs.dashArray = ((PdfArray) operands.get(operands.size() - 2)).numbers();
+                    gs.dashPhase = last(operands, 0, 1);
+                }
+                break;
+            case "ri":
+            case "i":
+                break;
+            case "gs":
+                extGState(name(operands, operands.size() - 1));
+                break;
+            // 道
+            case "m":
+                currentX = last(operands, 0, 2);
+                currentY = last(operands, 1, 2);
+                path.moveTo(currentX, currentY);
+                break;
+            case "l":
+                ensureStarted();
+                currentX = last(operands, 0, 2);
+                currentY = last(operands, 1, 2);
+                path.lineTo(currentX, currentY);
+                break;
+            case "c": {
+                ensureStarted();
+                final double x3 = last(operands, 4, 6), y3 = last(operands, 5, 6);
+                path.curveTo(last(operands, 0, 6), last(operands, 1, 6), last(operands, 2, 6), last(operands, 3, 6), x3, y3);
+                currentX = x3;
+                currentY = y3;
+                break;
+            }
+            case "v": {
+                ensureStarted();
+                final double x3 = last(operands, 2, 4), y3 = last(operands, 3, 4);
+                path.curveTo(currentX, currentY, last(operands, 0, 4), last(operands, 1, 4), x3, y3);
+                currentX = x3;
+                currentY = y3;
+                break;
+            }
+            case "y": {
+                ensureStarted();
+                final double x3 = last(operands, 2, 4), y3 = last(operands, 3, 4);
+                path.curveTo(last(operands, 0, 4), last(operands, 1, 4), x3, y3, x3, y3);
+                currentX = x3;
+                currentY = y3;
+                break;
+            }
+            case "h":
+                if (path.getCurrentPoint() != null) path.closePath();
+                break;
+            case "re": {
+                final double x = last(operands, 0, 4), y = last(operands, 1, 4), w = last(operands, 2, 4), h = last(operands, 3, 4);
+                path.moveTo(x, y);
+                path.lineTo(x + w, y);
+                path.lineTo(x + w, y + h);
+                path.lineTo(x, y + h);
+                path.closePath();
+                currentX = x;
+                currentY = y;
+                break;
+            }
+            // 塗りと線
+            case "S":
+                paintPath(false, true, Path2D.WIND_NON_ZERO);
+                break;
+            case "s":
+                closeIfOpen();
+                paintPath(false, true, Path2D.WIND_NON_ZERO);
+                break;
+            case "f":
+            case "F":
+                paintPath(true, false, Path2D.WIND_NON_ZERO);
+                break;
+            case "f*":
+                paintPath(true, false, Path2D.WIND_EVEN_ODD);
+                break;
+            case "B":
+                paintPath(true, true, Path2D.WIND_NON_ZERO);
+                break;
+            case "B*":
+                paintPath(true, true, Path2D.WIND_EVEN_ODD);
+                break;
+            case "b":
+                closeIfOpen();
+                paintPath(true, true, Path2D.WIND_NON_ZERO);
+                break;
+            case "b*":
+                closeIfOpen();
+                paintPath(true, true, Path2D.WIND_EVEN_ODD);
+                break;
+            case "n":
+                paintPath(false, false, Path2D.WIND_NON_ZERO);
+                break;
+            case "W":
+                pendingClip = 1;
+                break;
+            case "W*":
+                pendingClip = 2;
+                break;
+            // 色
+            case "CS":
+                setSpace(true, operands);
+                break;
+            case "cs":
+                setSpace(false, operands);
+                break;
+            case "SC":
+            case "SCN":
+                setColor(true, operands);
+                break;
+            case "sc":
+            case "scn":
+                setColor(false, operands);
+                break;
+            case "G":
+            case "g":
+                setDevice(op.equals("G"), DeviceSpaces.GRAY, operands);
+                break;
+            case "RG":
+            case "rg":
+                setDevice(op.equals("RG"), DeviceSpaces.RGB, operands);
+                break;
+            case "K":
+            case "k":
+                setDevice(op.equals("K"), DeviceSpaces.CMYK, operands);
+                break;
+            // 文字
+            case "BT":
+                textMatrix = new AffineTransform();
+                lineMatrix = new AffineTransform();
+                textClip = null;
+                break;
+            case "ET":
+                endText();
+                break;
+            case "Tc":
+                gs.charSpacing = last(operands, 0, 1);
+                break;
+            case "Tw":
+                gs.wordSpacing = last(operands, 0, 1);
+                break;
+            case "Tz":
+                gs.horizontalScale = last(operands, 0, 1) / 100;
+                break;
+            case "TL":
+                gs.leading = last(operands, 0, 1);
+                break;
+            case "Tf": {
+                gs.fontSize = last(operands, 0, 1);
+                final String fontName = name(operands, operands.size() - 2);
+                final PdfDict fonts = resources == null ? null : resources.dict("Font");
+                final PdfDict fontDict = fonts == null || fontName == null ? null : fonts.dict(fontName);
+                gs.font = fontDict == null ? null : cache.font(fontDict);
+                break;
+            }
+            case "Tr":
+                gs.renderMode = (int) last(operands, 0, 1);
+                break;
+            case "Ts":
+                gs.rise = last(operands, 0, 1);
+                break;
+            case "Td":
+                moveText(last(operands, 0, 2), last(operands, 1, 2));
+                break;
+            case "TD": {
+                final double ty = last(operands, 1, 2);
+                gs.leading = -ty;
+                moveText(last(operands, 0, 2), ty);
+                break;
+            }
+            case "Tm":
+                lineMatrix = new AffineTransform(last(operands, 0, 6), last(operands, 1, 6), last(operands, 2, 6),
+                        last(operands, 3, 6), last(operands, 4, 6), last(operands, 5, 6));
+                textMatrix = new AffineTransform(lineMatrix);
+                break;
+            case "T*":
+                moveText(0, -gs.leading);
+                break;
+            case "Tj":
+                if (!operands.isEmpty() && operands.get(operands.size() - 1) instanceof PdfString) {
+                    showText(((PdfString) operands.get(operands.size() - 1)).bytes);
+                }
+                break;
+            case "'":
+                moveText(0, -gs.leading);
+                if (!operands.isEmpty() && operands.get(operands.size() - 1) instanceof PdfString) {
+                    showText(((PdfString) operands.get(operands.size() - 1)).bytes);
+                }
+                break;
+            case "\"":
+                if (operands.size() >= 3) {
+                    gs.wordSpacing = num(operands, operands.size() - 3);
+                    gs.charSpacing = num(operands, operands.size() - 2);
+                    moveText(0, -gs.leading);
+                    if (operands.get(operands.size() - 1) instanceof PdfString) {
+                        showText(((PdfString) operands.get(operands.size() - 1)).bytes);
+                    }
+                }
+                break;
+            case "TJ":
+                if (!operands.isEmpty() && operands.get(operands.size() - 1) instanceof PdfArray) {
+                    showArray((PdfArray) operands.get(operands.size() - 1));
+                }
+                break;
+            case "d0":
+                break;
+            case "d1":
+                // 色のない Type 3 のグリフ (色は文字を描くときの色を使う)。グリフは形だけなので、
+                // 塗るだけの文字では線も塗りの色で、線だけの文字では塗りも線の色で描く (poppler と同じ)
+                if (!uncolored && depth > 0) {
+                    if (gs.renderMode == 1 || gs.renderMode == 5) {
+                        gs.fillSpace = gs.strokeSpace;
+                        gs.fillColor = gs.strokeColor;
+                        gs.fillPattern = gs.strokePattern;
+                    } else if (gs.renderMode != 2 && gs.renderMode != 6) {
+                        gs.strokeSpace = gs.fillSpace;
+                        gs.strokeColor = gs.fillColor;
+                        gs.strokePattern = gs.fillPattern;
+                    }
+                }
+                uncolored = true;
+                break;
+            // 画像とシェーディングと XObject
+            case "BI":
+                if (inlineImage != null && hiddenDepth == 0) drawImage(inlineImage);
+                break;
+            case "sh":
+                if (hiddenDepth == 0) shade(name(operands, operands.size() - 1));
+                break;
+            case "Do":
+                xObject(name(operands, operands.size() - 1));
+                break;
+            // 内容の印
+            case "BMC":
+                markedContent.push(false);
+                break;
+            case "BDC":
+                beginMarkedContent(operands);
+                break;
+            case "EMC":
+                if (!markedContent.isEmpty() && markedContent.pop()) hiddenDepth--;
+                break;
+            default:
+                // MP、DP、BX、EX と、知らない命令は無視する
+                break;
+        }
+    }
+
+    private void ensureStarted() {
+        if (path.getCurrentPoint() == null) path.moveTo(currentX, currentY);
+    }
+
+    private void closeIfOpen() {
+        if (path.getCurrentPoint() != null) path.closePath();
+    }
+
+    // ---------- グラフィックス状態の辞書 ----------
+
+    private void extGState(String key) throws IOException {
+        final PdfDict states = resources == null ? null : resources.dict("ExtGState");
+        final PdfDict state = states == null || key == null ? null : states.dict(key);
+        if (state == null) return;
+        for (String entry : state.keys()) {
+            final Object value = state.get(entry);
+            switch (entry) {
+                case "LW":
+                    if (value instanceof Number) gs.lineWidth = Math.abs(((Number) value).doubleValue());
+                    break;
+                case "LC":
+                    if (value instanceof Number) gs.lineCap = ((Number) value).intValue();
+                    break;
+                case "LJ":
+                    if (value instanceof Number) gs.lineJoin = ((Number) value).intValue();
+                    break;
+                case "ML":
+                    if (value instanceof Number) gs.miterLimit = ((Number) value).doubleValue();
+                    break;
+                case "D":
+                    if (value instanceof PdfArray && ((PdfArray) value).size() >= 2) {
+                        final PdfArray dash = ((PdfArray) value).array(0);
+                        gs.dashArray = dash == null ? null : dash.numbers();
+                        gs.dashPhase = ((PdfArray) value).number(1, 0);
+                    }
+                    break;
+                case "CA":
+                    if (value instanceof Number) gs.strokeAlpha = clamp01(((Number) value).doubleValue());
+                    break;
+                case "ca":
+                    if (value instanceof Number) gs.fillAlpha = clamp01(((Number) value).doubleValue());
+                    break;
+                case "BM":
+                    gs.blendMode = blendMode(value);
+                    break;
+                case "AIS":
+                    gs.alphaIsShape = Boolean.TRUE.equals(value);
+                    break;
+                case "Font":
+                    if (value instanceof PdfArray && ((PdfArray) value).size() >= 2) {
+                        final PdfDict fontDict = ((PdfArray) value).dict(0);
+                        gs.font = fontDict == null ? null : cache.font(fontDict);
+                        gs.fontSize = ((PdfArray) value).number(1, gs.fontSize);
+                    }
+                    break;
+                case "SMask":
+                    gs.softMask = value instanceof PdfDict ? softMask((PdfDict) value) : null;
+                    break;
+                case "TR":
+                    // TR2 があれば、そちらを使う
+                    if (!state.has("TR2")) gs.transfer = transfer(value);
+                    break;
+                case "TR2":
+                    gs.transfer = transfer(value);
+                    break;
+                default:
+                    break;
+            }
+        }
+    }
+
+    /**
+     * 転送関数の表 (赤、緑、青)。関数 1 つか、4 つの配列 (初めの 3 つを赤、緑、青に使う)。Identity、Default、読めないものは null。
+     * 塗りと線の色、シェーディング、パターン、画像にかける (poppler と同じ)。
+     */
+    private static int[][] transfer(Object value) {
+        final Object[] functions = new Object[3];
+        if (value instanceof PdfArray) {
+            final PdfArray list = (PdfArray) value;
+            if (list.size() < 3) return null;
+            for (int i = 0; i < 3; i++) functions[i] = list.get(i);
+        } else if (value instanceof PdfName) {
+            return null;
+        } else {
+            java.util.Arrays.fill(functions, value);
+        }
+        final int[][] tables = new int[3][];
+        boolean identity = true;
+        for (int c = 0; c < 3; c++) {
+            if (functions[c] instanceof PdfName) {
+                // 成分ごとの Identity
+                tables[c] = null;
+                continue;
+            }
+            if (c > 0 && functions[c] == functions[c - 1] && tables[c - 1] != null) {
+                tables[c] = tables[c - 1];
+                identity = false;
+                continue;
+            }
+            final PdfFunction function;
+            try {
+                function = PdfFunction.create(functions[c]);
+            } catch (IOException e) {
+                return null;
+            }
+            final int[] table = new int[256];
+            final double[] in = new double[1], out = new double[Math.max(1, function.outputs())];
+            for (int v = 0; v < 256; v++) {
+                in[0] = v / 255.0;
+                function.evaluate(in, out);
+                table[v] = (int) Math.round(clamp01(out[0]) * 255);
+            }
+            tables[c] = table;
+            identity = false;
+        }
+        return identity ? null : tables;
+    }
+
+    // シェーディングやパターンの Paint に、今の転送関数をかけたもの
+    private Paint withTransfer(Paint paint) {
+        return paint == null || gs.transfer == null ? paint : new TransferPaint(paint, gs.transfer);
+    }
+
+    private static double clamp01(double value) {
+        return Double.isNaN(value) ? 1 : Math.max(0, Math.min(1, value));
+    }
+
+    private static String blendMode(Object value) {
+        if (value instanceof PdfName) return Blend.of(((PdfName) value).name) != null ? ((PdfName) value).name : "Normal";
+        if (value instanceof PdfArray) {
+            final PdfArray list = (PdfArray) value;
+            for (int i = 0; i < list.size(); i++) {
+                final String name = list.name(i);
+                if (name != null && (name.equals("Normal") || Blend.of(name) != null)) return name;
+            }
+        }
+        return "Normal";
+    }
+
+    // ---------- 色 ----------
+
+    private void setSpace(boolean stroke, List<Object> operands) throws IOException {
+        if (operands.isEmpty() || uncolored) return;
+        final PdfColorSpace space = ColorSpaces.create(operands.get(operands.size() - 1), resources);
+        if (stroke) {
+            gs.strokeSpace = space;
+            gs.strokeColor = space.initialColor();
+            gs.strokePattern = null;
+        } else {
+            gs.fillSpace = space;
+            gs.fillColor = space.initialColor();
+            gs.fillPattern = null;
+        }
+    }
+
+    private void setColor(boolean stroke, List<Object> operands) {
+        if (uncolored) return;
+        final PdfColorSpace space = stroke ? gs.strokeSpace : gs.fillSpace;
+        Object pattern = null;
+        final List<Float> values = new ArrayList<>();
+        for (Object operand : operands) {
+            if (operand instanceof Number) values.add(((Number) operand).floatValue());
+            else if (operand instanceof PdfName && space instanceof SpecialSpaces.Pattern) {
+                final PdfDict patterns = resources == null ? null : resources.dict("Pattern");
+                pattern = patterns == null ? null : patterns.get(((PdfName) operand).name);
+            }
+        }
+        final float[] color = new float[Math.max(space.components(), 0)];
+        // 数が足りなければ、前の値を残す
+        final float[] previous = stroke ? gs.strokeColor : gs.fillColor;
+        for (int i = 0; i < color.length; i++) {
+            color[i] = i < values.size() ? values.get(i) : i < previous.length ? previous[i] : 0;
+        }
+        if (stroke) {
+            gs.strokeColor = color;
+            if (space instanceof SpecialSpaces.Pattern) gs.strokePattern = pattern;
+        } else {
+            gs.fillColor = color;
+            if (space instanceof SpecialSpaces.Pattern) gs.fillPattern = pattern;
+        }
+    }
+
+    private void setDevice(boolean stroke, PdfColorSpace space, List<Object> operands) throws IOException {
+        if (uncolored) return;
+        final float[] color = new float[space.components()];
+        for (int i = 0; i < color.length; i++) color[i] = (float) last(operands, i, color.length);
+        if (stroke) {
+            gs.strokeSpace = space;
+            gs.strokeColor = color;
+            gs.strokePattern = null;
+        } else {
+            gs.fillSpace = space;
+            gs.fillColor = color;
+            gs.fillPattern = null;
+        }
+    }
+
+    // 塗りか線の Paint。塗らないもの (Separation の None、使えないパターン) なら null
+    private Paint paint(boolean stroke) {
+        final PdfColorSpace space = stroke ? gs.strokeSpace : gs.fillSpace;
+        final float[] color = stroke ? gs.strokeColor : gs.fillColor;
+        if (space.isNone()) return null;
+        if (space instanceof SpecialSpaces.Pattern) {
+            final Object pattern = stroke ? gs.strokePattern : gs.fillPattern;
+            return withTransfer(patternPaint(pattern, ((SpecialSpaces.Pattern) space).base, color));
+        }
+        try {
+            return new Color(TransferPaint.apply(gs.transfer, space.toRgb(color)));
+        } catch (RuntimeException e) {
+            Strict.check(e);
+            return Color.BLACK;
+        }
+    }
+
+    // ---------- 道を描く ----------
+
+    private void paintPath(boolean fill, boolean stroke, int windingRule) {
+        final Path2D.Double userPath = path;
+        path = new Path2D.Double();
+        userPath.setWindingRule(windingRule);
+        final Shape pageShape = gs.ctm.createTransformedShape(userPath);
+        if (hiddenDepth == 0 && userPath.getCurrentPoint() != null) {
+            if (fill) fillShape(snapRectangle(pageShape), windingRule);
+            if (stroke) strokeShape(pageShape);
+        }
+        if (pendingClip != 0) {
+            final Path2D.Double clipPath = new Path2D.Double(pageShape);
+            clipPath.setWindingRule(pendingClip == 2 ? Path2D.WIND_EVEN_ODD : Path2D.WIND_NON_ZERO);
+            intersectClip(clipPath);
+            pendingClip = 0;
+        }
+    }
+
+    private void intersectClip(Shape pageShape) {
+        final Area area = new Area(ShapeLimits.forFill(pageShape, canvas, limitMargin()));
+        if (gs.clip == null) {
+            gs.clip = area;
+        } else {
+            final Area clip = new Area(gs.clip);
+            clip.intersect(area);
+            gs.clip = clip;
+        }
+    }
+
+    private void fillShape(Shape pageShape, int windingRule) {
+        final Paint paint = paint(false);
+        if (paint == null) return;
+        final Shape shape = ShapeLimits.forFill(windingRule == Path2D.WIND_EVEN_ODD ? withRule(pageShape, windingRule) : pageShape,
+                canvas, limitMargin());
+        canvas.paint(new Canvas.Painter() {
+            @Override
+            public void paint(Graphics2D g) {
+                g.setPaint(paint);
+                g.fill(shape);
+            }
+        }, shape.getBounds2D(), gs.fillAlpha, gs.softMask, gs.blendMode, gs.clip);
+    }
+
+    // 道を切り取る範囲の、画面からのはみ出しの幅 (画素)。描く結果には影響しない広さにする
+    private double limitMargin() {
+        return 2.0 * Math.max(canvas.width, canvas.height) + 512;
+    }
+
+    private static Shape withRule(Shape shape, int rule) {
+        final Path2D.Double copy = new Path2D.Double(shape);
+        copy.setWindingRule(rule);
+        return copy;
+    }
+
+    private void strokeShape(Shape original) {
+        final Paint paint = paint(true);
+        if (paint == null) return;
+        // 画面から遠くへ伸びる道は、先に切り取る。切り取った端が見えないよう、線の太さの分 (とがった角の分も) 範囲を広げる
+        final double deviceScale = averageScale(canvas.base);
+        final double deviceWidth = gs.lineWidth * averageScale(gs.ctm) * deviceScale;
+        final double reach = deviceWidth * Math.max(1, Math.min(gs.miterLimit, 1000));
+        Shape pageShape = ShapeLimits.forStroke(original, canvas, limitMargin() + (reach >= 0 ? Math.min(reach, 1e7) : 0));
+        Shape outline = null;
+        try {
+            // 縦と横で拡大率の違う CTM では、線の太さも向きで変わる (8.4.3.2)。ユーザー空間で線を太らせてから変換する
+            if (deviceWidth >= 1 && !isConformal(gs.ctm)) outline = userSpaceOutline(pageShape, deviceScale);
+            if (outline == null) {
+                // 1 画素より細い、縦と横だけの線は、画素の中心に合わせて 1 画素の太さで描く
+                // (ぼやけた灰色の 2 本にならないように。poppler の線の調整と同じ)
+                final Shape snapped = deviceWidth >= 1 ? null : snapThinLines(pageShape, deviceWidth);
+                if (snapped != null) pageShape = snapped;
+                // 太さ 0 の線は、描ける中でいちばん細い線 (1 画素) にする (8.4.3.2)。
+                // ほかの細い線は、見えるように 0.25 ポイントより細くしない (Adobe Reader と同じ)
+                final double thinnest = snapped != null || gs.lineWidth == 0 ? (deviceScale > 0 ? 1 / deviceScale : 1) : 0.25;
+                final double scale = averageScale(gs.ctm);
+                final double width = gs.lineWidth * scale;
+                outline = stroke(pageShape, scale, deviceScale, width >= thinnest ? width : thinnest).createStrokedShape(pageShape);
+                // 縦と横の辺だけの太い線は、輪郭の辺を画素の境目に合わせる (poppler の線の調整と同じ)
+                if (snapped == null && deviceWidth >= 1) outline = snapOutline(outline);
+            }
+            outline = ShapeLimits.forFill(outline, canvas, limitMargin());
+        } catch (RuntimeException e) {
+            Strict.check(e);
+            return;
+        }
+        final Shape filled = outline;
+        canvas.paint(new Canvas.Painter() {
+            @Override
+            public void paint(Graphics2D g) {
+                g.setPaint(paint);
+                g.fill(filled);
+            }
+        }, filled.getBounds2D(), gs.strokeAlpha, gs.softMask, gs.blendMode, gs.clip);
+    }
+
+    // 回転と、縦横同じ拡大 (と裏返し) だけの変換か
+    private static boolean isConformal(AffineTransform m) {
+        final double a = m.getScaleX(), b = m.getShearY(), c = m.getShearX(), d = m.getScaleY();
+        final double size = Math.max(Math.max(Math.abs(a), Math.abs(b)), Math.max(Math.abs(c), Math.abs(d)));
+        final double tolerance = size * 1e-3;
+        return (Math.abs(a - d) <= tolerance && Math.abs(b + c) <= tolerance) || (Math.abs(a + d) <= tolerance && Math.abs(b - c) <= tolerance);
+    }
+
+    /**
+     * ユーザー空間で太らせた線の輪郭 (ページの空間)。CTM がつぶれている (縦と横の拡大率の差が大きすぎる) ときは null。
+     */
+    private Shape userSpaceOutline(Shape pageShape, double deviceScale) {
+        final AffineTransform ctm = gs.ctm;
+        final double det = Math.abs(ctm.getDeterminant());
+        final double scale = averageScale(ctm);
+        // 縦と横の拡大率の比が大きすぎると、ユーザー空間の座標が大きくなりすぎる
+        if (!(det > 0) || !(scale * scale / det < 1e4)) return null;
+        final Shape userShape;
+        try {
+            userShape = ctm.createInverse().createTransformedShape(pageShape);
+        } catch (NoninvertibleTransformException e) {
+            return null;
+        }
+        return ctm.createTransformedShape(stroke(userShape, 1, scale * deviceScale, gs.lineWidth).createStrokedShape(userShape));
+    }
+
+    /**
+     * 縦と横の辺の長方形 1 つだけの道なら、辺を画素の境目に合わせる (1 画素より細ければ 1 画素にする)。
+     * 細い長方形で描いた罫線が、薄い灰色でぼやけて見えないように (poppler や Acrobat の線の調整と同じ)。ほかの形はそのまま返す。
+     */
+    private Shape snapRectangle(Shape pageShape) {
+        final double[] r = deviceRectangle(pageShape);
+        if (r == null) return pageShape;
+        final double[] x = snapSpan(r[0], r[1]), y = snapSpan(r[2], r[3]);
+        return pageRectangle(x[0], x[1], y[0], y[1], pageShape);
+    }
+
+    /**
+     * 道が、画素の空間で縦と横の辺の長方形 1 つだけなら、その範囲 {左, 右, 上, 下} (画素)。ほかの形なら null。
+     */
+    private double[] deviceRectangle(Shape pageShape) {
+        final PathIterator it = pageShape.getPathIterator(canvas.base);
+        final double[] c = new double[6];
+        final double[] xs = new double[5], ys = new double[5];
+        int points = 0;
+        boolean closed = false;
+        for (; !it.isDone(); it.next()) {
+            final int type = it.currentSegment(c);
+            if (closed) {
+                // 閉じたあとの moveTo (閉じた点に戻るもの) だけは許す
+                if (type == PathIterator.SEG_MOVETO && c[0] == xs[0] && c[1] == ys[0]) continue;
+                return null;
+            }
+            if (type == PathIterator.SEG_CLOSE) {
+                closed = true;
+            } else if ((type == PathIterator.SEG_MOVETO) == (points == 0) && (type == PathIterator.SEG_MOVETO || type == PathIterator.SEG_LINETO)) {
+                if (points == 5) return null;
+                xs[points] = c[0];
+                ys[points] = c[1];
+                points++;
+            } else {
+                return null;
+            }
+        }
+        // 最後の点が初めの点と同じなら除く
+        if (points == 5 && xs[4] == xs[0] && ys[4] == ys[0]) points = 4;
+        if (points != 4) return null;
+        double minX = xs[0], maxX = xs[0], minY = ys[0], maxY = ys[0];
+        for (int i = 0; i < 4; i++) {
+            final int j = (i + 1) % 4;
+            // 辺は縦か横
+            if (Math.abs(xs[i] - xs[j]) > 1e-6 && Math.abs(ys[i] - ys[j]) > 1e-6) return null;
+            minX = Math.min(minX, xs[i]);
+            maxX = Math.max(maxX, xs[i]);
+            minY = Math.min(minY, ys[i]);
+            maxY = Math.max(maxY, ys[i]);
+        }
+        if (!(Math.abs(minX) < 1e7) || !(Math.abs(maxX) < 1e7) || !(Math.abs(minY) < 1e7) || !(Math.abs(maxY) < 1e7)) return null;
+        return new double[]{minX, maxX, minY, maxY};
+    }
+
+    // 画素の範囲の長方形を、ページの空間にしたもの。戻せなければ fallback
+    private Shape pageRectangle(double x0, double x1, double y0, double y1, Shape fallback) {
+        try {
+            return canvas.base.createInverse().createTransformedShape(new Rectangle2D.Double(x0, y0, x1 - x0, y1 - y0));
+        } catch (NoninvertibleTransformException e) {
+            return fallback;
+        }
+    }
+
+    // 範囲の両端を画素の境目に丸める。同じになれば、その境目から 1 画素にする (poppler と同じ)
+    private static double[] snapSpan(double min, double max) {
+        final double low = Math.floor(min + 0.5);
+        return new double[]{low, Math.max(low + 1, Math.floor(max + 0.5))};
+    }
+
+    /**
+     * 縦と横の線分だけでできた道を、画素の中心に合わせる。斜めの線や曲線があれば null。
+     * 短い (長さが 1 画素に満たない) 道も null (細かい線分を並べた折れ線が、1 画素の太さで濃くなりすぎないように)。
+     */
+    private Shape snapThinLines(Shape pageShape, double deviceWidth) {
+        final double half = deviceWidth > 0 ? deviceWidth / 2 : 0;
+        final AffineTransform toDevice = canvas.base;
+        final Path2D.Double snapped = new Path2D.Double(pageShape instanceof Path2D ? ((Path2D) pageShape).getWindingRule() : Path2D.WIND_NON_ZERO);
+        final PathIterator it = pageShape.getPathIterator(toDevice);
+        final double[] c = new double[6];
+        double x = 0, y = 0, startX = 0, startY = 0, length = 0;
+        int segments = 0;
+        for (; !it.isDone(); it.next()) {
+            if (++segments > 100_000) return null;
+            final int type = it.currentSegment(c);
+            if (type == PathIterator.SEG_MOVETO) {
+                x = startX = c[0];
+                y = startY = c[1];
+                snapped.moveTo(pixelCenter(x, half), pixelCenter(y, half));
+            } else if (type == PathIterator.SEG_LINETO) {
+                if (Math.abs(c[0] - x) > 1e-3 && Math.abs(c[1] - y) > 1e-3) return null;
+                length += Math.abs(c[0] - x) + Math.abs(c[1] - y);
+                x = c[0];
+                y = c[1];
+                snapped.lineTo(pixelCenter(x, half), pixelCenter(y, half));
+            } else if (type == PathIterator.SEG_CLOSE) {
+                if (Math.abs(startX - x) > 1e-3 && Math.abs(startY - y) > 1e-3) return null;
+                length += Math.abs(startX - x) + Math.abs(startY - y);
+                x = startX;
+                y = startY;
+                snapped.closePath();
+            } else {
+                return null;
+            }
+        }
+        if (!(length >= 1)) return null;
+        try {
+            return snapped.createTransformedShape(toDevice.createInverse());
+        } catch (NoninvertibleTransformException e) {
+            return null;
+        }
+    }
+
+    /**
+     * 縦と横の線分だけでできた輪郭の頂点を、画素の境目に丸める。斜めの線や曲線があれば、そのまま返す。
+     */
+    private Shape snapOutline(Shape outline) {
+        final AffineTransform toDevice = canvas.base;
+        final Path2D.Double snapped = new Path2D.Double(outline instanceof Path2D ? ((Path2D) outline).getWindingRule() : Path2D.WIND_NON_ZERO);
+        final double[] c = new double[6];
+        double x = 0, y = 0, startX = 0, startY = 0;
+        int segments = 0;
+        for (final PathIterator it = outline.getPathIterator(toDevice); !it.isDone(); it.next()) {
+            if (++segments > 100_000) return outline;
+            final int type = it.currentSegment(c);
+            if (type == PathIterator.SEG_MOVETO) {
+                x = startX = c[0];
+                y = startY = c[1];
+                snapped.moveTo(Math.floor(x + 0.5), Math.floor(y + 0.5));
+            } else if (type == PathIterator.SEG_LINETO) {
+                if (Math.abs(c[0] - x) > 1e-3 && Math.abs(c[1] - y) > 1e-3) return outline;
+                x = c[0];
+                y = c[1];
+                snapped.lineTo(Math.floor(x + 0.5), Math.floor(y + 0.5));
+            } else if (type == PathIterator.SEG_CLOSE) {
+                if (Math.abs(startX - x) > 1e-3 && Math.abs(startY - y) > 1e-3) return outline;
+                snapped.closePath();
+            } else {
+                return outline;
+            }
+        }
+        if (!(Math.abs(x) < 1e7) || !(Math.abs(y) < 1e7)) return outline;
+        try {
+            return snapped.createTransformedShape(toDevice.createInverse());
+        } catch (NoninvertibleTransformException e) {
+            return outline;
+        }
+    }
+
+    // 中心 v、太さの半分 half の線の、端に近い画素の境目から始まる 1 画素の中心 (poppler の線の調整と同じ選び方)
+    private static double pixelCenter(double v, double half) {
+        return Double.isNaN(v) || Double.isInfinite(v) ? v : Math.floor(v - half + 0.5) + 0.5;
+    }
+
+    /**
+     * 線の太らせ方。
+     *
+     * @param shape       太らせる道 (ユーザー空間かページの空間)
+     * @param scale       ユーザー空間から、その空間への拡大率
+     * @param deviceScale その空間から、画素への拡大率
+     * @param width       その空間での線の太さ
+     */
+    private BasicStroke stroke(Shape shape, double scale, double deviceScale, double width) {
+        final float w = width >= 0 ? (float) Math.min(width, 1e15) : 0;
+        final int cap = gs.lineCap == 1 ? BasicStroke.CAP_ROUND : gs.lineCap == 2 ? BasicStroke.CAP_SQUARE : BasicStroke.CAP_BUTT;
+        final int join = gs.lineJoin == 1 ? BasicStroke.JOIN_ROUND : gs.lineJoin == 2 ? BasicStroke.JOIN_BEVEL : BasicStroke.JOIN_MITER;
+        final float miter = (float) Math.max(1, Math.min(gs.miterLimit, 1000));
+        final float[] dash = dash(scale, shape, deviceScale);
+        if (dash == null) return new BasicStroke(w, cap, join, miter);
+        // 位相は 1 周期の中に収めて渡す。Java 8 の Java2D は、位相から区切りの長さを 1 つずつ引いていくので、
+        // 1e30 のような位相では、引いても値が変わらず、終わらなくなる (区切りの数が奇数なら、2 周で元に戻る)
+        double period = 0;
+        for (float value : dash) period += value;
+        if (dash.length % 2 == 1) period *= 2;
+        double phase = gs.dashPhase * scale;
+        phase = Double.isNaN(phase) || Double.isInfinite(phase) ? 0 : phase % period;
+        if (phase < 0) phase += period;
+        return new BasicStroke(w, cap, join, miter, dash, (float) Math.min(phase, period));
+    }
+
+    /**
+     * 点線の区切り (ページの空間)。実線で描くべきもの (空、0 だけ、負の値、細かすぎて区切りが多すぎるもの) は null。
+     */
+    private float[] dash(double scale, Shape pageShape, double deviceScale) {
+        final double[] array = gs.dashArray;
+        if (array == null || array.length == 0 || array.length > 64) return null;
+        double total = 0;
+        for (double value : array) {
+            if (value < 0 || Double.isNaN(value) || Double.isInfinite(value)) return null;
+            total += value;
+        }
+        if (total <= 0) return null;
+        final double period = total * scale * (array.length % 2 == 1 ? 2 : 1);
+        // 1 周期が 1 画素より短い点線は、見た目は実線と変わらない
+        if (period * deviceScale < 1) return null;
+        // 道の長さに対して区切りが多すぎると、Java2D が膨大な図形を作って止まる
+        if (pathLength(pageShape) / period > MAX_DASHES) return null;
+        final float[] dash = new float[array.length];
+        for (int i = 0; i < dash.length; i++) dash[i] = (float) Math.max(array[i] * scale, 1e-4);
+        return dash;
+    }
+
+    private static double pathLength(Shape shape) {
+        final PathIterator it = shape.getPathIterator(null, 1.0);
+        final double[] c = new double[6];
+        double length = 0, x = 0, y = 0, startX = 0, startY = 0;
+        int segments = 0;
+        while (!it.isDone() && segments++ < 1_000_000) {
+            final int type = it.currentSegment(c);
+            if (type == PathIterator.SEG_MOVETO) {
+                x = startX = c[0];
+                y = startY = c[1];
+            } else if (type == PathIterator.SEG_LINETO) {
+                length += Math.hypot(c[0] - x, c[1] - y);
+                x = c[0];
+                y = c[1];
+            } else if (type == PathIterator.SEG_CLOSE) {
+                length += Math.hypot(startX - x, startY - y);
+                x = startX;
+                y = startY;
+            }
+            it.next();
+        }
+        return length;
+    }
+
+    private static double averageScale(AffineTransform m) {
+        final double x = m.getScaleX() + m.getShearX();
+        final double y = m.getScaleY() + m.getShearY();
+        return Math.sqrt((x * x + y * y) * 0.5);
+    }
+
+    // ---------- 文字 ----------
+
+    private void moveText(double tx, double ty) {
+        lineMatrix.translate(tx, ty);
+        textMatrix = new AffineTransform(lineMatrix);
+    }
+
+    private void endText() {
+        if (textClip != null) {
+            intersectClip(textClip);
+            textClip = null;
+        }
+    }
+
+    private void showArray(PdfArray array) {
+        final PdfFont font = gs.font;
+        for (int i = 0; i < array.size(); i++) {
+            final Object item = array.get(i);
+            if (item instanceof PdfString) {
+                showText(((PdfString) item).bytes);
+            } else if (item instanceof Number) {
+                final double adjust = ((Number) item).doubleValue() / 1000 * gs.fontSize;
+                if (Double.isNaN(adjust) || Double.isInfinite(adjust)) continue;
+                if (font != null && font.isVertical()) {
+                    textMatrix.translate(0, -adjust);
+                } else {
+                    textMatrix.translate(-adjust * gs.horizontalScale, 0);
+                }
+            }
+        }
+    }
+
+    private void showText(byte[] text) {
+        final PdfFont font = gs.font;
+        if (font == null) return;
+        final int[] length = new int[1];
+        int position = 0;
+        while (position < text.length) {
+            tick();
+            final long character = font.readCode(text, position, length);
+            position += Math.max(1, length[0]);
+            final boolean wordSpace = font.isWordSpace(character);
+            if (font.isVertical()) {
+                drawGlyph(font, character, font.verticalOrigin(character));
+                final double ty = font.verticalAdvance(character) * gs.fontSize + gs.charSpacing + (wordSpace ? gs.wordSpacing : 0);
+                textMatrix.translate(0, ty);
+            } else {
+                drawGlyph(font, character, null);
+                final double tx = (font.width(character) * gs.fontSize + gs.charSpacing + (wordSpace ? gs.wordSpacing : 0)) * gs.horizontalScale;
+                textMatrix.translate(tx, 0);
+            }
+        }
+    }
+
+    // 文字空間 (大きさ 1) からページの空間への変換
+    private AffineTransform glyphTransform(double[] verticalOrigin) {
+        final AffineTransform m = new AffineTransform(gs.ctm);
+        m.concatenate(textMatrix);
+        m.concatenate(new AffineTransform(gs.fontSize * gs.horizontalScale, 0, 0, gs.fontSize, 0, gs.rise));
+        if (verticalOrigin != null) m.translate(-verticalOrigin[0], -verticalOrigin[1]);
+        return m;
+    }
+
+    private void drawGlyph(PdfFont font, long character, double[] verticalOrigin) {
+        if (font.isType3()) {
+            if (hiddenDepth == 0 && gs.renderMode != 3 && gs.renderMode != 7) drawType3((Type3Font) font, (int) character);
+            return;
+        }
+        final int mode = gs.renderMode;
+        final boolean clip = mode >= 4 && mode <= 7;
+        if (hiddenDepth > 0 && !clip) return;
+        final GeneralPath glyph = font.path(character);
+        if (glyph.getCurrentPoint() == null) return;
+        final Shape pageShape = snapBaseline(glyphTransform(verticalOrigin)).createTransformedShape(glyph);
+        if (hiddenDepth == 0) {
+            if (mode == 0 || mode == 2 || mode == 4 || mode == 6) fillShape(pageShape, Path2D.WIND_NON_ZERO);
+            if (mode == 1 || mode == 2 || mode == 5 || mode == 6) strokeShape(pageShape);
+        }
+        if (clip) {
+            if (textClip == null) textClip = new GeneralPath(GeneralPath.WIND_NON_ZERO);
+            textClip.append(pageShape, false);
+        }
+    }
+
+    /**
+     * 傾いていない文字の位置を、画素の格子に合わせる: 基準線は画素の境目に、横の位置は小さな文字なら 1/4 画素、大きな文字なら 1 画素の単位に
+     * (文字の上下の端がにじまないように。poppler の文字の置き方と同じ)。
+     */
+    private AffineTransform snapBaseline(AffineTransform glyphToPage) {
+        final AffineTransform toDevice = new AffineTransform(canvas.base);
+        toDevice.concatenate(glyphToPage);
+        final double tx = toDevice.getTranslateX(), ty = toDevice.getTranslateY();
+        if (toDevice.getShearY() != 0 || toDevice.getShearX() != 0 || !(Math.abs(tx) < 1e6) || !(Math.abs(ty) < 1e6)) return glyphToPage;
+        final double step = Math.abs(toDevice.getScaleY()) < 37.5 ? 0.25 : 1;
+        final double dx = Math.floor(tx / step) * step - tx;
+        final double dy = Math.floor(ty) - ty;
+        if (dx == 0 && dy == 0) return glyphToPage;
+        try {
+            final AffineTransform result = canvas.base.createInverse();
+            result.translate(dx, dy);
+            result.concatenate(toDevice);
+            return result;
+        } catch (NoninvertibleTransformException e) {
+            return glyphToPage;
+        }
+    }
+
+    private void drawType3(Type3Font font, int code) {
+        final PdfStream proc = font.charProc(code);
+        if (proc == null || depth >= MAX_DEPTH || activeForms.containsKey(proc)) return;
+        final double[] fm = font.fontMatrix();
+        final GraphicsState saved = gs;
+        final PdfDict savedResources = resources;
+        final AffineTransform savedText = textMatrix, savedLine = lineMatrix;
+        final Path2D.Double savedPath = path;
+        final boolean savedUncolored = uncolored;
+        final AffineTransform savedBase = patternBase;
+        gs = gs.clone();
+        gs.ctm = glyphTransform(null);
+        gs.ctm.concatenate(new AffineTransform(fm[0], fm[1], fm[2], fm[3], fm[4], fm[5]));
+        if (font.resources() != null) resources = font.resources();
+        patternBase = new AffineTransform(gs.ctm);
+        path = new Path2D.Double();
+        uncolored = false;
+        depth++;
+        activeForms.put(proc, Boolean.TRUE);
+        try {
+            run(proc.decode(PdfDocument.MAX_DECODED));
+        } catch (IOException e) {
+            // 読めないグリフは描かない
+        } finally {
+            activeForms.remove(proc);
+            depth--;
+            gs = saved;
+            resources = savedResources;
+            textMatrix = savedText;
+            lineMatrix = savedLine;
+            path = savedPath;
+            uncolored = savedUncolored;
+            patternBase = savedBase;
+        }
+    }
+
+    // ---------- 内容の印と、表示しない層 ----------
+
+    private void beginMarkedContent(List<Object> operands) {
+        boolean hidden = false;
+        if (operands.size() >= 2 && "OC".equals(name(operands, 0))) {
+            final Object properties = operands.get(1);
+            PdfDict dict = null;
+            if (properties instanceof PdfName) {
+                final PdfDict all = resources == null ? null : resources.dict("Properties");
+                dict = all == null ? null : all.dict(((PdfName) properties).name);
+            } else if (properties instanceof PdfDict) {
+                dict = (PdfDict) properties;
+            }
+            hidden = cache.isHiddenContent(dict);
+        }
+        markedContent.push(hidden);
+        if (hidden) hiddenDepth++;
+    }
+
+    // ---------- XObject ----------
+
+    private void xObject(String key) {
+        final PdfDict objects = resources == null ? null : resources.dict("XObject");
+        final PdfStream stream = objects == null || key == null ? null : objects.stream(key);
+        if (stream == null) return;
+        final String subtype = stream.dict.name("Subtype");
+        if (cache.isHiddenContent(stream.dict.dict("OC"))) return;
+        if (hiddenDepth > 0) return;
+        if ("Image".equals(subtype)) {
+            drawImage(stream);
+        } else if ("Form".equals(subtype)) {
+            drawForm(stream, null);
+        }
+    }
+
+    /**
+     * フォームを描く。
+     *
+     * @param extra フォームの行列の前にかける変換 (注釈の外観で使う。なければ null)
+     */
+    private void drawForm(PdfStream form, AffineTransform extra) {
+        if (depth >= MAX_DEPTH || activeForms.containsKey(form)) return;
+        final GraphicsState saved = gs;
+        final PdfDict savedResources = resources;
+        final Path2D.Double savedPath = path;
+        final AffineTransform savedBase = patternBase;
+        final AffineTransform savedText = textMatrix, savedLine = lineMatrix;
+        final GeneralPath savedTextClip = textClip;
+        gs = gs.clone();
+        if (extra != null) gs.ctm.concatenate(extra);
+        final PdfArray matrix = form.dict.array("Matrix");
+        final double[] m = matrix == null ? null : matrix.numbers();
+        if (m != null && m.length >= 6) gs.ctm.concatenate(new AffineTransform(m[0], m[1], m[2], m[3], m[4], m[5]));
+        final double[] bbox = PdfDocument.rectangle(form.dict.array("BBox"));
+        if (bbox != null) intersectClip(gs.ctm.createTransformedShape(new Rectangle2D.Double(bbox[0], bbox[1], bbox[2] - bbox[0], bbox[3] - bbox[1])));
+        final PdfDict formResources = form.dict.dict("Resources");
+        if (formResources != null) resources = formResources;
+        patternBase = new AffineTransform(gs.ctm);
+        path = new Path2D.Double();
+        depth++;
+        activeForms.put(form, Boolean.TRUE);
+        try {
+            final byte[] content = form.decode(PdfDocument.MAX_DECODED);
+            final PdfDict group = form.dict.dict("Group");
+            final boolean transparencyGroup = group != null && group.isName("S", "Transparency");
+            final boolean knockout = transparencyGroup && group.bool("K", false);
+            // ノックアウトのグループの中のグループは、まとめて 1 つのものとして重ねる。分離したノックアウトのグループも、別の画像に描く
+            final boolean needsLayer = transparencyGroup && (gs.fillAlpha < 1 || gs.softMask != null
+                    || !(gs.blendMode.equals("Normal") || gs.blendMode.equals("Compatible"))
+                    || canvas.knockoutBackdrop != null || (knockout && group.bool("I", false)));
+            if (needsLayer) {
+                drawGroupLayer(content, gs.clip, knockout);
+            } else if (knockout) {
+                drawKnockout(content, gs.clip);
+            } else {
+                run(content);
+            }
+        } catch (IOException e) {
+            // 読めないフォームは描かない
+        } finally {
+            activeForms.remove(form);
+            depth--;
+            gs = saved;
+            resources = savedResources;
+            path = savedPath;
+            patternBase = savedBase;
+            textMatrix = savedText;
+            lineMatrix = savedLine;
+            textClip = savedTextClip;
+        }
+    }
+
+    /**
+     * 分離していない、そのまま重ねるノックアウトのグループを、今の画像に直接描く。中のものは、どれもグループの初めの背景に重ね、前のものを置き換える。
+     */
+    private void drawKnockout(byte[] content, Area clip) {
+        final Rectangle area = canvas.deviceBounds(clip == null ? null : clip.getBounds2D(), clip);
+        if (area == null) return;
+        final Canvas target = canvas;
+        final int[] savedBackdrop = target.knockoutBackdrop;
+        final Rectangle savedArea = target.knockoutArea;
+        target.knockoutBackdrop = target.copy(area);
+        target.knockoutArea = area;
+        try {
+            run(content);
+        } finally {
+            target.knockoutBackdrop = savedBackdrop;
+            target.knockoutArea = savedArea;
+        }
+    }
+
+    // 透明のグループを別の画像に描いてから、不透明度・ソフトマスク・合成の方法で重ねる
+    private void drawGroupLayer(byte[] content, Area clip, boolean knockout) {
+        final Rectangle area = canvas.deviceBounds(clip == null ? null : clip.getBounds2D(), clip);
+        if (area == null) return;
+        final double alpha = gs.fillAlpha;
+        final SoftMask mask = gs.softMask;
+        final String blend = gs.blendMode;
+        final Canvas parent = canvas;
+        final Canvas layer = new Canvas(area.width, area.height, parent.originX + area.x, parent.originY + area.y,
+                pageToDevice(parent), false, true);
+        if (knockout) {
+            // 分離したグループとして描くので、初めの背景は透明
+            layer.knockoutBackdrop = new int[layer.width * layer.height];
+            layer.knockoutArea = new Rectangle(0, 0, layer.width, layer.height);
+        }
+        // グループの中は、不透明度とソフトマスクと合成の方法を初めの値に戻して描く
+        gs.fillAlpha = 1;
+        gs.strokeAlpha = 1;
+        gs.softMask = null;
+        gs.blendMode = "Normal";
+        canvas = layer;
+        try {
+            run(content);
+        } finally {
+            canvas = parent;
+            layer.dispose();
+        }
+        parent.compositeLayer(layer, alpha, mask, blend);
+    }
+
+    // 画像の base から、原点の分を除いたもの (ページの空間から、ページ全体の画素の座標へ)
+    private static AffineTransform pageToDevice(Canvas canvas) {
+        final AffineTransform t = AffineTransform.getTranslateInstance(canvas.originX, canvas.originY);
+        t.concatenate(canvas.base);
+        return t;
+    }
+
+    // ---------- ソフトマスク ----------
+
+    private SoftMask softMask(PdfDict dict) {
+        if (dict == null || depth >= MAX_DEPTH) return null;
+        final PdfStream group = dict.stream("G");
+        if (group == null || activeForms.containsKey(group)) return null;
+        final boolean luminosity = !dict.isName("S", "Alpha");
+        // 背景の色 (グループの色空間の値)
+        int backdrop = 0;
+        if (luminosity) {
+            final PdfArray bc = dict.array("BC");
+            final PdfDict groupDict = group.dict.dict("Group");
+            PdfColorSpace space = null;
+            try {
+                if (groupDict != null && groupDict.get("CS") != null) space = ColorSpaces.create(groupDict.get("CS"), resources);
+            } catch (IOException e) {
+                space = null;
+            }
+            if (bc != null && space != null) {
+                final double[] values = bc.numbers();
+                if (values != null && values.length >= space.components()) {
+                    final float[] color = new float[space.components()];
+                    for (int i = 0; i < color.length; i++) color[i] = (float) values[i];
+                    backdrop = space.toRgb(color);
+                }
+            }
+        }
+        PdfFunction transfer = null;
+        final Object tr = dict.get("TR");
+        if (tr != null && !(tr instanceof PdfName)) {
+            try {
+                transfer = PdfFunction.create(tr);
+            } catch (IOException e) {
+                transfer = null;
+            }
+        }
+        // マスクを描く範囲: 今の画像のうち、クリップの中
+        final Rectangle area = canvas.deviceBounds(gs.clip == null ? null : gs.clip.getBounds2D(), gs.clip);
+        final Canvas parent = canvas;
+        final int originX = parent.originX + (area == null ? 0 : area.x);
+        final int originY = parent.originY + (area == null ? 0 : area.y);
+        final int width = area == null ? 1 : area.width, height = area == null ? 1 : area.height;
+        final Canvas layer = new Canvas(width, height, originX, originY, pageToDevice(parent), false, true);
+        if (luminosity) java.util.Arrays.fill(layer.pixels, 0xFF000000 | backdrop);
+        final GraphicsState saved = gs;
+        gs = gs.clone();
+        gs.fillAlpha = 1;
+        gs.strokeAlpha = 1;
+        gs.softMask = null;
+        gs.blendMode = "Normal";
+        canvas = layer;
+        try {
+            drawForm(group, null);
+        } finally {
+            canvas = parent;
+            gs = saved;
+            layer.dispose();
+        }
+        final byte[] values = new byte[width * height];
+        for (int i = 0; i < values.length; i++) {
+            final int p = layer.pixels[i];
+            values[i] = (byte) (luminosity ? luminosity(Canvas.over(p, p >>> 24, 0xFF000000 | backdrop)) : p >>> 24);
+        }
+        int outside = luminosity ? luminosity(backdrop) : 0;
+        if (transfer != null) {
+            final int[] table = new int[256];
+            final double[] in = new double[1], out = new double[Math.max(1, transfer.outputs())];
+            for (int v = 0; v < 256; v++) {
+                in[0] = v / 255.0;
+                transfer.evaluate(in, out);
+                table[v] = (int) Math.round(clamp01(out[0]) * 255);
+            }
+            for (int i = 0; i < values.length; i++) values[i] = (byte) table[values[i] & 0xFF];
+            outside = table[outside];
+        }
+        return new SoftMask(originX, originY, width, height, values, outside);
+    }
+
+    private static int luminosity(int rgb) {
+        final int r = (rgb >> 16) & 0xFF, g = (rgb >> 8) & 0xFF, b = rgb & 0xFF;
+        return Math.min(255, (int) Math.round(0.3 * r + 0.59 * g + 0.11 * b));
+    }
+
+    // ---------- 画像 ----------
+
+    private void drawImage(PdfStream stream) {
+        // 単位の正方形を、画素の大きさにしたもの
+        final AffineTransform toDevice = new AffineTransform(canvas.base);
+        toDevice.concatenate(gs.ctm);
+        final double deviceWidth = Math.hypot(toDevice.getScaleX(), toDevice.getShearY());
+        final double deviceHeight = Math.hypot(toDevice.getShearX(), toDevice.getScaleY());
+        final int targetWidth = (int) Math.max(1, Math.min(1 << 15, Math.ceil(deviceWidth)));
+        final int targetHeight = (int) Math.max(1, Math.min(1 << 15, Math.ceil(deviceHeight)));
+        ImageDecoder.Result result = images.get(stream);
+        if (result == null || result.image.getWidth() < Math.min(result.sourceWidth, targetWidth)
+                || result.image.getHeight() < Math.min(result.sourceHeight, targetHeight)) {
+            try {
+                result = ImageDecoder.decode(stream, resources, targetWidth, targetHeight);
+            } catch (IOException | RuntimeException e) {
+                Strict.check(e);
+                return;
+            }
+            if (images.size() > 16) images.clear();
+            images.put(stream, result);
+        }
+        BufferedImage image = result.image;
+        // 描く大きさより十分に大きい画像は、平均をとって縮めておく (Java2D の縮小は粗い)
+        if (image.getWidth() > 2 * targetWidth || image.getHeight() > 2 * targetHeight) {
+            image = downscale(image, Math.min(image.getWidth(), Math.max(1, targetWidth)), Math.min(image.getHeight(), Math.max(1, targetHeight)));
+        }
+        final int w = image.getWidth(), h = image.getHeight();
+        // 画像の空間 (左上が原点、画素の単位) から、ページの空間へ。傾いていない画像は、端を画素の境目に合わせる
+        final AffineTransform unitToPage = snapImage(toDevice);
+        final AffineTransform imageToPage = new AffineTransform(unitToPage);
+        imageToPage.translate(0, 1);
+        imageToPage.scale(1.0 / w, -1.0 / h);
+        final boolean smooth = result.interpolate || deviceWidth < result.sourceWidth || deviceHeight < result.sourceHeight;
+        final Shape unit = unitToPage.createTransformedShape(new Rectangle2D.Double(0, 0, 1, 1));
+        if (result.stencil) {
+            final Paint paint = paint(false);
+            if (paint == null) return;
+            if (paint instanceof Color) {
+                final BufferedImage colored = colorize(image, ((Color) paint).getRGB());
+                drawBufferedImage(colored, imageToPage, unit, smooth);
+            } else {
+                drawStencilWithPaint(image, imageToPage, unit, paint);
+            }
+            return;
+        }
+        if (gs.transfer != null) image = transferImage(image, gs.transfer);
+        drawBufferedImage(image, imageToPage, unit, smooth);
+    }
+
+    // 画像の色に転送関数をかけたもの (元の画像は覚えておいて使い回すので、写しを作る)
+    private static BufferedImage transferImage(BufferedImage image, int[][] tables) {
+        final BufferedImage result = new BufferedImage(image.getWidth(), image.getHeight(), BufferedImage.TYPE_INT_ARGB);
+        final int[] in = ((DataBufferInt) image.getRaster().getDataBuffer()).getData();
+        final int[] out = ((DataBufferInt) result.getRaster().getDataBuffer()).getData();
+        for (int i = 0; i < in.length && i < out.length; i++) out[i] = TransferPaint.apply(tables, in[i]);
+        return result;
+    }
+
+    /**
+     * 画像の単位の正方形からページの空間への変換。画素の空間で傾いていなければ、画像の端を、画像の掛かる画素の外側の境目まで広げる
+     * (端がぼやけたり、並べた画像の間に隙間が見えたりしないように。poppler と同じ)。
+     *
+     * @param toDevice 単位の正方形から画素への変換
+     */
+    private AffineTransform snapImage(AffineTransform toDevice) {
+        final double sx = toDevice.getScaleX(), sy = toDevice.getScaleY();
+        final double tx = toDevice.getTranslateX(), ty = toDevice.getTranslateY();
+        final boolean straight = Math.abs(toDevice.getShearX()) <= Math.abs(sy) * 1e-9 && Math.abs(toDevice.getShearY()) <= Math.abs(sx) * 1e-9;
+        if (!straight || !(Math.abs(sx) < 1e6) || !(Math.abs(sy) < 1e6) || !(Math.abs(tx) < 1e6) || !(Math.abs(ty) < 1e6)
+                || sx == 0 || sy == 0) {
+            return new AffineTransform(gs.ctm);
+        }
+        final double[] x = imageSpan(tx, tx + sx), y = imageSpan(ty, ty + sy);
+        final AffineTransform snapped = new AffineTransform(sx > 0 ? x[1] - x[0] : x[0] - x[1], 0, 0, sy > 0 ? y[1] - y[0] : y[0] - y[1],
+                sx > 0 ? x[0] : x[1], sy > 0 ? y[0] : y[1]);
+        try {
+            final AffineTransform result = canvas.base.createInverse();
+            result.concatenate(snapped);
+            return result;
+        } catch (NoninvertibleTransformException e) {
+            return new AffineTransform(gs.ctm);
+        }
+    }
+
+    // 画像の掛かる画素の範囲 {左, 右} (外側の境目)
+    private static double[] imageSpan(double a, double b) {
+        final double low = Math.floor(Math.min(a, b));
+        return new double[]{low, Math.max(low + 1, Math.ceil(Math.max(a, b)))};
+    }
+
+    private void drawBufferedImage(final BufferedImage image, final AffineTransform imageToPage, Shape bounds, final boolean smooth) {
+        canvas.paint(new Canvas.Painter() {
+            @Override
+            public void paint(Graphics2D g) {
+                g.setRenderingHint(RenderingHints.KEY_INTERPOLATION, smooth
+                        ? RenderingHints.VALUE_INTERPOLATION_BILINEAR : RenderingHints.VALUE_INTERPOLATION_NEAREST_NEIGHBOR);
+                g.drawImage(image, imageToPage, null);
+            }
+        }, bounds.getBounds2D(), gs.fillAlpha, gs.softMask, gs.blendMode, gs.clip);
+    }
+
+    private static BufferedImage colorize(BufferedImage mask, int rgb) {
+        final BufferedImage result = new BufferedImage(mask.getWidth(), mask.getHeight(), BufferedImage.TYPE_INT_ARGB);
+        final int[] in = ((DataBufferInt) mask.getRaster().getDataBuffer()).getData();
+        final int[] out = ((DataBufferInt) result.getRaster().getDataBuffer()).getData();
+        for (int i = 0; i < in.length; i++) out[i] = (in[i] & 0xFF000000) | (rgb & 0xFFFFFF);
+        return result;
+    }
+
+    // パターンで塗るステンシル: パターンを塗った画像に、マスクの不透明度をかけてから重ねる
+    private void drawStencilWithPaint(BufferedImage mask, AffineTransform imageToPage, Shape bounds, final Paint paint) {
+        final Rectangle area = canvas.deviceBounds(bounds.getBounds2D(), gs.clip);
+        if (area == null) return;
+        final AffineTransform toLayer = AffineTransform.getTranslateInstance(-area.x, -area.y);
+        toLayer.concatenate(canvas.base);
+        final BufferedImage coverage = new BufferedImage(area.width, area.height, BufferedImage.TYPE_INT_ARGB);
+        final BufferedImage painted = new BufferedImage(area.width, area.height, BufferedImage.TYPE_INT_ARGB);
+        Graphics2D g = coverage.createGraphics();
+        try {
+            Canvas.hints(g, true);
+            g.setTransform(toLayer);
+            g.drawImage(mask, imageToPage, null);
+        } finally {
+            g.dispose();
+        }
+        g = painted.createGraphics();
+        try {
+            Canvas.hints(g, true);
+            g.setTransform(toLayer);
+            g.setClip(gs.clip);
+            g.setPaint(paint);
+            g.fill(bounds);
+        } finally {
+            g.dispose();
+        }
+        final int[] c = ((DataBufferInt) coverage.getRaster().getDataBuffer()).getData();
+        final int[] p = ((DataBufferInt) painted.getRaster().getDataBuffer()).getData();
+        for (int i = 0; i < p.length; i++) {
+            final int alpha = (p[i] >>> 24) * (c[i] >>> 24) / 255;
+            p[i] = (alpha << 24) | (p[i] & 0xFFFFFF);
+        }
+        canvas.composite(p, area, gs.fillAlpha, gs.softMask,
+                gs.blendMode.equals("Normal") || gs.blendMode.equals("Compatible") ? null : gs.blendMode);
+    }
+
+    // 面積の平均で縮める
+    private static BufferedImage downscale(BufferedImage source, int width, int height) {
+        final int sw = source.getWidth(), sh = source.getHeight();
+        final int[] in = ((DataBufferInt) source.getRaster().getDataBuffer()).getData();
+        final BufferedImage result = new BufferedImage(width, height, BufferedImage.TYPE_INT_ARGB);
+        final int[] out = ((DataBufferInt) result.getRaster().getDataBuffer()).getData();
+        for (int y = 0; y < height; y++) {
+            final int y0 = (int) ((long) y * sh / height), y1 = Math.max(y0 + 1, (int) ((long) (y + 1) * sh / height));
+            for (int x = 0; x < width; x++) {
+                final int x0 = (int) ((long) x * sw / width), x1 = Math.max(x0 + 1, (int) ((long) (x + 1) * sw / width));
+                long a = 0, r = 0, g = 0, b = 0;
+                int n = 0;
+                for (int yy = y0; yy < y1; yy++) {
+                    for (int xx = x0; xx < x1; xx++) {
+                        final int p = in[yy * sw + xx];
+                        final int pa = p >>> 24;
+                        a += pa;
+                        // 不透明度で重みを付けて、透明な画素の色が混ざらないようにする
+                        r += ((p >> 16) & 0xFF) * pa;
+                        g += ((p >> 8) & 0xFF) * pa;
+                        b += (p & 0xFF) * pa;
+                        n++;
+                    }
+                }
+                final int alpha = (int) (a / n);
+                out[y * width + x] = a == 0 ? 0 : (alpha << 24) | (int) (r / a) << 16 | (int) (g / a) << 8 | (int) (b / a);
+            }
+        }
+        return result;
+    }
+
+    // ---------- シェーディングとパターン ----------
+
+    private void shade(String key) {
+        final PdfDict shadings = resources == null ? null : resources.dict("Shading");
+        final Object value = shadings == null || key == null ? null : shadings.get(key);
+        if (value == null) return;
+        final Shading shading;
+        try {
+            shading = Shading.create(value, resources);
+        } catch (IOException | RuntimeException e) {
+            Strict.check(e);
+            return;
+        }
+        if (shading.space.isNone()) return;
+        final Paint paint = withTransfer(new ShadingPaint(shading, new AffineTransform(gs.ctm), false));
+        // 塗る範囲: クリップの中 (シェーディングの BBox があれば、その中)
+        Shape region = gs.clip != null ? gs.clip : canvasBoundsInPage();
+        if (region == null) return;
+        if (shading.bbox != null) {
+            final Area area = new Area(region);
+            area.intersect(new Area(gs.ctm.createTransformedShape(new Rectangle2D.Double(shading.bbox[0], shading.bbox[1],
+                    shading.bbox[2] - shading.bbox[0], shading.bbox[3] - shading.bbox[1]))));
+            region = area;
+        }
+        final Shape fill = region;
+        canvas.paint(new Canvas.Painter() {
+            @Override
+            public void paint(Graphics2D g) {
+                g.setPaint(paint);
+                g.fill(fill);
+            }
+        }, fill.getBounds2D(), gs.fillAlpha, gs.softMask, gs.blendMode, gs.clip);
+    }
+
+    private Shape canvasBoundsInPage() {
+        try {
+            return canvas.base.createInverse().createTransformedShape(new Rectangle(0, 0, canvas.width, canvas.height));
+        } catch (NoninvertibleTransformException e) {
+            return null;
+        }
+    }
+
+    private Paint patternPaint(Object pattern, PdfColorSpace base, float[] color) {
+        if (pattern == null) return null;
+        final PdfDict dict = pattern instanceof PdfStream ? ((PdfStream) pattern).dict : pattern instanceof PdfDict ? (PdfDict) pattern : null;
+        if (dict == null) return null;
+        final AffineTransform toPage = new AffineTransform(patternBase);
+        final PdfArray matrix = dict.array("Matrix");
+        final double[] m = matrix == null ? null : matrix.numbers();
+        if (m != null && m.length >= 6) toPage.concatenate(new AffineTransform(m[0], m[1], m[2], m[3], m[4], m[5]));
+        if (dict.integer("PatternType", 1) == 2) {
+            try {
+                final Shading shading = Shading.create(dict.get("Shading"), resources);
+                return shading.space.isNone() ? null : new ShadingPaint(shading, toPage, true);
+            } catch (IOException | RuntimeException e) {
+                Strict.check(e);
+                return null;
+            }
+        }
+        if (!(pattern instanceof PdfStream)) return null;
+        Color uncoloredColor = null;
+        if (dict.integer("PaintType", 1) == 2) {
+            if (base == null) return null;
+            try {
+                uncoloredColor = new Color(base.toRgb(color));
+            } catch (RuntimeException e) {
+                Strict.check(e);
+                return null;
+            }
+        }
+        return tilingPaint((PdfStream) pattern, toPage, uncoloredColor);
+    }
+
+    private Paint tilingPaint(PdfStream pattern, AffineTransform toPage, Color uncoloredColor) {
+        if (depth >= MAX_DEPTH || activeForms.containsKey(pattern)) return null;
+        final double[] m = new double[6];
+        toPage.getMatrix(m);
+        final String key = java.util.Arrays.toString(m) + (uncoloredColor == null ? "" : Integer.toHexString(uncoloredColor.getRGB()))
+                + "@" + System.identityHashCode(canvas);
+        Map<String, Paint> cached = tilings.get(pattern);
+        if (cached != null && cached.containsKey(key)) return cached.get(key);
+        final Paint paint = createTilingPaint(pattern, toPage, uncoloredColor);
+        if (cached == null) {
+            if (tilings.size() > 64) tilings.clear();
+            cached = new java.util.HashMap<>();
+            tilings.put(pattern, cached);
+        }
+        if (cached.size() < 16) cached.put(key, paint);
+        return paint;
+    }
+
+    private Paint createTilingPaint(PdfStream pattern, AffineTransform toPage, Color uncoloredColor) {
+        final PdfDict dict = pattern.dict;
+        final double[] bbox = PdfDocument.rectangle(dict.array("BBox"));
+        double xStep = Math.abs(dict.number("XStep", 0)), yStep = Math.abs(dict.number("YStep", 0));
+        if (bbox == null) return null;
+        if (xStep == 0) xStep = bbox[2] - bbox[0];
+        if (yStep == 0) yStep = bbox[3] - bbox[1];
+        if (!(xStep > 0) || !(yStep > 0)) return null;
+        // タイルの絵の範囲 (パターンの空間): 周期と BBox の小さいほう
+        final double regionWidth = Math.min(xStep, bbox[2] - bbox[0]);
+        final double regionHeight = Math.min(yStep, bbox[3] - bbox[1]);
+        if (!(regionWidth > 0) || !(regionHeight > 0)) return null;
+        // 絵の大きさ: パターンの空間の単位が、画素でどれだけになるか
+        final AffineTransform toDevice = new AffineTransform(canvas.base);
+        toDevice.concatenate(toPage);
+        final double unitX = Math.hypot(toDevice.getScaleX(), toDevice.getShearY());
+        final double unitY = Math.hypot(toDevice.getShearX(), toDevice.getScaleY());
+        final int cellWidth = (int) Math.max(1, Math.min(MAX_CELL_SIDE, Math.ceil(regionWidth * unitX)));
+        final int cellHeight = (int) Math.max(1, Math.min(MAX_CELL_SIDE, Math.ceil(regionHeight * unitY)));
+        // パターンの空間から、絵の画素へ (左上が (bbox.x0, bbox.y0 + regionHeight))
+        final AffineTransform cellBase = AffineTransform.getScaleInstance(cellWidth / regionWidth, -cellHeight / regionHeight);
+        cellBase.translate(-bbox[0], -(bbox[1] + regionHeight));
+        final Canvas cell = new Canvas(cellWidth, cellHeight, 0, 0, cellBase, false, true);
+        final byte[] content;
+        try {
+            content = pattern.decode(PdfDocument.MAX_DECODED);
+        } catch (IOException e) {
+            return null;
+        }
+        final Canvas savedCanvas = canvas;
+        final GraphicsState savedState = gs;
+        final PdfDict savedResources = resources;
+        final AffineTransform savedBase = patternBase;
+        final Path2D.Double savedPath = path;
+        final boolean savedUncolored = uncolored;
+        final int savedHidden = hiddenDepth;
+        canvas = cell;
+        depth++;
+        activeForms.put(pattern, Boolean.TRUE);
+        try {
+            // 隣のタイルからはみ出す分も描く (BBox が XStep / YStep より大きいとき)
+            final int repeatX = (int) Math.min(4, Math.ceil((bbox[2] - bbox[0]) / xStep));
+            final int repeatY = (int) Math.min(4, Math.ceil((bbox[3] - bbox[1]) / yStep));
+            for (int i = -repeatX; i <= repeatX; i++) {
+                for (int j = -repeatY; j <= repeatY; j++) {
+                    gs = new GraphicsState();
+                    // 線の太さは 0 (いちばん細い線) から始める (Adobe Reader と poppler の振る舞い)
+                    gs.lineWidth = 0;
+                    gs.ctm = AffineTransform.getTranslateInstance(i * xStep, j * yStep);
+                    gs.clip = new Area(new Rectangle2D.Double(bbox[0] + i * xStep, bbox[1] + j * yStep, bbox[2] - bbox[0], bbox[3] - bbox[1]));
+                    if (uncoloredColor != null) {
+                        gs.fillSpace = DeviceSpaces.RGB;
+                        gs.strokeSpace = DeviceSpaces.RGB;
+                        gs.fillColor = rgbComponents(uncoloredColor);
+                        gs.strokeColor = rgbComponents(uncoloredColor);
+                    }
+                    final PdfDict patternResources = dict.dict("Resources");
+                    resources = patternResources != null ? patternResources : savedResources;
+                    patternBase = new AffineTransform(gs.ctm);
+                    path = new Path2D.Double();
+                    uncolored = uncoloredColor != null;
+                    hiddenDepth = 0;
+                    run(content);
+                }
+            }
+        } finally {
+            activeForms.remove(pattern);
+            depth--;
+            canvas = savedCanvas;
+            gs = savedState;
+            resources = savedResources;
+            patternBase = savedBase;
+            path = savedPath;
+            uncolored = savedUncolored;
+            hiddenDepth = savedHidden;
+            cell.dispose();
+        }
+        return new TilingPaint(cell.image, bbox[0], bbox[1], xStep, yStep, regionWidth, regionHeight, toPage);
+    }
+
+    private static float[] rgbComponents(Color color) {
+        return new float[]{color.getRed() / 255f, color.getGreen() / 255f, color.getBlue() / 255f};
+    }
+
+    // ---------- 注釈 ----------
+
+    private void annotations(PdfDocument.Page page) {
+        final PdfArray annotations = page.dict.array("Annots");
+        if (annotations == null) return;
+        for (int i = 0; i < annotations.size() && i < 10000; i++) {
+            final PdfDict annotation = annotations.dict(i);
+            if (annotation == null) continue;
+            try {
+                annotation(annotation);
+            } catch (LimitReached | Strict.UnexpectedFailure e) {
+                throw e;
+            } catch (RuntimeException e) {
+                // 壊れた注釈は飛ばす
+                Strict.check(e);
+            }
+        }
+    }
+
+    private void annotation(PdfDict annotation) {
+        final int flags = annotation.integer("F", 0);
+        // Hidden (2) と NoView (32) は描かない
+        if ((flags & 2) != 0 || (flags & 32) != 0) return;
+        if (cache.isHiddenContent(annotation.dict("OC"))) return;
+        double[] rect = PdfDocument.rectangle(annotation.array("Rect"));
+        if (rect != null && (rect[2] - rect[0] <= 0 || rect[3] - rect[1] <= 0)) rect = null;
+        // 外観がなければ、決まった形で描く (線や多角形などは、Rect がなくても形が決まる)
+        if (rect == null || !appearance(annotation, rect)) defaultAppearance(annotation, rect);
+        if (rect != null && "Link".equals(annotation.name("Subtype"))) linkBorder(annotation, rect);
+    }
+
+    // 注釈の外観 (/AP の /N) を描く。外観がなければ false
+    private boolean appearance(PdfDict annotation, double[] rect) {
+        final PdfDict appearances = annotation.dict("AP");
+        if (appearances == null) return false;
+        final Object normal = appearances.get("N");
+        PdfStream form = null;
+        if (normal instanceof PdfStream) {
+            form = (PdfStream) normal;
+        } else if (normal instanceof PdfDict) {
+            final String state = annotation.name("AS");
+            if (state != null) form = ((PdfDict) normal).stream(state);
+        }
+        if (form == null) return false;
+        final double[] bbox = PdfDocument.rectangle(form.dict.array("BBox"));
+        // 外観はあるが描けないもの (BBox が壊れているなど) は、何も描かない
+        if (bbox == null) return true;
+        // 12.5.5: 外観の BBox を Matrix で変換した範囲を、注釈の Rect に合わせる
+        final PdfArray matrixArray = form.dict.array("Matrix");
+        final double[] m = matrixArray == null ? null : matrixArray.numbers();
+        final AffineTransform matrix = m != null && m.length >= 6 ? new AffineTransform(m[0], m[1], m[2], m[3], m[4], m[5]) : new AffineTransform();
+        final Rectangle2D transformed = matrix.createTransformedShape(new Rectangle2D.Double(bbox[0], bbox[1], bbox[2] - bbox[0], bbox[3] - bbox[1])).getBounds2D();
+        if (transformed.getWidth() <= 0 || transformed.getHeight() <= 0) return true;
+        final AffineTransform a = new AffineTransform();
+        a.translate(rect[0], rect[1]);
+        a.scale((rect[2] - rect[0]) / transformed.getWidth(), (rect[3] - rect[1]) / transformed.getHeight());
+        a.translate(-transformed.getX(), -transformed.getY());
+        final GraphicsState saved = gs;
+        gs = new GraphicsState();
+        gs.clip = saved.clip;
+        try {
+            drawForm(form, a);
+        } finally {
+            gs = saved;
+        }
+        return true;
+    }
+
+    /**
+     * 外観 (AP) のない注釈を、決まった形で描く (pdf.js が作る外観と同じ形): Square、Circle、Line、PolyLine、Polygon、Ink、
+     * Highlight、Underline、StrikeOut、Squiggly。ほかの種類は描かない。
+     *
+     * @param rect 注釈の Rect (なければ null)
+     */
+    private void defaultAppearance(PdfDict annotation, double[] rect) {
+        final String subtype = annotation.name("Subtype");
+        if (subtype == null) return;
+        final StringBuilder out = new StringBuilder();
+        // 線の色 (C、なければ黒) と、中の色 (IC、なければ塗らない)。空の配列は透明 (描かない)
+        final String stroke = colorOperator(annotation.array("C"), true, "0 G");
+        final String fill = colorOperator(annotation.array("IC"), false, null);
+        String blend = "Normal";
+        switch (subtype) {
+            case "Square":
+            case "Circle": {
+                if (rect == null) return;
+                final double w = borderWidth(annotation, rect);
+                if ((w == 0 || stroke == null) && fill == null) return;
+                // 線が Rect からはみ出さないよう、太さの半分だけ内側に描く
+                final double x0 = rect[0] + w / 2, y0 = rect[1] + w / 2, x1 = rect[2] - w / 2, y1 = rect[3] - w / 2;
+                if (!(x1 > x0) || !(y1 > y0)) return;
+                out.append(num(w)).append(" w ");
+                if ("Square".equals(subtype)) {
+                    out.append(num(x0)).append(' ').append(num(y0)).append(' ').append(num(x1 - x0)).append(' ').append(num(y1 - y0)).append(" re ");
+                } else {
+                    // 4 つのベジェ曲線で近似した楕円
+                    final double k = 4.0 / 3 * Math.tan(Math.PI / 8);
+                    final double cx = (x0 + x1) / 2, cy = (y0 + y1) / 2, ox = (x1 - x0) / 2 * k, oy = (y1 - y0) / 2 * k;
+                    out.append(num(cx)).append(' ').append(num(y1)).append(" m ");
+                    curve(out, cx + ox, y1, x1, cy + oy, x1, cy);
+                    curve(out, x1, cy - oy, cx + ox, y0, cx, y0);
+                    curve(out, cx - ox, y0, x0, cy - oy, x0, cy);
+                    curve(out, x0, cy + oy, cx - ox, y1, cx, y1);
+                    out.append("h ");
+                }
+                paintOperator(out, stroke, fill, w > 0);
+                break;
+            }
+            case "Line": {
+                final PdfArray line = annotation.array("L");
+                final double[] l = line == null ? null : line.numbers();
+                if (l == null || l.length < 4 || stroke == null) return;
+                out.append(num(lineWidth(annotation, rect))).append(" w ").append(stroke).append(' ');
+                out.append(num(l[0])).append(' ').append(num(l[1])).append(" m ").append(num(l[2])).append(' ').append(num(l[3])).append(" l S");
+                break;
+            }
+            case "PolyLine":
+            case "Polygon": {
+                final PdfArray vertices = annotation.array("Vertices");
+                final double[] v = vertices == null ? null : vertices.numbers();
+                if (v == null || v.length < 4 || v.length > MAX_ANNOTATION_POINTS) return;
+                out.append(num(lineWidth(annotation, rect))).append(" w ");
+                for (int i = 0; i + 1 < v.length; i += 2) out.append(num(v[i])).append(' ').append(num(v[i + 1])).append(i == 0 ? " m " : " l ");
+                if ("Polygon".equals(subtype)) {
+                    out.append("h ");
+                    paintOperator(out, stroke, fill, true);
+                } else if (stroke != null) {
+                    out.append(stroke).append(" S");
+                } else {
+                    return;
+                }
+                break;
+            }
+            case "Ink": {
+                final PdfArray lists = annotation.array("InkList");
+                if (lists == null || stroke == null) return;
+                out.append(num(lineWidth(annotation, rect))).append(" w ").append(stroke).append(' ');
+                int points = 0;
+                for (int j = 0; j < lists.size(); j++) {
+                    final PdfArray list = lists.array(j);
+                    final double[] v = list == null ? null : list.numbers();
+                    if (v == null || v.length < 2) continue;
+                    points += v.length;
+                    if (points > MAX_ANNOTATION_POINTS) break;
+                    // 点は直線でつなぐ (つなぎ方は実装による。pdf.js と同じ)
+                    for (int i = 0; i + 1 < v.length; i += 2) out.append(num(v[i])).append(' ').append(num(v[i + 1])).append(i == 0 ? " m " : " l ");
+                    out.append("S ");
+                }
+                break;
+            }
+            case "Highlight":
+            case "Underline":
+            case "StrikeOut":
+            case "Squiggly": {
+                final PdfArray quadPoints = annotation.array("QuadPoints");
+                final double[] q = quadPoints == null ? null : quadPoints.numbers();
+                if (q == null || q.length < 8 || q.length > MAX_ANNOTATION_POINTS) return;
+                // マーカーの色の既定は黄色 (Acrobat と同じ)
+                final String color = "Highlight".equals(subtype) ? colorOperator(annotation.array("C"), false, "1 1 0 rg") : stroke;
+                if (color == null) return;
+                out.append(color).append(' ');
+                if ("Highlight".equals(subtype)) {
+                    blend = "Multiply";
+                } else {
+                    // 線の太さは Acrobat と同じ
+                    out.append("Underline".equals(subtype) ? "0.571" : "1").append(" w ");
+                }
+                for (int i = 0; i + 7 < q.length; i += 8) {
+                    // 四隅の順番はファイルによって違うので、囲む長方形にする (pdf.js と同じ)
+                    double minX = q[i], maxX = q[i], minY = q[i + 1], maxY = q[i + 1];
+                    for (int k = 2; k < 8; k += 2) {
+                        minX = Math.min(minX, q[i + k]);
+                        maxX = Math.max(maxX, q[i + k]);
+                        minY = Math.min(minY, q[i + k + 1]);
+                        maxY = Math.max(maxY, q[i + k + 1]);
+                    }
+                    quadAppearance(out, subtype, minX, minY, maxX, maxY);
+                }
+                break;
+            }
+            default:
+                return;
+        }
+        final GraphicsState saved = gs;
+        final PdfDict savedResources = resources;
+        final AffineTransform savedText = textMatrix, savedLine = lineMatrix;
+        gs = new GraphicsState();
+        gs.clip = saved.clip;
+        // 不透明度 (CA) は、線にも塗りにもかける
+        final double alpha = clamp01(annotation.number("CA", 1));
+        gs.strokeAlpha = alpha;
+        gs.fillAlpha = alpha;
+        gs.blendMode = blend;
+        resources = null;
+        try {
+            run(out.toString().getBytes(java.nio.charset.StandardCharsets.US_ASCII));
+        } finally {
+            gs = saved;
+            resources = savedResources;
+            textMatrix = savedText;
+            lineMatrix = savedLine;
+        }
+    }
+
+    // 文字を飾る注釈の、1 つの四角形の分の形
+    private static void quadAppearance(StringBuilder out, String subtype, double minX, double minY, double maxX, double maxY) {
+        switch (subtype) {
+            case "Highlight":
+                out.append(num(minX)).append(' ').append(num(maxY)).append(" m ").append(num(maxX)).append(' ').append(num(maxY)).append(" l ")
+                        .append(num(maxX)).append(' ').append(num(minY)).append(" l ").append(num(minX)).append(' ').append(num(minY)).append(" l f ");
+                break;
+            case "Underline":
+                out.append(num(minX)).append(' ').append(num(minY + 1.3)).append(" m ").append(num(maxX)).append(' ').append(num(minY + 1.3))
+                        .append(" l S ");
+                break;
+            case "StrikeOut": {
+                final double y = (minY + maxY) / 2;
+                out.append(num(minX)).append(' ').append(num(y)).append(" m ").append(num(maxX)).append(' ').append(num(y)).append(" l S ");
+                break;
+            }
+            default: {
+                // Squiggly: 高さの 1/6 だけ上下する、2 ポイントごとの折れ線
+                final double dy = (maxY - minY) / 6;
+                double shift = dy;
+                out.append(num(minX)).append(' ').append(num(minY + shift)).append(" m ");
+                double x = minX;
+                for (int i = 0; x < maxX && i < 10_000; i++) {
+                    x += 2;
+                    shift = shift == 0 ? dy : 0;
+                    out.append(num(x)).append(' ').append(num(minY + shift)).append(" l ");
+                }
+                out.append("S ");
+                break;
+            }
+        }
+    }
+
+    // 線と塗りの色に合わせた、道を描く命令 (どちらもなければ描かない)
+    private static void paintOperator(StringBuilder out, String stroke, String fill, boolean strokes) {
+        final boolean s = stroke != null && strokes;
+        if (s) out.append(stroke).append(' ');
+        if (fill != null) out.append(fill).append(' ');
+        out.append(s && fill != null ? "B" : s ? "S" : fill != null ? "f" : "n");
+    }
+
+    private static void curve(StringBuilder out, double x1, double y1, double x2, double y2, double x3, double y3) {
+        out.append(num(x1)).append(' ').append(num(y1)).append(' ').append(num(x2)).append(' ').append(num(y2)).append(' ')
+                .append(num(x3)).append(' ').append(num(y3)).append(" c ");
+    }
+
+    // 内容に書く数 (指数の形にしない。大きすぎるものは 0)
+    private static String num(double value) {
+        return Math.abs(value) < 1e9 ? String.format(java.util.Locale.ROOT, "%.4f", value) : "0";
+    }
+
+    /**
+     * 注釈の色の配列 (成分が 1、3、4 つで灰色、RGB、CMYK) を、色を選ぶ命令にしたもの。配列がなければ fallback、空や数でないものは null (透明)。
+     */
+    private static String colorOperator(PdfArray array, boolean stroke, String fallback) {
+        if (array == null) return fallback;
+        final double[] c = array.numbers();
+        if (c == null || c.length == 0) return null;
+        final StringBuilder out = new StringBuilder();
+        final int n = c.length >= 4 ? 4 : c.length >= 3 ? 3 : 1;
+        for (int i = 0; i < n; i++) out.append(num(clamp01(c[i]))).append(' ');
+        final String operator = n == 4 ? "k" : n == 3 ? "rg" : "g";
+        return out.append(stroke ? operator.toUpperCase(java.util.Locale.ROOT) : operator).toString();
+    }
+
+    /**
+     * 注釈の枠の太さ (BS の W、なければ Border の 3 つ目)。どちらもなければ 0 (仕様の既定は 1 だが、Acrobat は枠を描かない。pdf.js も同じ)。
+     * Rect の幅か高さの半分より太いものは 1 にする (pdf.js と同じ)。
+     */
+    private static double borderWidth(PdfDict annotation, double[] rect) {
+        double width;
+        final PdfDict style = annotation.dict("BS");
+        final PdfArray border = annotation.array("Border");
+        if (style != null) {
+            final Object w = style.get("W");
+            width = w == null ? 1 : w instanceof Number ? ((Number) w).doubleValue() : 0;
+        } else if (border != null) {
+            width = border.size() >= 3 ? border.number(2, 0) : border.size() == 0 ? 0 : 1;
+        } else {
+            width = 0;
+        }
+        if (!(width > 0) || Double.isInfinite(width)) return 0;
+        if (rect != null && (width > (rect[2] - rect[0]) / 2 || width > (rect[3] - rect[1]) / 2)) width = 1;
+        return width;
+    }
+
+    // 線の注釈 (Line、PolyLine、Polygon、Ink) の線の太さ。枠の太さが 0 なら 1 (pdf.js と同じ)
+    private static double lineWidth(PdfDict annotation, double[] rect) {
+        final double width = borderWidth(annotation, rect);
+        return width > 0 ? width : 1;
+    }
+
+    /**
+     * リンクの枠 (12.5.2 の Border と BS、12.5.4)。Border も BS もないもの (太さ 0) と、色 (C) のないもの、C が空の配列のものは描かない
+     * (Acrobat と pdf.js と同じ)。
+     */
+    private void linkBorder(PdfDict annotation, double[] rect) {
+        final double width = borderWidth(annotation, rect);
+        double[] dash = null;
+        final PdfDict style = annotation.dict("BS");
+        final PdfArray border = annotation.array("Border");
+        if (style != null) {
+            if (style.isName("S", "D")) {
+                final PdfArray d = style.array("D");
+                dash = d == null ? new double[]{3} : d.numbers();
+            }
+        } else if (border != null) {
+            final PdfArray d = border.array(3);
+            if (d != null) dash = d.numbers();
+        }
+        final PdfArray c = annotation.array("C");
+        final double[] color = c == null ? null : c.numbers();
+        if (!(width > 0) || color == null || color.length == 0) return;
+        final PdfColorSpace space = color.length >= 4 ? DeviceSpaces.CMYK : color.length >= 3 ? DeviceSpaces.RGB : DeviceSpaces.GRAY;
+        final float[] components = new float[space.components()];
+        for (int i = 0; i < components.length; i++) components[i] = (float) color[i];
+        final GraphicsState saved = gs;
+        gs = new GraphicsState();
+        gs.clip = saved.clip;
+        gs.strokeSpace = space;
+        gs.strokeColor = components;
+        gs.lineWidth = width;
+        gs.dashArray = dash;
+        try {
+            // 線の中心を Rect の辺に合わせる (poppler と同じ)
+            strokeShape(new Rectangle2D.Double(rect[0], rect[1], rect[2] - rect[0], rect[3] - rect[1]));
+        } finally {
+            gs = saved;
+        }
+    }
+}

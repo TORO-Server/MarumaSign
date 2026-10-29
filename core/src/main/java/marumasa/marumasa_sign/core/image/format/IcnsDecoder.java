@@ -2,7 +2,7 @@ package marumasa.marumasa_sign.core.image.format;
 
 import marumasa.marumasa_sign.core.image.ArgbPixels;
 import marumasa.marumasa_sign.core.image.DecodedImage;
-import marumasa.marumasa_sign.core.image.ImageBytes;
+import marumasa.marumasa_sign.core.image.ImageLoader;
 
 import java.awt.image.BufferedImage;
 import java.io.IOException;
@@ -42,9 +42,11 @@ final class IcnsDecoder {
             final int size = (int) length - 8;
             entries.put(type, new int[]{body, size});
             if (size >= 24 && (d[body] & 0xFF) == 0x89 && d[body + 1] == 'P') {
-                // PNG の IHDR から大きさを読む
-                final long pixels = FormatUtil.u32be(d, body + 16) * FormatUtil.u32be(d, body + 20);
-                if (pixels > bestPngPixels) {
+                // PNG の IHDR から大きさを読む。上限を超える絵は選ばない
+                final long width = FormatUtil.u32be(d, body + 16), height = FormatUtil.u32be(d, body + 20);
+                final long pixels = width * height;
+                final int max = ImageLoader.MAX_STATIC_SIZE;
+                if (width <= max && height <= max && pixels > bestPngPixels) {
                     bestPngPixels = pixels;
                     bestPng = body;
                     bestPngSize = size;
@@ -53,7 +55,7 @@ final class IcnsDecoder {
             p += (int) length;
         }
         if (bestPng >= 0) {
-            final BufferedImage image = ImageBytes.read(java.util.Arrays.copyOfRange(d, bestPng, bestPng + bestPngSize));
+            final BufferedImage image = FormatUtil.readEmbedded(java.util.Arrays.copyOfRange(d, bestPng, bestPng + bestPngSize));
             if (image == null) throw new IOException("Invalid PNG in ICNS");
             FormatUtil.checkSize(image.getWidth(), image.getHeight());
             return FormatUtil.still(image.getWidth(), image.getHeight(), ArgbPixels.readDisplay(image));

@@ -3,6 +3,7 @@ package marumasa.marumasa_sign.core.sign;
 import marumasa.marumasa_sign.core.MarumaSign;
 import marumasa.marumasa_sign.core.Platform;
 import marumasa.marumasa_sign.core.media.MediaPlayer;
+import marumasa.marumasa_sign.core.util.Clock;
 
 /**
  * 看板に表示する動画や音声 1 つ分の再生。
@@ -30,7 +31,9 @@ final class MediaSession {
     private MediaPlayer player;
     private boolean ready;
     private boolean failed;
-    private long lastUsed = System.currentTimeMillis();
+    // 片付けた (close) 後は、看板が残っていて描かれても、再生をやり直さない
+    private boolean closed;
+    private long lastUsed = Clock.millis();
     // 再生してよいか。同時に再生する数の上限の中に入っていれば true (SignManager が決める)
     private boolean allowed;
 
@@ -59,7 +62,7 @@ final class MediaSession {
     }
 
     void start() {
-        if (player != null || failed) return;
+        if (player != null || failed || closed) return;
         final MediaPlayer started = new MediaPlayer(url, new MediaPlayer.Listener() {
             @Override
             public void onReady(final int videoWidth, final int videoHeight) {
@@ -88,6 +91,7 @@ final class MediaSession {
     }
 
     private void ready(int videoWidth, int videoHeight) {
+        if (closed) return;
         // 再開したときは、前と同じ大きさならテクスチャをそのまま使う
         if (ready && videoWidth == width && videoHeight == height) return;
         if (videoWidth > 0) {
@@ -128,7 +132,7 @@ final class MediaSession {
      * 描画のたびに呼ぶ。止まっていれば再生を再開し、新しいフレームがあればテクスチャに反映する。
      */
     void use(double distance) {
-        lastUsed = System.currentTimeMillis();
+        lastUsed = Clock.millis();
         if (distance < nearestDistance) nearestDistance = distance;
         if (player == null) {
             if (allowed) start();
@@ -143,7 +147,7 @@ final class MediaSession {
 
     // 描かれていて、再生したいかどうか
     boolean isWanted() {
-        return !failed && System.currentTimeMillis() - lastUsed <= IDLE_MILLIS;
+        return !failed && Clock.millis() - lastUsed <= IDLE_MILLIS;
     }
 
     // 最も近い看板までの、最近の距離 (ブロック)
@@ -162,19 +166,21 @@ final class MediaSession {
 
     // tick ごとに呼ぶ
     void tick() {
+        // 看板に背を向けると描画されなくなるが、そのときに距離 0 (最大音量) と見なさないよう、前の距離を使う。
+        // 再生していないときも tick ごとに新しくする (近かったときの距離が残ると、遠ざかったあとも近いものとして選ばれ、
+        // 本当に近い動画が止められて、最初から再生し直しになる)
+        if (nearestDistance != Double.MAX_VALUE) lastDistance = nearestDistance;
+        nearestDistance = Double.MAX_VALUE;
         if (player == null) return;
-        if (System.currentTimeMillis() - lastUsed > IDLE_MILLIS) {
+        if (Clock.millis() - lastUsed > IDLE_MILLIS) {
             player.stop();
             player = null;
             return;
         }
-        // 近いほど大きく聞こえるようにする。
-        // 看板に背を向けると描画されなくなるが、そのときに距離 0 (最大音量) と見なさないよう、前の距離を使う
-        if (nearestDistance != Double.MAX_VALUE) lastDistance = nearestDistance;
+        // 近いほど大きく聞こえるようにする
         currentGain = gain(lastDistance, MarumaSign.config().getVolume());
         currentFalloff = gain(lastDistance, 100);
         player.setGain(currentGain);
-        nearestDistance = Double.MAX_VALUE;
     }
 
     // 今の音の大きさ (0 - 1)。再生していなければ -1
@@ -200,6 +206,8 @@ final class MediaSession {
     }
 
     void close() {
+        closed = true;
+        allowed = false;
         if (player != null) {
             player.stop();
             player = null;

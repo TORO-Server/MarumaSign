@@ -1,0 +1,14 @@
+GltfFuzz の種と GltfRegressionCheck で使う、小さな glTF / GLB のファイル
+
+すべて、Python (標準ライブラリと Pillow) で作ったもの。形と画像はプログラムで作った。
+  materials_lights.glb     材質の拡張 (clearcoat、sheen、specular、ior、iridescence、anisotropy、pbrSpecularGlossiness、transmission、volume、unlit)、
+                           KHR_texture_transform、サンプラーの繰り返しの指定、KHR_lights_punctual、EXT_lights_image_based
+  skin_animation.glb       スキン (JOINTS_0 は UNSIGNED_BYTE、WEIGHTS_0 は正規化した UNSIGNED_BYTE)、LINEAR / STEP / CUBICSPLINE のアニメーション、
+                           KHR_animation_pointer (材質の色、テクスチャの位置、光源の強さ)
+  morph_sparse_modes.glb   モーフィング、疎なアクセサ (bufferView なしとあり)、帯と扇と線、正規化した UNSIGNED_SHORT の頂点の色
+  quantized_instancing.glb KHR_mesh_quantization (交互に並んだ頂点、byteStride)、EXT_mesh_gpu_instancing、カメラ、シーンの選択
+  embedded.gltf            data URI だけでできた .gltf
+  external.gltf            外部のバッファと画像 (名前に空白があり、URI では %20 で書く) を参照する .gltf。external.bin と「external tex.png」を使う
+  compressed_textures.glb  KHR_texture_basisu (UASTC + Zstandard、ETC1S)、MSFT_texture_dds (BC1)、EXT_texture_webp (可逆)。
+                           KTX2 の 2 つは ../marumasa_sign/test/texture の 2d_uastc_zstd.ktx2 と 2d_etc1s.ktx2 をそのまま入れたもの
+                           (three.js 由来、MIT License。出どころは同じフォルダの SOURCES.txt)

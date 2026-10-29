@@ -25,6 +25,8 @@ final class SogReader {
     private static final int MAX_ENTRY_BYTES = 64 * 1024 * 1024;
     private static final long MAX_TOTAL_BYTES = 128L * 1024L * 1024L;
     private static final int MAX_SPLATS_LIMIT = 16_777_216;
+    // shN の中心の画像の大きさの上限 (幅 64 x 15 x 3、高さ 1024 で 65536 色)
+    private static final long MAX_CENTROID_PIXELS = 64L * 15 * 1024;
     private static final float SQRT2 = 1.4142135623730951f;
 
     private SogReader() {
@@ -92,10 +94,10 @@ final class SogReader {
         final List<Object> sh0Files = Json.array(sh0Obj, "files");
         if (sh0Files.isEmpty()) throw new IOException("Missing SOG sh0 file");
 
-        final ImageData scalesImg = decodeWebp(entries, String.valueOf(scaleFiles.get(0)), total);
-        final ImageData sh0Img = decodeWebp(entries, String.valueOf(sh0Files.get(0)), total);
-        final ImageData meansLImg = decodeWebp(entries, String.valueOf(meanFiles.get(0)), total);
-        final ImageData meansUImg = decodeWebp(entries, String.valueOf(meanFiles.get(1)), total);
+        final ImageData scalesImg = decodeWebp(entries, String.valueOf(scaleFiles.get(0)), total, splatPixels(total));
+        final ImageData sh0Img = decodeWebp(entries, String.valueOf(sh0Files.get(0)), total, splatPixels(total));
+        final ImageData meansLImg = decodeWebp(entries, String.valueOf(meanFiles.get(0)), total, splatPixels(total));
+        final ImageData meansUImg = decodeWebp(entries, String.valueOf(meanFiles.get(1)), total, splatPixels(total));
 
         final byte[] mL = meansLImg.rgba;
         final byte[] mU = meansUImg.rgba;
@@ -128,7 +130,7 @@ final class SogReader {
         importance = null;
         final int count = selected.length;
 
-        final ImageData quatsImg = decodeWebp(entries, String.valueOf(quatFiles.get(0)), total);
+        final ImageData quatsImg = decodeWebp(entries, String.valueOf(quatFiles.get(0)), total, splatPixels(total));
         final byte[] qRgba = quatsImg.rgba;
 
         int shDegree = 0;
@@ -148,8 +150,8 @@ final class SogReader {
             shCodebook = requireFiniteArray(shNObj.get("codebook"), 256, "shN.codebook");
             final List<Object> shNFiles = Json.array(shNObj, "files");
             if (shNFiles.size() < 2) throw new IOException("Missing SOG shN files");
-            centroidsImg = decodeWebp(entries, String.valueOf(shNFiles.get(0)), 1);
-            labelsImg = decodeWebp(entries, String.valueOf(shNFiles.get(1)), total);
+            centroidsImg = decodeWebp(entries, String.valueOf(shNFiles.get(0)), 1, MAX_CENTROID_PIXELS);
+            labelsImg = decodeWebp(entries, String.valueOf(shNFiles.get(1)), total, splatPixels(total));
             if (centroidsImg.width < 64 * rest) {
                 throw new IOException("Invalid SOG shN centroids width: " + centroidsImg.width);
             }
@@ -230,10 +232,10 @@ final class SogReader {
         final List<Object> sh0Files = Json.array(sh0Obj, "files");
         if (sh0Files.isEmpty()) throw new IOException("Missing SOG v1 sh0 file");
 
-        final ImageData scalesImg = decodeWebp(entries, String.valueOf(scaleFiles.get(0)), total);
-        final ImageData sh0Img = decodeWebp(entries, String.valueOf(sh0Files.get(0)), total);
-        final ImageData meansLImg = decodeWebp(entries, String.valueOf(meanFiles.get(0)), total);
-        final ImageData meansUImg = decodeWebp(entries, String.valueOf(meanFiles.get(1)), total);
+        final ImageData scalesImg = decodeWebp(entries, String.valueOf(scaleFiles.get(0)), total, splatPixels(total));
+        final ImageData sh0Img = decodeWebp(entries, String.valueOf(sh0Files.get(0)), total, splatPixels(total));
+        final ImageData meansLImg = decodeWebp(entries, String.valueOf(meanFiles.get(0)), total, splatPixels(total));
+        final ImageData meansUImg = decodeWebp(entries, String.valueOf(meanFiles.get(1)), total, splatPixels(total));
 
         final byte[] mL = meansLImg.rgba;
         final byte[] mU = meansUImg.rgba;
@@ -267,7 +269,7 @@ final class SogReader {
         importance = null;
         final int count = selected.length;
 
-        final ImageData quatsImg = decodeWebp(entries, String.valueOf(quatFiles.get(0)), total);
+        final ImageData quatsImg = decodeWebp(entries, String.valueOf(quatFiles.get(0)), total, splatPixels(total));
         final byte[] qRgba = quatsImg.rgba;
 
         int shDegree = 0;
@@ -286,8 +288,8 @@ final class SogReader {
             }
             final List<Object> shNFiles = Json.array(shNObj, "files");
             if (shNFiles.size() < 2) throw new IOException("Missing SOG v1 shN files");
-            centroidsImg = decodeWebp(entries, String.valueOf(shNFiles.get(0)), 1);
-            labelsImg = decodeWebp(entries, String.valueOf(shNFiles.get(1)), total);
+            centroidsImg = decodeWebp(entries, String.valueOf(shNFiles.get(0)), 1, MAX_CENTROID_PIXELS);
+            labelsImg = decodeWebp(entries, String.valueOf(shNFiles.get(1)), total, splatPixels(total));
             if (centroidsImg.width == 192) shDegree = 1;
             else if (centroidsImg.width == 512) shDegree = 2;
             else if (centroidsImg.width == 960) shDegree = 3;
@@ -389,11 +391,18 @@ final class SogReader {
         }
     }
 
-    private static ImageData decodeWebp(Map<String, byte[]> entries, String name, int minPixels) throws IOException {
+    // 分布ごとの値を入れる画像の大きさの上限。並べ方の違うものも読めるように、要る数の 2 倍まで許す
+    private static long splatPixels(int total) {
+        return 2L * total + 65536;
+    }
+
+    private static ImageData decodeWebp(Map<String, byte[]> entries, String name, int minPixels, long maxPixels) throws IOException {
         byte[] data = entries.get(name);
         if (data == null) data = entries.get(baseName(name));
         if (data == null) throw new IOException("Missing SOG image entry: " + name);
-        final BufferedImage img = WebpDecoder.decode(data);
+        // 要る数よりずっと大きな画像は、展開する前に断る (小さく圧縮した大きな画像を並べて、メモリを使い切らせないように)。
+        // splat-transform は、幅を 4 の倍数、高さを 4 の倍数に切り上げた、ほぼ正方形の画像を作る
+        final BufferedImage img = WebpDecoder.decode(data, maxPixels);
         final int w = img.getWidth();
         final int h = img.getHeight();
         if ((long) w * h < minPixels) {
@@ -471,12 +480,16 @@ final class SogReader {
             if (dataStart < 0 || dataStart + compSize > content.length) {
                 throw new IOException("Compressed data exceeds ZIP length");
             }
+            // 書かれた展開後の大きさで確保する前に、圧縮の方法と、deflate で縮められる割合 (最大 1032 倍) を確かめる
+            if (method != 0 && method != 8) {
+                throw new IOException("Unsupported ZIP compression method " + method + " in entry: " + rawName);
+            }
+            if (method == 0 ? compSize != uncompSize : uncompSize > compSize * 1032L + 1024L) {
+                throw new IOException("Size mismatch in ZIP entry: " + rawName);
+            }
 
             final byte[] uncompressed = new byte[(int) uncompSize];
             if (method == 0) {
-                if (compSize != uncompSize) {
-                    throw new IOException("Stored size mismatch in ZIP entry: " + rawName);
-                }
                 System.arraycopy(content, (int) dataStart, uncompressed, 0, (int) uncompSize);
             } else if (method == 8) {
                 final Inflater inflater = new Inflater(true);

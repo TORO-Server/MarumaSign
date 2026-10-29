@@ -399,6 +399,8 @@ final class PlyReader {
         for (Element e : header.elements) {
             if (e == vertex) break;
             final int propsPerRow = e.properties.size();
+            // プロパティのない要素は、数がいくつでも読むものがない (数だけ回すと、数千万回の空回りを要素の数だけ繰り返す)
+            if (propsPerRow == 0) continue;
             for (int r = 0; r < e.count; r++) {
                 for (int p = 0; p < propsPerRow; p++) {
                     cursor = skipAsciiToken(content, cursor);
@@ -429,6 +431,10 @@ final class PlyReader {
 
         final int total = vertex.count;
         final int numProps = vertex.properties.size();
+        // 値は 1 文字以上で、空白で区切られている。書かれた数の値が入らない長さなら、配列を確保する前に断る
+        if ((long) total * numProps * 2 - 1 > content.length - cursor) {
+            throw new IOException("Truncated ASCII PLY data");
+        }
         final float[] rowValues = new float[numProps];
         final int[] rowOffsets = new int[total];
         final float[] rawPositions = new float[total * 3];

@@ -151,6 +151,31 @@ public final class SignLimitsCheck {
             if (playing.get(i) != i) nearest = false;
         }
         check("the nearest videos are the ones playing", nearest);
+        checkStaleDistance(platform, texts);
+    }
+
+    /**
+     * 再生していない動画が遠ざかったら、その新しい距離で比べる。
+     * 以前は、再生していない動画の距離が tick ごとに新しくならず、近かったときの距離のまま残っていた。
+     * そのため、遠くの動画が近い動画より先に選ばれ、近い動画が止められて、次の tick で最初から再生し直しになっていた。
+     */
+    private static void checkStaleDistance(FakePlatform platform, String[] texts) throws Exception {
+        final int last = SignManager.MAX_PLAYING - 1;
+        final double[] distances = new double[texts.length];
+        for (int i = 0; i < texts.length; i++) distances[i] = i + 1;
+        run(platform, texts, distances, 40);
+        // 再生されていない動画 (MAX_PLAYING 番目) が遠ざかる
+        distances[last + 1] = 100;
+        run(platform, texts, distances, 20);
+        // 再生中の一番遠い動画が、遠ざかった動画の前の距離 (last + 2) より少しだけ遠ざかる。それでも、ほかの動画よりは近い
+        distances[last] = last + 2.5;
+        boolean kept = true, far = false;
+        for (int tick = 0; tick < 20; tick++) {
+            run(platform, texts, distances, 1);
+            kept &= MarumaSign.sign(texts[last]).textureEntry().mediaGain() >= 0;
+            far |= MarumaSign.sign(texts[last + 1]).textureEntry().mediaGain() >= 0;
+        }
+        check("a playing video is not stopped for a farther one that was near before", kept && !far);
     }
 
     /**
@@ -166,6 +191,20 @@ public final class SignLimitsCheck {
                 for (int i = 0; i < texts.length; i++) {
                     final SignImage image = MarumaSign.sign(texts[i]);
                     image.texture(distance < 0 ? i + 1 : distance);
+                }
+                Thread.sleep(16);
+            }
+        }
+    }
+
+    // 看板 i までの距離を distances[i] として、tick と描画を ticks 回くり返す
+    private static void run(FakePlatform platform, String[] texts, double[] distances, int ticks) throws Exception {
+        for (int tick = 0; tick < ticks; tick++) {
+            MarumaSign.tick();
+            for (int frame = 0; frame < 3; frame++) {
+                platform.runTasks();
+                for (int i = 0; i < texts.length; i++) {
+                    MarumaSign.sign(texts[i]).texture(distances[i]);
                 }
                 Thread.sleep(16);
             }

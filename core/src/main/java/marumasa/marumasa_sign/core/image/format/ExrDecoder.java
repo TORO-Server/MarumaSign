@@ -21,6 +21,9 @@ final class ExrDecoder {
         int offset;
     }
 
+    // 1 ピクセルのバイト数の上限 (小数 32 ビットのチャンネルなら 128 個)
+    private static final int MAX_PIXEL_BYTES = 512;
+
     private ExrDecoder() {
     }
 
@@ -49,7 +52,7 @@ final class ExrDecoder {
             final int typeEnd = indexOf(d, nameEnd + 1);
             final int size = FormatUtil.s32le(d, typeEnd + 1);
             final int body = typeEnd + 5;
-            if (size < 0 || body + size > d.length) throw new IOException("Invalid EXR attribute");
+            if (size < 0 || (long) body + size > d.length) throw new IOException("Invalid EXR attribute");
             if (name.equals("channels")) {
                 int q = body;
                 while (q < body + size && d[q] != 0) {
@@ -84,7 +87,13 @@ final class ExrDecoder {
             if (c.type < 0 || c.type > 2) throw new IOException("Unsupported EXR pixel type");
         }
 
-        // 1 行分の中の、チャンネルごとの位置
+        // 1 行分の中の、チャンネルごとの位置。1 ピクセルの大きさに上限を設ける
+        // (チャンネルをたくさん並べた小さなファイルで、展開用に大きな領域を確保させないように)
+        int pixelBytes = 0;
+        for (Channel c : channels) {
+            pixelBytes += c.type == 1 ? 2 : 4;
+            if (pixelBytes > MAX_PIXEL_BYTES) throw new IOException("EXR has too many channels");
+        }
         int lineBytes = 0;
         for (Channel c : channels) {
             c.offset = lineBytes;
@@ -98,8 +107,14 @@ final class ExrDecoder {
         final int gray = wanted[0] < 0 && wanted[1] < 0 && wanted[2] < 0 ? find(channels, "Y") : -1;
         if (gray < 0 && (wanted[0] < 0 || wanted[1] < 0 || wanted[2] < 0)) throw new IOException("EXR has no RGB channels");
 
-        final float[][] planes = new float[4][];
-        for (int i = 0; i < 4; i++) if (wanted[i] >= 0 || (i == 0 && gray >= 0)) planes[i] = new float[w * h];
+        // 塊を展開するたびに、その行を色にして結果に書く (チャンネルごとの小数の領域は作らない)
+        final int[] result = new int[w * h];
+        final Channel red = channels.get(gray >= 0 ? gray : wanted[0]);
+        final Channel green = gray >= 0 ? red : channels.get(wanted[1]);
+        final Channel blue = gray >= 0 ? red : channels.get(wanted[2]);
+        final Channel alpha = wanted[3] >= 0 ? channels.get(wanted[3]) : null;
+        // 塊のない行は、透明度がなければ黒にする
+        if (alpha == null) java.util.Arrays.fill(result, 0xFF000000);
         for (int block = 0; block < blocks; block++) {
             final long offset = FormatUtil.u32le(d, p + block * 8) | FormatUtil.u32le(d, p + block * 8 + 4) << 32;
             if (offset < 0 || offset + 8 > d.length) throw new IOException("Invalid EXR chunk offset");
@@ -111,34 +126,31 @@ final class ExrDecoder {
             final int expected = lineBytes * rows;
             final byte[] raw = unpack(d, (int) offset + 8, size, expected, compression, channels, w, rows);
             for (int r = 0; r < rows; r++) {
-                for (int i = 0; i < 4; i++) {
-                    final int channelIndex = i == 0 && gray >= 0 ? gray : wanted[i];
-                    if (channelIndex < 0 || planes[i] == null) continue;
-                    final Channel c = channels.get(channelIndex);
-                    // 展開したあとの並びは、1 行ごとにチャンネル順
-                    final int base = r * lineBytes + c.offset;
-                    final int row = (y - yMin + r) * w;
-                    for (int x = 0; x < w; x++) {
-                        planes[i][row + x] = c.type == 1 ? half(raw, base + x * 2) : (c.type == 2 ? Float.intBitsToFloat(FormatUtil.s32le(raw, base + x * 4))
-                                : (float) FormatUtil.u32le(raw, base + x * 4));
+                // 展開したあとの並びは、1 行ごとにチャンネル順
+                final int base = r * lineBytes;
+                final int row = (y - yMin + r) * w;
+                for (int x = 0; x < w; x++) {
+                    final float a = alpha == null ? 1f : Math.max(0f, Math.min(1f, sample(raw, base, alpha, x)));
+                    float rr = sample(raw, base, red, x), gg = sample(raw, base, green, x), bb = sample(raw, base, blue, x);
+                    // 色は透明度を掛けてある (乗算済み) ので、割って元に戻す
+                    if (alpha != null && a > 0 && a < 1) {
+                        rr /= a;
+                        gg /= a;
+                        bb /= a;
                     }
+                    result[row + x] = FormatUtil.argb(Math.round(a * 255), FormatUtil.srgb(rr), FormatUtil.srgb(gg), FormatUtil.srgb(bb));
                 }
             }
         }
-
-        final int[] result = new int[w * h];
-        for (int i = 0; i < result.length; i++) {
-            final float a = planes[3] == null ? 1f : Math.max(0f, Math.min(1f, planes[3][i]));
-            float r = planes[0][i], g = gray >= 0 ? r : planes[1][i], b = gray >= 0 ? r : planes[2][i];
-            // 色は透明度を掛けてある (乗算済み) ので、割って元に戻す
-            if (planes[3] != null && a > 0 && a < 1) {
-                r /= a;
-                g /= a;
-                b /= a;
-            }
-            result[i] = FormatUtil.argb(Math.round(a * 255), FormatUtil.srgb(r), FormatUtil.srgb(g), FormatUtil.srgb(b));
-        }
         return FormatUtil.still(w, h, result);
+    }
+
+    // 展開した 1 行の中の、あるチャンネルの x 番目の値
+    private static float sample(byte[] raw, int base, Channel c, int x) {
+        final int p = base + c.offset;
+        if (c.type == 1) return half(raw, p + x * 2);
+        if (c.type == 2) return Float.intBitsToFloat(FormatUtil.s32le(raw, p + x * 4));
+        return (float) FormatUtil.u32le(raw, p + x * 4);
     }
 
     private static int indexOf(byte[] d, int from) throws IOException {

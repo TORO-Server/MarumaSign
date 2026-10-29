@@ -25,6 +25,7 @@ public final class DdsDecoder {
     private static final int BC5S = 0x53354342;
     private static final int DX10 = 0x30315844;
 
+    private static final int DDSD_PITCH = 0x8;
     private static final int DDPF_ALPHAPIXELS = 0x1;
     private static final int DDPF_FOURCC = 0x4;
     private static final int DDPF_PALETTEINDEXED8 = 0x20;
@@ -106,6 +107,12 @@ public final class DdsDecoder {
             }
         }
 
+        // どの形式でも 1 ピクセルに 0.5 バイト以上要る (圧縮は 4x4 のブロックごとに 8 バイト以上、圧縮していないものは 1 バイト以上)。
+        // 展開した結果を入れる領域は、データがそれだけあることを確かめてから確保する (幅と高さだけを大きく書いた小さなファイルで、メモリを使い切らせないように)。
+        // ブロックの数で数えると、圧縮していない小さな画像 (8 ビットの 5x2 など) では本当に要る量より多くなり、正しいファイルが読めなかった
+        if ((long) offset + (long) width * height / 2 > data.length) {
+            throw new IOException("DDS data truncated");
+        }
         final int[] argb = new int[width * height];
 
         if (dxgiFormat != 0) {
@@ -113,8 +120,10 @@ public final class DdsDecoder {
         } else if ((pfFlags & DDPF_FOURCC) != 0) {
             decodeFourCC(data, offset, width, height, fourCC, argb);
         } else if ((pfFlags & (DDPF_RGB | DDPF_LUMINANCE)) != 0) {
+            // 行の長さ (DDSD_PITCH が立っていれば書かれている)。古い書き出し方の 4 バイト揃えにも合わせる
+            final int headerPitch = (readIntLE(data, 8) & DDSD_PITCH) != 0 ? readIntLE(data, 20) : 0;
             decodeUncompressed(data, offset, width, height, rgbBitCount, rMask, gMask, bMask, aMask, (pfFlags & DDPF_ALPHAPIXELS) != 0,
-                    (pfFlags & DDPF_LUMINANCE) != 0, argb);
+                    (pfFlags & DDPF_LUMINANCE) != 0, headerPitch, argb);
         } else if ((pfFlags & DDPF_PALETTEINDEXED8) != 0) {
             decodePalette(data, offset, width, height, argb);
         } else {
@@ -208,15 +217,15 @@ public final class DdsDecoder {
                 break;
             case DXGI_FORMAT_R8G8B8A8_UNORM:
             case DXGI_FORMAT_R8G8B8A8_UNORM_SRGB:
-                decodeUncompressed(data, offset, width, height, 32, 0x000000FF, 0x0000FF00, 0x00FF0000, 0xFF000000, true, false, out);
+                decodeUncompressed(data, offset, width, height, 32, 0x000000FF, 0x0000FF00, 0x00FF0000, 0xFF000000, true, false, 0, out);
                 break;
             case DXGI_FORMAT_B8G8R8A8_UNORM:
             case DXGI_FORMAT_B8G8R8A8_UNORM_SRGB:
-                decodeUncompressed(data, offset, width, height, 32, 0x00FF0000, 0x0000FF00, 0x000000FF, 0xFF000000, true, false, out);
+                decodeUncompressed(data, offset, width, height, 32, 0x00FF0000, 0x0000FF00, 0x000000FF, 0xFF000000, true, false, 0, out);
                 break;
             case DXGI_FORMAT_B8G8R8X8_UNORM:
             case DXGI_FORMAT_B8G8R8X8_UNORM_SRGB:
-                decodeUncompressed(data, offset, width, height, 32, 0x00FF0000, 0x0000FF00, 0x000000FF, 0, false, false, out);
+                decodeUncompressed(data, offset, width, height, 32, 0x00FF0000, 0x0000FF00, 0x000000FF, 0, false, false, 0, out);
                 break;
             default:
                 throw new IOException("Unsupported DDS DXGI format: " + dxgiFormat);
@@ -227,7 +236,7 @@ public final class DdsDecoder {
     private static void decodeBc1(byte[] data, int offset, int width, int height, int[] out) throws IOException {
         final int blocksX = (width + 3) / 4;
         final int blocksY = (height + 3) / 4;
-        final int required = offset + blocksX * blocksY * 8;
+        final long required = (long) offset + (long) blocksX * blocksY * 8;
         if (required > data.length || required < 0) {
             throw new IOException("BC1 data truncated");
         }
@@ -282,7 +291,7 @@ public final class DdsDecoder {
     private static void decodeBc2(byte[] data, int offset, int width, int height, int[] out) throws IOException {
         final int blocksX = (width + 3) / 4;
         final int blocksY = (height + 3) / 4;
-        final int required = offset + blocksX * blocksY * 16;
+        final long required = (long) offset + (long) blocksX * blocksY * 16;
         if (required > data.length || required < 0) {
             throw new IOException("BC2 data truncated");
         }
@@ -337,7 +346,7 @@ public final class DdsDecoder {
     private static void decodeBc3(byte[] data, int offset, int width, int height, int[] out) throws IOException {
         final int blocksX = (width + 3) / 4;
         final int blocksY = (height + 3) / 4;
-        final int required = offset + blocksX * blocksY * 16;
+        final long required = (long) offset + (long) blocksX * blocksY * 16;
         if (required > data.length || required < 0) {
             throw new IOException("BC3 data truncated");
         }
@@ -414,7 +423,7 @@ public final class DdsDecoder {
     private static void decodeBc4(byte[] data, int offset, int width, int height, boolean signed, int[] out) throws IOException {
         final int blocksX = (width + 3) / 4;
         final int blocksY = (height + 3) / 4;
-        final int required = offset + blocksX * blocksY * 8;
+        final long required = (long) offset + (long) blocksX * blocksY * 8;
         if (required > data.length || required < 0) {
             throw new IOException("BC4 data truncated");
         }
@@ -490,7 +499,7 @@ public final class DdsDecoder {
     private static void decodeBc5(byte[] data, int offset, int width, int height, boolean signed, int[] out) throws IOException {
         final int blocksX = (width + 3) / 4;
         final int blocksY = (height + 3) / 4;
-        final int required = offset + blocksX * blocksY * 16;
+        final long required = (long) offset + (long) blocksX * blocksY * 16;
         if (required > data.length || required < 0) {
             throw new IOException("BC5 data truncated");
         }
@@ -547,7 +556,7 @@ public final class DdsDecoder {
     private static void decodeBc7(byte[] data, int offset, int width, int height, int[] out) throws IOException {
         final int blocksX = (width + 3) / 4;
         final int blocksY = (height + 3) / 4;
-        final int required = offset + blocksX * blocksY * 16;
+        final long required = (long) offset + (long) blocksX * blocksY * 16;
         if (required > data.length || required < 0) {
             throw new IOException("BC7 data truncated");
         }
@@ -577,8 +586,11 @@ public final class DdsDecoder {
     // 非圧縮 (RGBA/BGRA/RGB/BGR/Luminance 等)
     private static void decodeUncompressed(byte[] data, int offset, int width, int height,
                                            int rgbBitCount, int rMask, int gMask, int bMask, int aMask,
-                                           boolean hasAlpha, boolean luminance, int[] out) throws IOException {
-        if (rgbBitCount <= 0 || rgbBitCount > 32) throw new IOException("Unsupported DDS bit count: " + rgbBitCount);
+                                           boolean hasAlpha, boolean luminance, int headerPitch, int[] out) throws IOException {
+        // 1 ピクセルを 1 バイトずつ読むので、8 の倍数でないビット数 (1 ピクセルが 1 バイトより小さい形式) は読めない
+        if (rgbBitCount != 8 && rgbBitCount != 16 && rgbBitCount != 24 && rgbBitCount != 32) {
+            throw new IOException("Unsupported DDS bit count: " + rgbBitCount);
+        }
         if (luminance && rgbBitCount < 32 && (rMask >>> rgbBitCount) != 0) {
             // 画素より広いマスクが書かれていることがある。明るさは下位のビット、透明度は残りのビットとみなす
             final int lumaBits = (aMask != 0 && hasAlpha) ? rgbBitCount / 2 : rgbBitCount;
@@ -586,8 +598,15 @@ public final class DdsDecoder {
             if (hasAlpha && aMask != 0) aMask = ((1 << rgbBitCount) - 1) & ~rMask;
         }
         final int bytesPerPixel = (rgbBitCount + 7) / 8;
-        final int rowPitch = ((width * rgbBitCount + 31) / 32) * 4;
-        final int required = offset + (height - 1) * rowPitch + width * bytesPerPixel;
+        // 行はバイト単位で詰めて並ぶ (DDS の仕様: (幅 * ビット数 + 7) / 8)。以前は 4 バイト揃えとして読んでいたので、
+        // 1 行が 4 の倍数のバイトでない画像 (幅 3 の 24 ビットなど) は、途中で切れているとして読めないか、斜めにずれていた。
+        // ただし見出しに 4 バイト揃えまでの行の長さが書かれていて、データもそれだけあれば、その長さを使う (古い D3DX の書き出し)
+        int rowPitch = (int) (((long) width * rgbBitCount + 7) / 8);
+        if (headerPitch > rowPitch && headerPitch <= ((long) width * rgbBitCount + 31) / 32 * 4
+                && (long) offset + (long) (height - 1) * headerPitch + (long) width * bytesPerPixel <= data.length) {
+            rowPitch = headerPitch;
+        }
+        final long required = (long) offset + (long) (height - 1) * rowPitch + (long) width * bytesPerPixel;
         if (required > data.length || required < 0) {
             throw new IOException("Uncompressed DDS data truncated");
         }

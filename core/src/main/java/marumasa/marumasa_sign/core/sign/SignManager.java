@@ -8,8 +8,9 @@ import marumasa.marumasa_sign.core.gltf.TextureAnimation;
 import marumasa.marumasa_sign.core.image.DecodedImage;
 import marumasa.marumasa_sign.core.image.ImageLoader;
 import marumasa.marumasa_sign.core.media.Ffmpeg;
-import marumasa.marumasa_sign.core.splat.SplatScene;
 import marumasa.marumasa_sign.core.pdf.PdfFile;
+import marumasa.marumasa_sign.core.splat.SplatScene;
+import marumasa.marumasa_sign.core.util.Clock;
 
 import java.awt.BasicStroke;
 import java.awt.Color;
@@ -59,7 +60,7 @@ public final class SignManager {
         final TextureEntry entry;
         final GltfModel model;
         final Object[] textures;
-        final long start = System.currentTimeMillis();
+        final long start = Clock.millis();
 
         AnimatedModel(String url, TextureEntry entry, GltfModel model, Object[] textures) {
             this.url = url;
@@ -98,6 +99,9 @@ public final class SignManager {
 
         SignImage image = signs.get(text);
         if (image != null) {
+            // 描くための計算で例外が出たものは描かない (看板そのものを表示する)。
+            // 使われていないものとして、しばらくすると消えるので、そのあとでもう一度試す
+            if (image.isBroken()) return null;
             touch(image);
             return image;
         }
@@ -112,7 +116,7 @@ public final class SignManager {
     }
 
     private static void touch(SignImage image) {
-        image.lastUsed = System.currentTimeMillis();
+        image.lastUsed = Clock.millis();
         image.textureEntry().touch();
     }
 
@@ -126,7 +130,7 @@ public final class SignManager {
         }
         if (total <= MAX_BYTES) return true;
         final List<Map.Entry<String, TextureEntry>> idle = new ArrayList<Map.Entry<String, TextureEntry>>();
-        final long now = System.currentTimeMillis();
+        final long now = Clock.millis();
         for (Map.Entry<String, TextureEntry> item : textures.entrySet()) {
             final TextureEntry entry = item.getValue();
             if (entry != keep && entry.bytes() > 0 && now - entry.lastUsed() > IDLE_MILLIS) idle.add(item);
@@ -241,6 +245,12 @@ public final class SignManager {
                     }
                 });
             }
+
+            @Override
+            public boolean isWanted() {
+                // 順番を待つ間に消されていれば (evict、clearCache)、読み込まない。textures はどのスレッドからも読める
+                return textures.get(url) == created;
+            }
         });
         return created;
     }
@@ -254,13 +264,16 @@ public final class SignManager {
             fail(url, entry);
             return;
         }
+        final Object[] frames = new Object[count];
         try {
-            final Object[] frames = new Object[count];
             final int[] frameEnd = new int[count];
             int time = 0;
+            // 1 コマの時間は、全部を足しても int に収まるまでにする。APNG (1 コマ 65535 秒まで) や WebP (約 4.6 時間まで) の
+            // 長い時間のコマが多いと、足した時間があふれて負や前後の逆転した値になり、違うコマを表示していた
+            final int maxDelay = Integer.MAX_VALUE / count;
             for (int i = 0; i < count; i++) {
                 frames[i] = platform.createTexture(decoded.width, decoded.height, decoded.frames[i]);
-                time += Math.max(1, decoded.delays[i]);
+                time += Math.min(maxDelay, Math.max(1, decoded.delays[i]));
                 frameEnd[i] = time;
             }
             entry.set(TextureEntry.LOADED, decoded.width, decoded.height, frames, frameEnd, decoded.repetitions, true);
@@ -269,6 +282,11 @@ public final class SignManager {
         } catch (RuntimeException | Error e) {
             // スケジュールされたタスクの中の例外は呼び出し元で捨てられるため、ここで記録する
             MarumaSign.LOGGER.error("Failed to register texture: " + url, e);
+            // 途中のフレームで失敗しても、それまでに作ったテクスチャは消す (fail の後は、このエントリが持たないので消されない)
+            for (Object texture : frames) {
+                MarumaSign.releaseTexture(platform, texture);
+            }
+            entry.setBytes(0);
             fail(url, entry);
         }
     }
@@ -355,8 +373,16 @@ public final class SignManager {
             @Override
             public void onReady(int width, int height) {
                 if (textures.get(url) != entry) return;
-                // 映像のフレーム (この中と GPU の 2 つ分)
-                entry.setBytes(8L * width * height);
+                // 映像のフレーム (この中と GPU の 2 つ分)。画像と同じく上限の中に収め、収まらなければ再生しない
+                final long bytes = 8L * width * height;
+                if (bytes > 0 && !makeRoom(entry, bytes)) {
+                    holder[0].close();
+                    sessions.remove(holder[0]);
+                    entry.setMedia(null);
+                    fail(url, entry);
+                    return;
+                }
+                entry.setBytes(bytes);
                 if (width > 0) {
                     // テクスチャは再生の側が持っているので、ここでは所有しない
                     entry.set(TextureEntry.LOADED, width, height, new Object[]{holder[0].texture()}, new int[]{1}, 0, false);
@@ -435,7 +461,7 @@ public final class SignManager {
                 animated.remove(i);
                 continue;
             }
-            final long tick = (System.currentTimeMillis() - item.start) / 50;
+            final long tick = (Clock.millis() - item.start) / 50;
             for (TextureAnimation animation : item.model.textureAnimations()) {
                 final int[] pixels = animation.update(tick);
                 if (pixels == null) continue;
@@ -470,7 +496,7 @@ public final class SignManager {
 
     // 長く描かれていないものを消す
     private void evictUnused() {
-        final long now = System.currentTimeMillis();
+        final long now = Clock.millis();
         for (Map.Entry<String, TextureEntry> item : textures.entrySet()) {
             if (now - item.getValue().lastUsed() > UNUSED_MILLIS) evict(item.getKey(), item.getValue());
         }

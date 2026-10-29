@@ -83,8 +83,11 @@ public final class UrlPolicy {
     }
 
     private static boolean isLocalName(String host) {
-        final String name = host.toLowerCase(Locale.ROOT);
-        return name.equals("localhost") || name.endsWith(".localhost") || name.endsWith(".local") || name.endsWith(".internal")
+        // 最後の点 (localhost. や printer.local. の書き方) を除いてから比べる。除かないと、名前で止められず、
+        // 名前を引けない環境では通してしまう
+        String name = host.toLowerCase(Locale.ROOT);
+        while (name.endsWith(".")) name = name.substring(0, name.length() - 1);
+        return name.isEmpty() || name.equals("localhost") || name.endsWith(".localhost") || name.endsWith(".local") || name.endsWith(".internal")
                 || name.endsWith(".lan") || name.endsWith(".home.arpa");
     }
 
@@ -110,6 +113,24 @@ public final class UrlPolicy {
             // ::ffff:a.b.c.d と、古い書き方の ::a.b.c.d
             if (zeros && (((raw[10] & 0xFF) == 0xFF && (raw[11] & 0xFF) == 0xFF) || (raw[10] == 0 && raw[11] == 0))) {
                 return isLocalIpv4(raw[12], raw[13], raw[14], raw[15]);
+            }
+            // IPv4 を訳した書き方の ::ffff:0:a.b.c.d (SIIT)。訳す仕組みのあるネットワークでは、中の IPv4 につながる
+            boolean translated = true;
+            for (int i = 0; i < 8; i++) {
+                if (raw[i] != 0) translated = false;
+            }
+            if (translated && (raw[8] & 0xFF) == 0xFF && (raw[9] & 0xFF) == 0xFF && raw[10] == 0 && raw[11] == 0) {
+                return isLocalIpv4(raw[12], raw[13], raw[14], raw[15]);
+            }
+            // 組織の中だけで使う NAT64 の 64:ff9b:1::/48。IPv4 が埋め込まれる位置が決まっていないので、すべて止める
+            if ((raw[0] & 0xFF) == 0x00 && (raw[1] & 0xFF) == 0x64 && (raw[2] & 0xFF) == 0xFF && (raw[3] & 0xFF) == 0x9B
+                    && raw[4] == 0 && raw[5] == 1) {
+                return true;
+            }
+            // Teredo の 2001:0::/32。中のサーバーの IPv4 と、反転して入っている利用者の IPv4 の両方を確かめる
+            if ((raw[0] & 0xFF) == 0x20 && (raw[1] & 0xFF) == 0x01 && raw[2] == 0 && raw[3] == 0) {
+                return isLocalIpv4(raw[4], raw[5], raw[6], raw[7])
+                        || isLocalIpv4((byte) ~raw[12], (byte) ~raw[13], (byte) ~raw[14], (byte) ~raw[15]);
             }
             // NAT64 の 64:ff9b::a.b.c.d
             if ((raw[0] & 0xFF) == 0x00 && (raw[1] & 0xFF) == 0x64 && (raw[2] & 0xFF) == 0xFF && (raw[3] & 0xFF) == 0x9B) {

@@ -2,7 +2,7 @@ package marumasa.marumasa_sign.core.image.format;
 
 import marumasa.marumasa_sign.core.image.ArgbPixels;
 import marumasa.marumasa_sign.core.image.DecodedImage;
-import marumasa.marumasa_sign.core.image.ImageBytes;
+import marumasa.marumasa_sign.core.image.ImageLoader;
 
 import java.awt.image.BufferedImage;
 import java.io.IOException;
@@ -52,7 +52,7 @@ final class IcoDecoder {
     private static DecodedImage decodeEntry(byte[] d, int offset, int size) throws IOException {
         if (size >= 8 && (d[offset] & 0xFF) == 0x89 && d[offset + 1] == 'P') {
             final byte[] png = java.util.Arrays.copyOfRange(d, offset, offset + size);
-            final BufferedImage image = ImageBytes.read(png);
+            final BufferedImage image = FormatUtil.readEmbedded(png);
             if (image == null) throw new IOException("Invalid PNG in ICO");
             FormatUtil.checkSize(image.getWidth(), image.getHeight());
             return FormatUtil.still(image.getWidth(), image.getHeight(), ArgbPixels.readDisplay(image));
@@ -68,7 +68,7 @@ final class IcoDecoder {
         final List<Long> rates = new ArrayList<Long>();
         final List<Integer> sequence = new ArrayList<Integer>();
         final List<DecodedImage> frames = new ArrayList<DecodedImage>();
-        parse(d, 12, d.length, defaultJiffies, rates, sequence, frames);
+        parse(d, 12, d.length, defaultJiffies, rates, sequence, frames, true);
         if (frames.isEmpty()) throw new IOException("ANI has no frames");
 
         // 並びの指定 (seq) があればその順に、なければ入っている順に出す
@@ -78,6 +78,10 @@ final class IcoDecoder {
             width = Math.max(width, frame.width);
             height = Math.max(height, frame.height);
         }
+        // コマの数と、全部のコマのピクセル数の合計を、領域を確保する前に確かめる
+        if (steps > ImageLoader.MAX_ANIMATION_FRAMES || (long) steps * width * height > ImageLoader.MAX_ANIMATION_PIXELS) {
+            throw new IOException("ANI animation exceeds safety limits");
+        }
         final int[][] pixels = new int[steps][];
         final int[] delays = new int[steps];
         for (int i = 0; i < steps; i++) {
@@ -85,7 +89,8 @@ final class IcoDecoder {
             final DecodedImage frame = frames.get(Math.max(index, 0));
             pixels[i] = place(frame, width, height);
             final long jiffies = i < rates.size() ? rates.get(i) : (rates.size() == 1 ? rates.get(0) : defaultJiffies[0]);
-            delays[i] = (int) Math.max(20, jiffies * 1000 / 60);
+            // 大きな値で int があふれないよう、1 日で頭打ちにする
+            delays[i] = (int) Math.max(20, Math.min(jiffies, 60L * 60 * 60 * 24) * 1000 / 60);
         }
         return new DecodedImage(width, height, pixels, delays, 0);
     }
@@ -99,9 +104,15 @@ final class IcoDecoder {
         return result;
     }
 
+    /**
+     * @param top いちばん外側か。コマの一覧 (LIST fram) は、いちばん外側にだけあるものを読む (入れ子を深くして、スタックを使い切らせないように)
+     */
     private static void parse(byte[] d, int start, int end, long[] defaultJiffies, List<Long> rates, List<Integer> sequence,
-                              List<DecodedImage> frames) throws IOException {
+                              List<DecodedImage> frames, boolean top) throws IOException {
         int p = start;
+        // 全部のコマのピクセル数の合計
+        long pixels = 0;
+        for (DecodedImage frame : frames) pixels += (long) frame.width * frame.height;
         while (p + 8 <= end) {
             final String id = new String(d, p, 4, java.nio.charset.StandardCharsets.ISO_8859_1);
             final long size = FormatUtil.u32le(d, p + 4);
@@ -114,10 +125,13 @@ final class IcoDecoder {
             } else if (id.equals("seq ")) {
                 for (int q = body; q + 4 <= bodyEnd; q += 4) sequence.add((int) Math.min(FormatUtil.u32le(d, q), Integer.MAX_VALUE));
             } else if (id.equals("LIST")) {
-                if (FormatUtil.matchesAt(d, end, body, "fram")) parse(d, body + 4, bodyEnd, defaultJiffies, rates, sequence, frames);
+                if (top && FormatUtil.matchesAt(d, end, body, "fram")) parse(d, body + 4, bodyEnd, defaultJiffies, rates, sequence, frames, false);
             } else if (id.equals("icon")) {
-                if (frames.size() >= 512) throw new IOException("ANI has too many frames");
-                frames.add(decode(java.util.Arrays.copyOfRange(d, body, bodyEnd)));
+                if (frames.size() >= ImageLoader.MAX_ANIMATION_FRAMES) throw new IOException("ANI has too many frames");
+                final DecodedImage frame = decode(java.util.Arrays.copyOfRange(d, body, bodyEnd));
+                pixels += (long) frame.width * frame.height;
+                if (pixels > ImageLoader.MAX_ANIMATION_PIXELS) throw new IOException("ANI animation exceeds safety limits");
+                frames.add(frame);
             }
             if (size + (size & 1) > end - body) break;
             p = body + (int) size + (int) (size & 1);

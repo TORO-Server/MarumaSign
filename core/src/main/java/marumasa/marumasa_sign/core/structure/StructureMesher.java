@@ -48,8 +48,24 @@ final class StructureMesher {
         // 集める四角形の数の上限。超えたら、それ以上は捨てて overflow にする (読み込み側で粗くしてやり直す)
         static final int HARD_LIMIT = StructureLoader.MAX_QUADS * 4;
         boolean overflow;
+        // 構造物から、これより離れた四角形は描かない (ます目の単位)。看板の中身は 1000 ブロックまで大きくできるので、それより広くとる
+        static final float MARGIN = 4096;
+        // 頂点を置いてよい範囲 (構造物のまわり)
+        private final float[] min = {-MARGIN, -MARGIN, -MARGIN}, max = {MARGIN, MARGIN, MARGIN};
+
+        Output(Structure structure) {
+            max[0] += structure.sizeX;
+            max[1] += structure.sizeY;
+            max[2] += structure.sizeZ;
+        }
 
         void add(int layer, float[] position, float[] uv, int[] color, Sprite sprite) {
+            // NaN や無限大、とても遠い位置 (壊れたファイルのエンティティの位置や変換) の四角形は描かない。
+            // 1 つでもあると、モデルの大きさが壊れて、構造物全体が見えなくなるため
+            for (int i = 0; i < 12; i++) {
+                final float value = position[i];
+                if (!(value >= min[i % 3] && value <= max[i % 3])) return;
+            }
             if (quadCount >= HARD_LIMIT) {
                 overflow = true;
                 return;
@@ -67,7 +83,7 @@ final class StructureMesher {
     private final BlockModels models;
     private final BiomeColors biomes;
     private final SpecialModels special;
-    private final Output output = new Output();
+    private final Output output;
 
     // パレットの番号ごとの値
     private final int[] stateIndex;
@@ -78,7 +94,12 @@ final class StructureMesher {
     private final int[] emission;
     private final int[] tintType;
     private final boolean[] specialBlock;
-    private final Map<Long, Boolean> faceCache = new HashMap<Long, Boolean>();
+    // 面を描くかどうかの結果を覚えておく、決まった大きさの表 (番号の組み合わせで場所を決め、ぶつかったら上書きする)。
+    // 組み合わせの数だけ覚えると、いろいろなブロックを混ぜて並べた大きな構造物で、メモリを使い切るため
+    private static final int FACE_CACHE_BITS = 14;
+    private final long[] faceKeys = new long[1 << FACE_CACHE_BITS];
+    // 0 はまだ覚えていない、1 は描かない、2 は描く
+    private final byte[] faceValues = new byte[1 << FACE_CACHE_BITS];
 
     // 計算用
     private final Random random = new Random();
@@ -95,6 +116,7 @@ final class StructureMesher {
         this.models = models;
         this.biomes = biomes;
         this.special = special;
+        this.output = new Output(structure);
         final int count = structure.paletteSize();
         stateIndex = new int[count];
         blocks = new BlockData.Block[count];
@@ -158,10 +180,11 @@ final class StructureMesher {
     // Block.shouldRenderFace
     private boolean shouldRenderFace(int id, int neighbor, int direction) {
         final long key = ((long) id << 32) | ((long) neighbor << 3) | direction;
-        final Boolean cached = faceCache.get(key);
-        if (cached != null) return cached;
+        final int slot = (int) ((key * 0x9E3779B97F4A7C15L) >>> (64 - FACE_CACHE_BITS));
+        if (faceValues[slot] != 0 && faceKeys[slot] == key) return faceValues[slot] == 2;
         final boolean result = computeShouldRenderFace(id, neighbor, direction);
-        faceCache.put(key, result);
+        faceKeys[slot] = key;
+        faceValues[slot] = (byte) (result ? 2 : 1);
         return result;
     }
 

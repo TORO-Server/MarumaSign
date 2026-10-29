@@ -10,7 +10,7 @@ import java.io.IOException;
  */
 public final class TextureDecoder {
 
-    private static final int MAX_TEXTURE_SIZE = 8192;
+    static final int MAX_TEXTURE_SIZE = 8192;
 
     private TextureDecoder() {
     }
@@ -50,15 +50,11 @@ public final class TextureDecoder {
         }
 
 
-        // 5. 標準形式 (PNG, JPEG 等)
+        // 5. 標準形式 (PNG, JPEG 等)。大きさは展開する前に見出しで確かめる
+        // (展開してから確かめると、幅と高さだけが大きい小さなファイルでメモリを使い切る)
         try {
-            final BufferedImage image = ImageBytes.read(data);
-            if (image != null) {
-                if (image.getWidth() > MAX_TEXTURE_SIZE || image.getHeight() > MAX_TEXTURE_SIZE) {
-                    throw new IOException("Image dimension exceeds limit: " + image.getWidth() + "x" + image.getHeight());
-                }
-                return image;
-            }
+            final BufferedImage image = ImageBytes.read(data, MAX_TEXTURE_SIZE);
+            if (image != null) return image;
         } catch (IOException e) {
             throw e;
         } catch (Exception e) {

@@ -500,17 +500,79 @@ write("tex_4", "Tex.java", tex_source(*RL, "ResourceLocation.fromNamespaceAndPat
                                       'new DynamicTexture(() -> "marumasa_sign", image)', PIXEL_ARGB, "Minecraft 1.21.5 - 1.21.10 の作り方。"))
 write("tex_3", "Tex.java", tex_source(*RL, "ResourceLocation.fromNamespaceAndPath", *RT_OLD,
                                       "new DynamicTexture(image)", PIXEL_ARGB, "Minecraft 1.21.2 - 1.21.4 の作り方。"))
-write("tex_2", "Tex.java", tex_source(*RL, "ResourceLocation.fromNamespaceAndPath", *RT_OLD,
-                                      "new DynamicTexture(image)", PIXEL_ABGR, "Minecraft 1.21 - 1.21.1 の作り方。"))
+TEX_2 = tex_source(*RL, "ResourceLocation.fromNamespaceAndPath", *RT_OLD,
+                   "new DynamicTexture(image)", PIXEL_ABGR, "Minecraft 1.21 - 1.21.1 の作り方。")
 TEX_1 = tex_source(*RL, "new ResourceLocation", *RT_OLD,
                    "new DynamicTexture(image)", PIXEL_ABGR, "Minecraft 1.20.6 以前の作り方。")
-write("tex_1", "Tex.java", TEX_1)
 
 
 def replace_once(source, old, new):
     if source.count(old) != 1:
         raise SystemExit(f"expected exactly one {old!r}")
     return source.replace(old, new)
+
+
+def add_imports(source, names):
+    """import の並びに names を加える (同じ塊の中で名前順に並べる。java. で始まるものは後ろの塊)。"""
+    lines = source.split("\n")
+    for name in names:
+        line = f"import {name};"
+        if line in lines:
+            continue
+        java = name.startswith("java.")
+        block = [i for i, text in enumerate(lines) if text.startswith("import ") and text.startswith("import java.") == java]
+        first, last = block[0], block[-1]
+        lines[first:last + 1] = sorted(lines[first:last + 1] + [line])
+    return "\n".join(lines)
+
+
+# 1.14 - 1.19.2 の TextureManager.release は OpenGL のテクスチャを消すだけで、表から外さず、画素 (NativeImage) も解放しない。
+# 表から外して閉じる処理を足す (外して閉じるようになった 1.19.3 以降では、どちらも何もしない)
+RELEASE_OLD = """    void release(Minecraft mc) {
+        mc.getTextureManager().release(id);
+    }
+"""
+RELEASE_FIXED = """    void release(Minecraft mc) {
+        final TextureManager manager = mc.getTextureManager();
+        manager.release(id);
+        // 古いバージョンの release は OpenGL のテクスチャを消すだけで、表から外さず、画素 (Java の外のメモリ) も解放しない。
+        // そのままでは、看板を読み込み直すたびに (使われなくなった看板は 5 分で消して、また見えたら読み込み直す) メモリが増え続けるので、
+        // 表から外して閉じる。外して閉じるようになったバージョンでは、どちらも何もしない (閉じたものを閉じても何も起きない)
+        forget(manager);
+        texture.close();
+    }
+
+    // テクスチャを TextureManager の表から外す
+    private void forget(TextureManager manager) {
+        if (texturesField == null) {
+            // 同じ型の表がほかにもあるので、このテクスチャが入っているもので見分ける
+            for (Field field : TextureManager.class.getDeclaredFields()) {
+                if (Modifier.isStatic(field.getModifiers()) || !Map.class.isAssignableFrom(field.getType())) continue;
+                field.setAccessible(true);
+                final Map<?, ?> map = Reflect.get(field, manager);
+                if (map != null && map.get(id) == texture) {
+                    texturesField = field;
+                    break;
+                }
+            }
+            // release が表から外すバージョンでは見つからない
+            if (texturesField == null) return;
+        }
+        final Map<?, ?> map = Reflect.get(texturesField, manager);
+        if (map != null && map.get(id) == texture) map.remove(id);
+    }
+"""
+
+
+def with_release_fix(source):
+    source = replace_once(source, RELEASE_OLD, RELEASE_FIXED)
+    source = replace_once(source, "    private static final AtomicInteger nextId = new AtomicInteger();\n",
+                          "    private static final AtomicInteger nextId = new AtomicInteger();\n"
+                          "    // TextureManager の、名前からテクスチャを引く表\n"
+                          "    private static Field texturesField;\n")
+    return add_imports(source, ["marumasa.marumasa_sign.core.util.Reflect",
+                                "net.minecraft.client.renderer.texture.TextureManager",
+                                "java.lang.reflect.Field", "java.lang.reflect.Modifier", "java.util.Map"])
 
 
 # 1.15 - 1.15.2: テクスチャを登録するメソッドの戻り値の型が 1.15.2 で変わったので、引数の型で探して呼ぶ
@@ -533,7 +595,40 @@ TEX_1R = replace_once(TEX_1R, "import marumasa.marumasa_sign.core.MarumaSign;\n"
 TEX_1R = replace_once(TEX_1R, "import java.util.concurrent.atomic.AtomicInteger;\n",
                       "import java.lang.reflect.Method;\nimport java.util.concurrent.atomic.AtomicInteger;\n")
 TEX_1R = replace_once(TEX_1R, "Minecraft 1.20.6 以前の作り方。", "Minecraft 1.15 - 1.15.2 の作り方。")
-write("tex_1r", "Tex.java", TEX_1R)
+write("tex_1r", "Tex.java", with_release_fix(TEX_1R))
+write("tex_1", "Tex.java", with_release_fix(TEX_1))
+
+# 1.21 - 1.21.1: ガウシアンスプラッティングの粒は、並べ替えをしない描画設定で描く
+TEX_2 = replace_once(TEX_2, """        this.renderType = RenderType.text(id);
+""", """        final RenderType text = RenderType.text(id);
+        if (splat) {
+            // ガウシアンスプラッティングの四角形は、SplatScene が奥から手前の順に並べてある。
+            // 文字用の設定は描く直前に四角形を並べ替え直すが、NeoForge 1.21.1 の Iris 1.8.14 と Sodium 0.8 の
+            // 組み合わせではこの並べ替えで順番が崩れ、手前の粒が奥の粒を隠して、粒が 1 つずつ浮き出て見える。
+            // そのため、並べ替えだけをしない同じ設定で描く
+            this.renderType = new RenderType(MarumaSign.MOD_ID + "_splat", text.format(), text.mode(),
+                    text.bufferSize(), false, false, text::setupRenderState, text::clearRenderState) {
+            };
+        } else {
+            this.renderType = text;
+        }
+""")
+TEX_2 = replace_once(TEX_2, "    private Tex(ResourceLocation id, DynamicTexture texture) {\n",
+                     "    private Tex(ResourceLocation id, DynamicTexture texture, boolean splat) {\n")
+TEX_2 = replace_once(TEX_2, "        return new Tex(id, texture);\n    }\n", """        return new Tex(id, texture, isSplatTexture(width, height, argb));
+    }
+
+    // ガウシアンスプラッティングの粒に使う、共通のテクスチャかどうか (中身で見分ける)
+    private static boolean isSplatTexture(int width, int height, int[] argb) {
+        return width == SplatScene.TEXTURE_SIZE && height == SplatScene.TEXTURE_SIZE
+                && Arrays.equals(argb, SplatScene.gaussianTexture());
+    }
+""")
+TEX_2 = replace_once(TEX_2, "import marumasa.marumasa_sign.core.MarumaSign;\n",
+                     "import marumasa.marumasa_sign.core.MarumaSign;\nimport marumasa.marumasa_sign.core.splat.SplatScene;\n")
+TEX_2 = replace_once(TEX_2, "import java.util.concurrent.atomic.AtomicInteger;\n",
+                     "import java.util.Arrays;\nimport java.util.concurrent.atomic.AtomicInteger;\n")
+write("tex_2", "Tex.java", TEX_2)
 
 # ---------------------------------------------------------------- classic
 
@@ -1463,7 +1558,7 @@ ERAS.update({
 # ---- 1.14 ----
 
 # 1.14: 描画設定の仕組みがまだないので、テクスチャの識別子だけを持つ
-write("tex_0", "Tex.java", r"""
+write("tex_0", "Tex.java", with_release_fix(r"""
 package marumasa.marumasa_sign.adapter;
 
 import com.mojang.blaze3d.platform.NativeImage;
@@ -1518,7 +1613,7 @@ final class Tex {
         mc.getTextureManager().release(id);
     }
 }
-""")
+"""))
 
 # 1.14: 看板レンダラーはカメラからの位置を直接受け取り、OpenGL で描く
 write("ber14", "SignRendererBase.java", r"""

@@ -1,7 +1,9 @@
 package marumasa.marumasa_sign.core.gltf;
 
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 
 /**
  * 読み込んだモデルを、ある時刻の姿勢で三角形の列にする。
@@ -44,7 +46,7 @@ public final class GltfScene {
     private final float[][] weights;
     private final float[] local;
     private final float[] global;
-    private float posedTime = Float.NaN;
+    private double posedTime = Double.NaN;
     private float[] restBounds;
 
     // 材質の動的プロパティ
@@ -55,6 +57,14 @@ public final class GltfScene {
     private final float[] matTexOffset;
     private final float[] matTexScale;
     private final float[] matTexRotation;
+    // KHR_animation_pointer で動かす材質の値 (ファイルと同じ、光の強さに比例する値)。姿勢を決めたあとで上の値に直す
+    private final float[] matBaseFactor;
+    private final float[] matEmissiveFactor;
+    private final float[] matMetallicFactor;
+    private final float[] matRoughnessFactor;
+    // 材質ごとの、アニメーションで動かす値 (ANIMATED_* の組み合わせ)
+    private final int[] animatedMaterials;
+    private static final int ANIMATED_COLOR = 1, ANIMATED_EMISSIVE = 2, ANIMATED_METALLIC = 4, ANIMATED_ROUGHNESS = 8;
 
     // ライトの動的プロパティとシーンライト
     private final float[] lightColors;
@@ -77,6 +87,7 @@ public final class GltfScene {
     private float[] dynamicUv = new float[0];
     private int[] front = new int[0];
     private int[] back = new int[0];
+    private int[] activeTargets = new int[0];
     private final float[] lit = new float[3];
     private final int[] cursor;
     // 描画する座標の法線を、モデルの座標に戻すための行列 (配置の行列の左上 3x3 の転置)
@@ -100,6 +111,20 @@ public final class GltfScene {
         matTexOffset = new float[matCount * 2];
         matTexScale = new float[matCount * 2];
         matTexRotation = new float[matCount];
+        matBaseFactor = new float[matCount * 4];
+        matEmissiveFactor = new float[matCount * 3];
+        matMetallicFactor = new float[matCount];
+        matRoughnessFactor = new float[matCount];
+        animatedMaterials = new int[matCount];
+        if (model.animations.length > 0) {
+            for (GltfModel.Channel channel : model.animations[0].channels) {
+                final int flag = channel.targetType == GltfModel.TARGET_MATERIAL_COLOR ? ANIMATED_COLOR
+                        : channel.targetType == GltfModel.TARGET_MATERIAL_EMISSIVE ? ANIMATED_EMISSIVE
+                        : channel.targetType == GltfModel.TARGET_MATERIAL_METALLIC ? ANIMATED_METALLIC
+                        : channel.targetType == GltfModel.TARGET_MATERIAL_ROUGHNESS ? ANIMATED_ROUGHNESS : 0;
+                if (flag != 0) animatedMaterials[channel.targetIndex] |= flag;
+            }
+        }
         resetMaterialProperties();
 
         final int lightCount = model.lights.length;
@@ -107,10 +132,11 @@ public final class GltfScene {
         lightIntensities = new float[lightCount];
         resetLightProperties();
 
+        // 光源は、ノードの順に最初の GltfLoader.MAX_LIGHTS 個だけを使う (頂点ごとに全部の光源を計算するので)
         int placedCount = 0;
         for (int i : model.order) {
             final GltfModel.Node node = model.nodes[i];
-            if (node.light >= 0 && node.light < model.lights.length) placedCount++;
+            if (node.light >= 0 && node.light < model.lights.length && placedCount < GltfLoader.MAX_LIGHTS) placedCount++;
         }
         sceneLights = new GltfLight.LightInstance[placedCount];
         sceneLightNodes = new int[placedCount];
@@ -118,7 +144,7 @@ public final class GltfScene {
         int lIdx = 0;
         for (int i : model.order) {
             final GltfModel.Node node = model.nodes[i];
-            if (node.light >= 0 && node.light < model.lights.length) {
+            if (node.light >= 0 && node.light < model.lights.length && lIdx < placedCount) {
                 sceneLights[lIdx] = new GltfLight.LightInstance();
                 sceneLightNodes[lIdx] = i;
                 sceneLightIndices[lIdx] = node.light;
@@ -131,6 +157,8 @@ public final class GltfScene {
 
         // 不透明なものを先に、半透明なものを後に並べる
         final List<Group> list = new ArrayList<Group>();
+        // テクスチャと半透明かどうかの組から、groups の添字を引く (材質の多いモデルで、毎回すべてのまとまりを調べないように)
+        final Map<Long, Integer> byKey = new HashMap<Long, Integer>();
         groupIndex = new int[model.meshes.length][];
         for (int pass = 0; pass < 2; pass++) {
             for (int m = 0; m < model.meshes.length; m++) {
@@ -140,13 +168,12 @@ public final class GltfScene {
                     final GltfModel.Material material = model.materials[primitives[p].material];
                     final boolean blend = material.alphaMode == GltfModel.ALPHA_BLEND;
                     if (blend != (pass == 1)) continue;
-                    int index = -1;
-                    for (int i = 0; i < list.size(); i++) {
-                        if (list.get(i).texture == material.texture && list.get(i).blend == blend) index = i;
-                    }
-                    if (index < 0) {
+                    final Long key = ((long) material.texture << 1) | (blend ? 1 : 0);
+                    Integer index = byKey.get(key);
+                    if (index == null) {
                         index = list.size();
                         list.add(new Group(material.texture, blend));
+                        byKey.put(key, index);
                     }
                     groupIndex[m][p] = index;
                 }
@@ -182,6 +209,48 @@ public final class GltfScene {
             matTexScale[i * 2] = m.texScaleX;
             matTexScale[i * 2 + 1] = m.texScaleY;
             matTexRotation[i] = m.texRotation;
+            System.arraycopy(m.baseFactor, 0, matBaseFactor, i * 4, 4);
+            System.arraycopy(m.emissiveFactor, 0, matEmissiveFactor, i * 3, 3);
+            matMetallicFactor[i] = m.metallicFactor;
+            matRoughnessFactor[i] = m.roughnessFactor;
+        }
+    }
+
+    /**
+     * アニメーションで動かした材質の値を、描くときの値に直す。
+     * 読み込みでは、ファイルの値を表示用の色に直して color やテクスチャに入れている (テクスチャの色や、
+     * 金属らしさのテクスチャの平均も掛けてある) ので、動かした値とファイルの値の比を掛ける。
+     * 表示用の色への変換は累乗なので、比を掛けても、動かした値から計算し直したものと同じになる。
+     */
+    private void applyMaterialFactors() {
+        for (int i = 0; i < animatedMaterials.length; i++) {
+            final int animated = animatedMaterials[i];
+            if (animated == 0) continue;
+            final GltfModel.Material m = model.materials[i];
+            if ((animated & ANIMATED_COLOR) != 0) {
+                for (int c = 0; c < 3; c++) {
+                    final float before = GltfLoader.gamma(m.baseFactor[c]);
+                    final float after = GltfLoader.gamma(matBaseFactor[i * 4 + c]);
+                    matColors[i * 4 + c] = before > 0 ? m.color[c] * after / before : after;
+                }
+                // 不透明と切り抜きの材質の不透明度は、読み込みで 0 か 1 に決めてある
+                if (m.alphaMode == GltfModel.ALPHA_BLEND) {
+                    final float before = Math.max(0f, Math.min(1f, m.baseFactor[3]));
+                    final float after = Math.max(0f, Math.min(1f, matBaseFactor[i * 4 + 3]));
+                    matColors[i * 4 + 3] = before > 0 ? m.color[3] * after / before : after;
+                }
+            }
+            if ((animated & ANIMATED_EMISSIVE) != 0 && m.emissiveInColor) {
+                for (int c = 0; c < 3; c++) {
+                    matEmissive[i * 3 + c] = GltfLoader.gamma(matEmissiveFactor[i * 3 + c] * m.emissiveStrength);
+                }
+            }
+            if ((animated & ANIMATED_METALLIC) != 0) {
+                matMetallic[i] = m.metallicFactor != 0 ? m.metallic * matMetallicFactor[i] / m.metallicFactor : matMetallicFactor[i];
+            }
+            if ((animated & ANIMATED_ROUGHNESS) != 0) {
+                matRoughness[i] = m.roughnessFactor != 0 ? m.roughness * matRoughnessFactor[i] / m.roughnessFactor : matRoughnessFactor[i];
+            }
         }
     }
 
@@ -209,8 +278,9 @@ public final class GltfScene {
 
     /**
      * 指定した時刻 (秒) の姿勢にする。アニメーションは繰り返す。
+     * 時刻は double で受け取り、繰り返しの中の時刻にしてから float にする (float のままだと、何時間も経つと刻みが粗くなり、動きがかくつく)。
      */
-    public void pose(float time) {
+    public void pose(double time) {
         if (time == posedTime) return;
         posedTime = time;
 
@@ -232,10 +302,11 @@ public final class GltfScene {
 
         if (model.animations.length > 0) {
             final GltfModel.Animation animation = model.animations[0];
-            final float t = animation.duration > 0 ? time % animation.duration : 0f;
+            final float t = animation.duration > 0 ? (float) (time % animation.duration) : 0f;
             for (GltfModel.Channel channel : animation.channels) {
                 apply(channel, t);
             }
+            applyMaterialFactors();
         }
 
         final float[] t = new float[3], r = new float[4], s = new float[3];
@@ -325,25 +396,25 @@ public final class GltfScene {
                 }
                 break;
             case GltfModel.TARGET_MATERIAL_COLOR:
-                out = matColors;
+                out = matBaseFactor;
                 outOffset = channel.targetIndex * 4;
                 count = Math.min(components, 4);
                 isNodeRotation = false;
                 break;
             case GltfModel.TARGET_MATERIAL_EMISSIVE:
-                out = matEmissive;
+                out = matEmissiveFactor;
                 outOffset = channel.targetIndex * 3;
                 count = Math.min(components, 3);
                 isNodeRotation = false;
                 break;
             case GltfModel.TARGET_MATERIAL_METALLIC:
-                out = matMetallic;
+                out = matMetallicFactor;
                 outOffset = channel.targetIndex;
                 count = 1;
                 isNodeRotation = false;
                 break;
             case GltfModel.TARGET_MATERIAL_ROUGHNESS:
-                out = matRoughness;
+                out = matRoughnessFactor;
                 outOffset = channel.targetIndex;
                 count = 1;
                 isNodeRotation = false;
@@ -445,7 +516,7 @@ public final class GltfScene {
      * @param colors    頂点ごとの色 (ARGB) の出力先。それぞれ vertexCount 以上の長さ
      */
     public void emit(float[] placement, float[][] vertices, int[][] colors) {
-        if (Float.isNaN(posedTime)) pose(0);
+        if (Double.isNaN(posedTime)) pose(0);
         for (int i = 0; i < cursor.length; i++) cursor[i] = 0;
         for (int row = 0; row < 3; row++) {
             for (int column = 0; column < 3; column++) {
@@ -527,7 +598,13 @@ public final class GltfScene {
         }
         final float[] sourcePositions = primitive.positions;
         final float[] sourceNormals = primitive.normals;
-        final int targets = morph == null ? 0 : Math.min(morph.length, primitive.morphPositions.length);
+        // 重みが 0 でない目標だけを、頂点ごとに足す
+        final int allTargets = morph == null ? 0 : Math.min(morph.length, primitive.morphPositions.length);
+        if (activeTargets.length < allTargets) activeTargets = new int[allTargets];
+        int targets = 0;
+        for (int t = 0; t < allTargets; t++) {
+            if (morph[t] != 0) activeTargets[targets++] = t;
+        }
         final int influences = skin == null ? 0 : primitive.influences;
         final float[] m = matrix;
         final float[] n = normal;
@@ -540,9 +617,9 @@ public final class GltfScene {
                 ny = sourceNormals[i * 3 + 1];
                 nz = sourceNormals[i * 3 + 2];
             }
-            for (int t = 0; t < targets; t++) {
+            for (int k = 0; k < targets; k++) {
+                final int t = activeTargets[k];
                 final float weight = morph[t];
-                if (weight == 0) continue;
                 final float[] deltaPositions = primitive.morphPositions[t];
                 if (deltaPositions != null) {
                     px += deltaPositions[i * 3] * weight;
@@ -710,7 +787,10 @@ public final class GltfScene {
         final float scaX = matTexScale[mat * 2];
         final float scaY = matTexScale[mat * 2 + 1];
         final float rot = matTexRotation[mat];
-        final boolean transformUv = primitive.rawUv != null && (offX != 0 || offY != 0 || scaX != 1 || scaY != 1 || rot != 0);
+        // 読み込みで貼り方を反映し、画像を並べたテクスチャに合わせた座標 (cornerUv) を使う。
+        // アニメーションで貼り方がファイルの値から変わっているときだけ、元の座標から計算し直す
+        final boolean transformUv = primitive.rawUv != null && (offX != material.texOffsetX || offY != material.texOffsetY
+                || scaX != material.texScaleX || scaY != material.texScaleY || rot != material.texRotation);
         if (transformUv) {
             if (dynamicUv.length < indices.length * 2) {
                 dynamicUv = new float[indices.length * 2];

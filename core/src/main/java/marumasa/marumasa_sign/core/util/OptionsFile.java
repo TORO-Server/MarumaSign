@@ -4,7 +4,6 @@ import java.io.File;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
-import java.util.List;
 
 /**
  * Minecraft の options.txt から、指定した項目だけを読む。
@@ -21,8 +20,11 @@ public final class OptionsFile {
         if (!file.isFile()) return null;
         final String prefix = key + ":";
         try {
-            final List<String> lines = Files.readAllLines(file.toPath(), StandardCharsets.UTF_8);
-            for (String line : lines) {
+            // UTF-8 として正しくないバイトがあっても (古い版の Minecraft は OS の文字コードで書くことがある。サーバーの名前などに日本語があると混ざる)、
+            // その行以外は読めるように、置き換えながら読む。先頭の BOM も除く
+            String content = new String(Files.readAllBytes(file.toPath()), StandardCharsets.UTF_8);
+            if (content.startsWith("\uFEFF")) content = content.substring(1);
+            for (String line : content.split("\r\n|\r|\n")) {
                 if (line.startsWith(prefix)) return line.substring(prefix.length()).trim();
             }
         } catch (IOException | RuntimeException e) {

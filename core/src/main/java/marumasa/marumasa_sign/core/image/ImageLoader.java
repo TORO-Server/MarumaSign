@@ -52,13 +52,24 @@ public final class ImageLoader {
         void onMedia();
 
         void onFailed();
+
+        /**
+         * まだ結果が要るかどうか。読み込みの順番を待っている間に看板が消された (メモリを空けるために消した、
+         * 長く見えなかった、キャッシュを消したなど) ものは false を返す。読み込み始める前に確かめ、false なら読まずに捨てる。
+         * 読み込みのスレッドから呼ぶ。
+         */
+        default boolean isWanted() {
+            return true;
+        }
     }
 
     // 静止画の大きさの上限
     public static final int MAX_STATIC_SIZE = 4096;
     // アニメーションの大きさとフレーム数の上限
-    private static final int MAX_ANIMATION_SIZE = 2048;
-    private static final int MAX_ANIMATION_FRAMES = 512;
+    public static final int MAX_ANIMATION_SIZE = 2048;
+    public static final int MAX_ANIMATION_FRAMES = 512;
+    // アニメーションの全フレームのピクセル数の合計の上限 (WebP と同じ。1 ピクセル 4 バイトで 256 MB)
+    public static final long MAX_ANIMATION_PIXELS = 64L * 1000 * 1000;
     // 3D モデルの大きさの上限 (外部ファイルを含む)
     public static final int MAX_MODEL_SIZE = 64 * 1024 * 1024;
     // ガウシアンスプラッティングの大きさの上限
@@ -127,7 +138,8 @@ public final class ImageLoader {
                         // 読み終えたら、待っている次の読み込みを続けて始める (次の tick を待たない)
                         Request current = request;
                         while (current != null) {
-                            load(current);
+                            // 待っている間に要らなくなったものは読まない (見えている看板の読み込みを後回しにしないように)
+                            if (current.callback.isWanted()) load(current);
                             current = activeDownloads.get() <= ImageLoader.this.maxThreads ? queue.poll() : null;
                         }
                     } finally {
@@ -185,6 +197,8 @@ public final class ImageLoader {
                     return 0;
                 }
             });
+            // ダウンロードしている間に要らなくなったものは、時間のかかる読み込み (デコードや 3D モデルの準備) をしない
+            if (!request.callback.isWanted()) return;
             if (content == null) {
                 // FFmpeg を探すのには時間がかかることがあるので、メインスレッドに渡す前にここで済ませておく
                 Ffmpeg.isAvailable();
@@ -398,10 +412,10 @@ public final class ImageLoader {
         final int height = animation.getHeight();
         final List<AnimationFrame> frames = animation.getFrames();
         final int count = frames.size();
-        if (count == 0 || width <= 0 || height <= 0
-                || width > MAX_ANIMATION_SIZE || height > MAX_ANIMATION_SIZE || count > MAX_ANIMATION_FRAMES) {
-            throw new IOException("Animation exceeds safety limits (max " + MAX_ANIMATION_SIZE + "x" + MAX_ANIMATION_SIZE
-                    + ", " + MAX_ANIMATION_FRAMES + " frames)");
+        // 1 コマだけの GIF や APNG は、静止画と同じ大きさまで読む
+        final int max = count > 1 ? MAX_ANIMATION_SIZE : MAX_STATIC_SIZE;
+        if (count == 0 || width <= 0 || height <= 0 || width > max || height > max || count > MAX_ANIMATION_FRAMES) {
+            throw new IOException("Animation exceeds safety limits (max " + max + "x" + max + ", " + MAX_ANIMATION_FRAMES + " frames)");
         }
 
         final int[][] pixels = new int[count][];
@@ -426,13 +440,14 @@ public final class ImageLoader {
     }
 
     private static DecodedImage decodeStatic(byte[] content) throws IOException {
-        // PNG は、ImageIO に渡す前に見出しの大きさを確かめる (大きさを偽ったファイルでメモリ不足にならないように)
-        if (content.length >= 24 && (content[0] & 0xFF) == 0x89 && content[1] == 'P') {
-            final long width = ((content[16] & 0xFFL) << 24) | ((content[17] & 0xFF) << 16) | ((content[18] & 0xFF) << 8) | (content[19] & 0xFF);
-            final long height = ((content[20] & 0xFFL) << 24) | ((content[21] & 0xFF) << 16) | ((content[22] & 0xFF) << 8) | (content[23] & 0xFF);
-            if (width <= 0 || height <= 0 || width > MAX_STATIC_SIZE || height > MAX_STATIC_SIZE) {
-                throw new IOException("Image exceeds safety limits (max " + MAX_STATIC_SIZE + "x" + MAX_STATIC_SIZE + ")");
-            }
+        // ここに来るのは、アニメーションでない PNG だけ。それ以外の形式は (ImageIO が読めても) 読まない。
+        // ImageIO は、大きさを偽った画像や、中に JPEG の入った画像 (libjpeg で読まれる) も読もうとするため
+        if (!isPng(content)) throw new IOException("Not an image");
+        // ImageIO に渡す前に見出しの大きさを確かめる (大きさを偽ったファイルでメモリ不足にならないように)
+        final long width = ((content[16] & 0xFFL) << 24) | ((content[17] & 0xFF) << 16) | ((content[18] & 0xFF) << 8) | (content[19] & 0xFF);
+        final long height = ((content[20] & 0xFFL) << 24) | ((content[21] & 0xFF) << 16) | ((content[22] & 0xFF) << 8) | (content[23] & 0xFF);
+        if (width <= 0 || height <= 0 || width > MAX_STATIC_SIZE || height > MAX_STATIC_SIZE) {
+            throw new IOException("Image exceeds safety limits (max " + MAX_STATIC_SIZE + "x" + MAX_STATIC_SIZE + ")");
         }
         final BufferedImage image;
         try {
@@ -442,6 +457,15 @@ public final class ImageLoader {
         }
         if (image == null) throw new IOException("Not an image");
         return fromBufferedImage(image);
+    }
+
+    // 先頭が PNG の署名で、最初のチャンクが IHDR か (大きさは IHDR の中にある)
+    private static boolean isPng(byte[] content) {
+        if (content.length < 24) return false;
+        for (int i = 0; i < 8; i++) {
+            if (content[i] != PNG_SIGNATURE[i]) return false;
+        }
+        return content[12] == 'I' && content[13] == 'H' && content[14] == 'D' && content[15] == 'R';
     }
 
     public static DecodedImage fromBufferedImage(BufferedImage image) throws IOException {

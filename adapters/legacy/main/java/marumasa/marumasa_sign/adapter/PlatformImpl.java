@@ -1,19 +1,26 @@
 package marumasa.marumasa_sign.adapter;
 
 import marumasa.marumasa_sign.core.Platform;
+import marumasa.marumasa_sign.core.util.Reflect;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.GuiScreen;
 import net.minecraft.client.renderer.texture.DynamicTexture;
+import net.minecraft.client.renderer.texture.TextureManager;
 import net.minecraft.client.settings.KeyBinding;
 import net.minecraft.realms.RealmsSharedConstants;
 import net.minecraft.util.ResourceLocation;
 
 import java.io.File;
+import java.lang.reflect.Field;
+import java.lang.reflect.Modifier;
+import java.util.Map;
 
 final class PlatformImpl implements Platform {
 
     private final Minecraft mc = Minecraft.getMinecraft();
     private final String loaderName;
+    // TextureManager の、名前からテクスチャを引く表
+    private Field texturesField;
 
     PlatformImpl(String loaderName) {
         this.loaderName = loaderName;
@@ -87,7 +94,35 @@ final class PlatformImpl implements Platform {
 
     @Override
     public void releaseTexture(Object handle) {
-        mc.getTextureManager().deleteTexture(((Texture) handle).location);
+        final Texture texture = (Texture) handle;
+        final TextureManager manager = mc.getTextureManager();
+        manager.deleteTexture(texture.location);
+        forget(manager, texture);
+    }
+
+    /**
+     * テクスチャを TextureManager の表から外す。
+     * このバージョンの deleteTexture は OpenGL のテクスチャを消すだけで、表からは外さない。
+     * 表に残ると、画素の配列を持った DynamicTexture がいつまでも残り、看板を読み込み直すたびに
+     * (使われなくなった看板は 5 分で消して、また見えたら読み込み直す) メモリが増え続ける。
+     */
+    private void forget(TextureManager manager, Texture texture) {
+        if (texturesField == null) {
+            // 同じ型の表がほかにもあるので、このテクスチャが入っているもので見分ける
+            for (Field field : TextureManager.class.getDeclaredFields()) {
+                if (Modifier.isStatic(field.getModifiers()) || !Map.class.isAssignableFrom(field.getType())) continue;
+                field.setAccessible(true);
+                final Map<?, ?> map = Reflect.get(field, manager);
+                if (map != null && map.get(texture.location) == texture.texture) {
+                    texturesField = field;
+                    break;
+                }
+            }
+            // 表から外されている (外すように直されたローダー) ときは、何もしなくてよい
+            if (texturesField == null) return;
+        }
+        final Map<?, ?> map = Reflect.get(texturesField, manager);
+        if (map != null && map.get(texture.location) == texture.texture) map.remove(texture.location);
     }
 
     @Override

@@ -199,17 +199,16 @@ public final class StillFormats {
                 return JpegDecoder.decode(d);
             case BMP: {
                 BmpDecoder.checkHeader(d);
-                BufferedImage image = null;
                 try {
-                    image = ImageBytes.read(d);
+                    // 自分のデコーダは、ImageIO が無視する透明度 (16 ビットの ARGB など) も読む
+                    return BmpDecoder.decodeFile(d);
                 } catch (IOException | RuntimeException e) {
-                    // ImageIO が読めない種類の BMP は、自分で読む
-                }
-                if (image != null) {
+                    // 自分で読めない種類の BMP は、ImageIO に任せる
+                    final BufferedImage image = ImageBytes.read(d);
+                    if (image == null) throw e;
                     FormatUtil.checkSize(image.getWidth(), image.getHeight());
                     return FormatUtil.still(image.getWidth(), image.getHeight(), ArgbPixels.readDisplay(image));
                 }
-                return BmpDecoder.decodeFile(d);
             }
             case WEBP: {
                 final DecodedImage animated = WebpDecoder.decodeAnimated(d);

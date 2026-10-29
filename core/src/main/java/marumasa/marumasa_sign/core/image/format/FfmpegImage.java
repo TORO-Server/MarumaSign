@@ -132,7 +132,7 @@ final class FfmpegImage {
             command.addAll(Arrays.asList("-map", "0:v:0", "-vf", scale));
         }
         command.addAll(Arrays.asList("-frames:v", "1", "-f", "image2pipe", "-c:v", "png", "pipe:1"));
-        final Process process = new ProcessBuilder(command).redirectErrorStream(false).start();
+        final Process process = Ffmpeg.start(new ProcessBuilder(command).redirectErrorStream(false));
         process.getOutputStream().close();
         final Thread logReader = drain(process.getErrorStream(), log);
 
