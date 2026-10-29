@@ -451,6 +451,13 @@ public final class PdfCheck {
             case "flate-bad-checksum":
                 expectColor(image, 100, 100, 0xFF0000, "content with a bad Adler-32");
                 break;
+            case "fallback-weight": {
+                // I の縦棒の太さ (画素の y = 120): 普通の太さなら 9 画素ほど、太字なら 14 画素ほど
+                int dark = 0;
+                for (int x = 40; x < 100; x++) dark += gray(image, x, 120) < 128 ? 1 : 0;
+                expect(dark >= 12, "fallback font is not bold: " + dark);
+                break;
+            }
             case "cff-cidtogidmap":
                 // CID 1 は CIDToGIDMap で四角のグリフ 2 (ページの 50 から 150)
                 expect(gray(image, 100, 100) < 30, "CIDToGIDMap of an OpenType CFF font is ignored");

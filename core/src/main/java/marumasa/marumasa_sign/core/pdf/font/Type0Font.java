@@ -325,7 +325,7 @@ final class Type0Font extends PdfFont {
             if (font == null) {
                 // 欧文のフォントとして、性質 (固定幅、セリフ、太字、斜体) の近い標準のフォントの代わりを探す
                 final int flags = flags(descriptor);
-                font = system.findByName(SystemFonts.fallbackName(name, descriptor != null, isFixedPitch(flags), isSerif(flags), isItalic(flags)), true);
+                font = system.findByName(SystemFonts.fallbackName(name, descriptor != null, isFixedPitch(flags), isSerif(flags), isItalic(flags), isHeavy(descriptor)), true);
             }
             if (font == null) font = system.lastResort();
             if (font == null) {

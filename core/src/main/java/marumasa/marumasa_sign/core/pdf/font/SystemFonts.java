@@ -181,11 +181,13 @@ public final class SystemFonts {
 
     /**
      * フォントの性質から、標準 14 フォントのどれかの代わりを選ぶ名前。
+     *
+     * @param heavy FontDescriptor の太さ (FontWeight や ForceBold) が太字を示すか。名前に Bold などがあっても太字にする
      */
-    public static String fallbackName(String fontName, boolean hasDescriptor, boolean fixedPitch, boolean serif, boolean italic) {
+    public static String fallbackName(String fontName, boolean hasDescriptor, boolean fixedPitch, boolean serif, boolean italic, boolean heavy) {
         if (!hasDescriptor) return "Times-Roman";
         final String lower = fontName == null ? "" : fontName.toLowerCase(Locale.ENGLISH);
-        final boolean bold = lower.contains("bold") || lower.contains("black") || lower.contains("heavy");
+        final boolean bold = heavy || lower.contains("bold") || lower.contains("black") || lower.contains("heavy") || lower.contains("demi");
         if (fixedPitch) {
             return "Courier" + (bold && italic ? "-BoldOblique" : bold ? "-Bold" : italic ? "-Oblique" : "");
         }

@@ -192,7 +192,7 @@ final class SimpleFont extends PdfFont {
         if (font == null) {
             final String fallback = SystemFonts.fallbackName(descriptor == null ? baseFont : descriptor.name("FontName") != null
                             ? descriptor.name("FontName") : baseFont, descriptor != null,
-                    isFixedPitch(flags), isSerif(flags), isItalic(flags));
+                    isFixedPitch(flags), isSerif(flags), isItalic(flags), isHeavy(descriptor));
             font = system.findByName(fallback, trueType);
         }
         if (font == null) font = system.lastResort();

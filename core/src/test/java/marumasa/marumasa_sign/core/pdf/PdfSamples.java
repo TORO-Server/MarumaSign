@@ -267,6 +267,12 @@ final class PdfSamples {
                 stream("", "/CIDInit /ProcSet findresource begin 12 dict begin begincmap /CMapName /U def "
                         + "1 begincodespacerange <00> <FF> endcodespacerange 1 beginbfchar <61> <0041> endbfchar "
                         + "endcmap CMapName currentdict /CMap defineresource pop end end"))});
+        // 埋め込まれていない、知らない名前のフォントの FontWeight 700 は、太字の代わりのフォントで描く
+        samples.add(new String[]{"fallback-weight", page("<< /Font << /F1 5 0 R >> >>", "0 g BT /F1 100 Tf 50 50 Td (I) Tj ET",
+                "<< /Type /Font /Subtype /TrueType /BaseFont /FooSans /FirstChar 73 /LastChar 73 /Widths [278] /FontDescriptor 6 0 R "
+                        + "/Encoding /WinAnsiEncoding >>",
+                "<< /Type /FontDescriptor /FontName /FooSans /Flags 32 /FontWeight 700 /FontBBox [0 -200 1000 900] /ItalicAngle 0 "
+                        + "/Ascent 900 /Descent -200 /CapHeight 700 /StemV 140 >>")});
         // OpenType に入った、CID の決まっていない CFF を使う CIDFontType0 の CIDToGIDMap (CID 1 を、四角のグリフ 2 にする)
         samples.add(new String[]{"cff-cidtogidmap", page("<< /Font << /F1 5 0 R >> >>", "0 g BT /F1 100 Tf 50 50 Td <0001> Tj ET",
                 "<< /Type /Font /Subtype /Type0 /BaseFont /T /Encoding /Identity-H /DescendantFonts [6 0 R] >>",

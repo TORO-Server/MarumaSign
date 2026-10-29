@@ -127,6 +127,11 @@ public abstract class PdfFont {
         return (flags & 64) != 0;
     }
 
+    // FontDescriptor の FontWeight (600 以上) か、Flags の ForceBold が、太字を示すか
+    protected static boolean isHeavy(PdfDict descriptor) {
+        return descriptor != null && (descriptor.number("FontWeight", 400) >= 600 || (flags(descriptor) & (1 << 18)) != 0);
+    }
+
     /**
      * 埋め込まれたフォントを読む。読めなければ null (代わりのフォントを使う)。
      */
