@@ -65,6 +65,8 @@ final class ImageDecoder {
         // 間引きの幅 (元の画素の何個おきか)
         int stepX = 1, stepY = 1;
         int sourceWidth, sourceHeight;
+        // データのある行の数 (元の画像の行)
+        long availableRows = Long.MAX_VALUE;
 
         int sample(int x, int y, int c) {
             final int sx = Math.min(sourceWidth - 1, x * stepX), sy = Math.min(sourceHeight - 1, y * stepY);
@@ -159,6 +161,7 @@ final class ImageDecoder {
             samples.data = data;
             samples.stepX = stepX;
             samples.stepY = stepY;
+            if (samples.rowBytes > 0) samples.availableRows = data.length / samples.rowBytes;
         }
         samples.width = (samples.sourceWidth + samples.stepX - 1) / samples.stepX;
         samples.height = (samples.sourceHeight + samples.stepY - 1) / samples.stepY;
@@ -176,11 +179,22 @@ final class ImageDecoder {
                     pixels[y * samples.width + x] = paint ? 0xFF000000 : 0;
                 }
             }
+            clearMissingRows(samples, pixels);
             return new Result(image, width, height, true, interpolate);
         }
         convert(samples, space, decode, pixels);
         if (withMasks) applyMasks(dict, resources, samples, pixels);
+        clearMissingRows(samples, pixels);
         return new Result(image, width, height, false, interpolate);
+    }
+
+    // データの足りない行 (途中で壊れて、そこまでしか戻せなかったものなど) は描かない (pdf.js と poppler と同じ)。
+    // 足りない画素を値 0 として、灰色や RGB なら黒、ImageMask なら塗る所として描いていた
+    private static void clearMissingRows(Samples s, int[] pixels) {
+        for (int y = 0; y < s.height; y++) {
+            if (Math.min(s.sourceHeight - 1L, (long) y * s.stepY) < s.availableRows) continue;
+            java.util.Arrays.fill(pixels, y * s.width, (y + 1) * s.width, 0);
+        }
     }
 
     private static int integer(Object value) {

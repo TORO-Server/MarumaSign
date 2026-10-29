@@ -357,6 +357,10 @@ final class PdfSamples {
                 stream("/Type /XObject /Subtype /Image /Width 8 /Height 4 /ColorSpace /DeviceGray /BitsPerComponent 1 /Filter /CCITTFaxDecode "
                                 + "/DecodeParms << /K -1 /Columns 8 /Rows 2 >>",
                         latin1(new byte[]{0x36, (byte) 0xF0, 0x01, 0x00, 0x10})))});
+        // 2 x 4 の画像に 2 行分のデータしかない: 足りない下の 2 行は描かない (黒く塗っていた)
+        samples.add(new String[]{"short-image-data", page("<< /XObject << /I 5 0 R >> >>", "q 200 0 0 200 0 0 cm /I Do Q",
+                stream("/Type /XObject /Subtype /Image /Width 2 /Height 4 /ColorSpace /DeviceGray /BitsPerComponent 8 /Filter /FlateDecode",
+                        latin1(deflate(new byte[]{(byte) 0x80, (byte) 0x80, (byte) 0x80, (byte) 0x80}))))});
         // 圧縮したインライン画像の後ろに、ASCII でない文字の文字列がある: EI を見つけて、後ろの青い四角も描く
         samples.add(new String[]{"inline-image-latin1", page("<< /Font << /F1 5 0 R >> >>",
                 "q 100 0 0 100 0 100 cm BI /W 2 /H 2 /CS /RGB /BPC 8 /F /Fl ID "
