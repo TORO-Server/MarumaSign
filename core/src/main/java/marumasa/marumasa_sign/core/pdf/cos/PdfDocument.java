@@ -32,6 +32,8 @@ public final class PdfDocument implements Resolver {
     private static final int MAX_TREE_DEPTH = 64;
     // オブジェクトストリームの中のオブジェクトの数の上限
     private static final int MAX_OBJECT_STREAM_ITEMS = 1 << 20;
+    // オブジェクトを読む途中で、別のオブジェクトを読む入れ子の深さの上限 (正しいファイルでは、/Length とオブジェクトストリームで数段)
+    private static final int MAX_LOADING_DEPTH = 64;
 
     // 相互参照表の 1 項目
     private static final class Entry {
@@ -461,6 +463,9 @@ public final class PdfDocument implements Resolver {
      */
     public Object getObject(int number) {
         if (cache.containsKey(number)) return cache.get(number);
+        // 読んでいる途中のものを読む入れ子が深すぎる (/Length が別のストリームを指し、その /Length がまた別のストリームを
+        // 指すことを何万回も繰り返したものなど)。Java のスタックを使い切らないように、ここでは読まない (覚えもしない)
+        if (loading.size() >= MAX_LOADING_DEPTH) return null;
         // 読んでいる途中のものをまた読もうとした (参照の輪)
         if (!loading.add(number)) return null;
         Object value = null;

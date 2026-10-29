@@ -725,6 +725,14 @@ final class PdfSamples {
         samples.add(new String[]{"xref-prev-cycle", cyclic.replace("/Root 1 0 R >>", "/Root 1 0 R /Prev " + xrefAt + " >>")});
         // 巨大な数を並べた相互参照表
         samples.add(new String[]{"xref-huge-count", cyclic.replaceFirst("xref\n0 \\d+", "xref\n0 2000000000")});
+        // /Length が次のストリームを指すことを 20000 回繰り返したもの (読む入れ子でスタックを使い切っていた)
+        final String[] chain = new String[20004];
+        chain[0] = "<< /Type /Catalog /Pages 2 0 R >>";
+        chain[1] = "<< /Type /Pages /Kids [3 0 R] /Count 1 >>";
+        chain[2] = "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 100 100] /Contents 4 0 R >>";
+        for (int i = 3; i < chain.length - 1; i++) chain[i] = "<< /Length " + (i + 2) + " 0 R >>\nstream\n0 g\nendstream";
+        chain[chain.length - 1] = "4";
+        samples.add(new String[]{"length-chain", build(chain)});
         // V 5 (256 ビット) なのに R 4 の暗号化の辞書: R 4 の鍵の作り方に 32 バイトの鍵の長さを渡して、範囲の外を読んでいた
         final String padding = "(" + new String(new char[32]).replace('\0', 'A') + ")";
         samples.add(new String[]{"encrypt-v5-r4", page("<< >>", "0 g", "<< /Filter /Standard /V 5 /R 4 /Length 256 /CF << /StdCF "
