@@ -73,6 +73,7 @@ public final class RuntimeRegressionCheck {
             checkCancelledRequestsAreNotLoaded();
             checkTexturesReleasedWhenRegisterFails();
             checkLongAnimationDelays();
+            checkOneFailedReleaseKeepsReleasingOthers();
             if (Ffmpeg.isAvailable()) {
                 checkStopWhileStarting();
                 checkClosedVideoDoesNotRestart();
@@ -524,6 +525,28 @@ public final class RuntimeRegressionCheck {
         }
     }
 
+    /**
+     * 後で消すテクスチャのうち 1 つを消すときに例外が出ても、同じ tick に消す残りのテクスチャは消す。
+     * 以前は例外で残りが飛ばされ、待ちの一覧からは外されていたので、誰も消さなかった (GPU のメモリが戻らない)。
+     */
+    private static void checkOneFailedReleaseKeepsReleasingOthers() throws Exception {
+        final Object first = platform.createTexture(4, 4, new int[16]);
+        final Object failing = platform.createTexture(4, 4, new int[16]);
+        final Object last = platform.createTexture(4, 4, new int[16]);
+        platform.failOnRelease = failing;
+        try {
+            MarumaSign.releaseTexture(platform, first);
+            MarumaSign.releaseTexture(platform, failing);
+            MarumaSign.releaseTexture(platform, last);
+            run(new String[0], 0, 30);
+            // 数ではなく、この 3 つが消されたかで確かめる (前の試験が手放したテクスチャも、同じ tick に消されることがある)
+            check("a texture whose release fails does not keep the others from being released",
+                    !platform.isLive(first) && !platform.isLive(failing) && !platform.isLive(last));
+        } finally {
+            platform.failOnRelease = null;
+        }
+    }
+
     // ---------- 動画 (MediaPlayer, MediaSession) ----------
 
     private static byte[] video;
@@ -787,6 +810,8 @@ public final class RuntimeRegressionCheck {
         private final Map<Object, Long> sizes = new ConcurrentHashMap<Object, Long>();
         final AtomicInteger doubleReleases = new AtomicInteger();
         volatile int failAfter = -1;
+        // 消すときに例外を出すテクスチャ (消したことにはする)
+        volatile Object failOnRelease;
 
         TestPlatform(File gameDirectory) {
             this.gameDirectory = gameDirectory;
@@ -795,6 +820,10 @@ public final class RuntimeRegressionCheck {
         void runTasks() {
             Runnable task;
             while ((task = tasks.poll()) != null) task.run();
+        }
+
+        synchronized boolean isLive(Object texture) {
+            return live.contains(texture);
         }
 
         synchronized int liveCount() {
@@ -827,6 +856,7 @@ public final class RuntimeRegressionCheck {
         @Override
         public synchronized void releaseTexture(Object texture) {
             if (!live.remove(texture)) doubleReleases.incrementAndGet();
+            if (texture == failOnRelease) throw new IllegalStateException("Test: could not release a texture");
         }
 
         @Override

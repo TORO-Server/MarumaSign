@@ -98,7 +98,12 @@ public final class MarumaSign {
             }
         }
         for (Object[] item : due) {
-            ((Platform) item[0]).releaseTexture(item[1]);
+            // 1 つを消すときに例外が出ても、残りは消す (待ちの一覧からは外してあるので、ここで飛ばすと誰も消さない)
+            try {
+                ((Platform) item[0]).releaseTexture(item[1]);
+            } catch (RuntimeException e) {
+                reportOnce("releasing a texture", e);
+            }
         }
     }
 

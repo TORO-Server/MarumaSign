@@ -128,12 +128,48 @@ public final class RuntimeLogicCheck {
         final long millis = (System.nanoTime() - start) / 1_000_000;
         check(big.getText().length() == 2048 && millis < 2000, "text field: huge paste is cut at the limit (" + big.getText().length() + " characters, " + millis + " ms)");
 
+        textFieldScroll();
+
         // 幅に収まらない文字列を「...」で省略するときも、絵文字を半分にしない
         final Graphics2D g = new BufferedImage(1, 1, BufferedImage.TYPE_INT_ARGB).createGraphics();
         boolean whole = true;
         for (int width = 0; width < 150; width++) whole &= !broken(Theme.ellipsize(g, "ab" + EMOJI + EMOJI + EMOJI + EMOJI + "cdefgh", width));
         g.dispose();
         check(whole, "ellipsized text keeps emoji whole");
+    }
+
+    // 入力欄を描き (フォーカスあり)、左端 (文字の始まる位置) をクリックしたときのキャレットの位置に "|" を入れた文字列を返す
+    private static String clickLeftEdge(Field field) {
+        final Graphics2D g = new BufferedImage(200, 30, BufferedImage.TYPE_INT_ARGB).createGraphics();
+        try {
+            field.paint(g, false, true);
+            field.mousePressed(field.x + 4, field.y + 10, false);
+            field.charTyped('|');
+            return field.getText();
+        } finally {
+            g.dispose();
+        }
+    }
+
+    // 長い文字列が短くなったとき (置き換えや削除)、文字が左に隠れたままにならない
+    private static void textFieldScroll() {
+        final StringBuilder longText = new StringBuilder();
+        for (int i = 0; i < 60; i++) longText.append('w');
+
+        final Field replaced = field(longText.toString());
+        replaced.bounds(0, 0, 100, 21);
+        replaced.paint(new BufferedImage(200, 30, BufferedImage.TYPE_INT_ARGB).createGraphics(), false, true);
+        replaced.selectAll();
+        replaced.type("ab");
+        final String afterReplace = clickLeftEdge(replaced);
+        check(afterReplace.equals("|ab"), "text field: short text that replaced a long one is not scrolled out of view: " + afterReplace);
+
+        final Field deleted = field(longText.toString());
+        deleted.bounds(0, 0, 100, 21);
+        deleted.paint(new BufferedImage(200, 30, BufferedImage.TYPE_INT_ARGB).createGraphics(), false, true);
+        for (int i = 0; i < 57; i++) deleted.keys(Key.BACKSPACE);
+        final String afterDelete = clickLeftEdge(deleted);
+        check(afterDelete.equals("|www"), "text field: text left after backspace is not scrolled out of view: " + afterDelete);
     }
 
     // 小数点がコンマの地域では、コンマも小数点として受け付ける
@@ -199,6 +235,34 @@ public final class RuntimeLogicCheck {
             }
         }
         check(SignSpec.splitLines("abcdefgh", 2) != null && SignSpec.splitLines("abcdefghi", 2) == null, "sign lines: length limit");
+
+        // 絵文字をずらして 1 行が短くなっても、後の行で分け直して、入りきる文字列は必ず 4 行に分ける。
+        // 以前は後の行が上限を超えて null になり、書き込みの予約が何も書かずに消えていた (例: 上限 2 で "a😀aaa")
+        int missed = 0;
+        String example = null;
+        for (int count = 0; count <= 9; count++) {
+            for (int bits = 0; bits < 1 << count; bits++) {
+                final StringBuilder text = new StringBuilder();
+                for (int i = 0; i < count; i++) text.append((bits >> i & 1) != 0 ? EMOJI : "a");
+                for (int max = 1; max <= 5; max++) {
+                    if (fits(text.toString(), 0, 4, max) && SignSpec.splitLines(text.toString(), max) == null) {
+                        missed++;
+                        if (example == null) example = text.toString().replace(EMOJI, "E") + " (max " + max + ")";
+                    }
+                }
+            }
+        }
+        check(missed == 0, "sign lines: every text that fits in 4 lines is split (" + missed + " missed, e.g. " + example + ")");
+    }
+
+    // text の start から後ろを、サロゲートペアを分けずに、lines 行 (1 行は max 文字まで) に分けられるかどうか
+    private static boolean fits(String text, int start, int lines, int max) {
+        if (lines == 0) return start == text.length();
+        for (int end = start; end <= Math.min(text.length(), start + max); end++) {
+            if (end > 0 && end < text.length() && Character.isHighSurrogate(text.charAt(end - 1))) continue;
+            if (fits(text, end, lines - 1, max)) return true;
+        }
+        return false;
     }
 
     private static File temporaryDirectory() throws IOException {
