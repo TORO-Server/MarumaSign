@@ -233,6 +233,14 @@ final class PdfSamples {
                 "<< /Type /Font /Subtype /CIDFontType2 /BaseFont /FooSans /CIDSystemInfo << /Registry (Adobe) /Ordering (Identity) /Supplement 0 >> "
                         + "/FontDescriptor << /Type /FontDescriptor /FontName /FooSans /Flags 32 /FontBBox [-665 -325 2000 1006] /ItalicAngle 0 "
                         + "/Ascent 905 /Descent -212 /CapHeight 716 /StemV 80 >> /W [45 [333]] >>")});
+        // TrueType の集合 (.ttc) をそのまま埋め込んだもの: FontName (接頭辞を除いて L) のフォントを選ぶ
+        samples.add(new String[]{"truetype-collection", page("<< /Font << /F1 5 0 R >> >>", "0 g BT /F1 100 Tf 50 50 Td <0001> Tj ET",
+                "<< /Type /Font /Subtype /Type0 /BaseFont /ABCDEF+L /Encoding /Identity-H /DescendantFonts [6 0 R] >>",
+                "<< /Type /Font /Subtype /CIDFontType2 /BaseFont /ABCDEF+L /CIDSystemInfo << /Registry (Adobe) /Ordering (Identity) /Supplement 0 >> "
+                        + "/FontDescriptor 7 0 R /CIDToGIDMap /Identity /DW 1000 >>",
+                "<< /Type /FontDescriptor /FontName /ABCDEF+L /Flags 4 /FontBBox [0 0 1000 1000] /ItalicAngle 0 /Ascent 1000 /Descent 0 "
+                        + "/CapHeight 1000 /StemV 80 /FontFile2 8 0 R >>",
+                stream("", latin1(trueTypeCollection())))});
         // OpenType に入った、CID の決まっていない CFF を使う CIDFontType0 の CIDToGIDMap (CID 1 を、四角のグリフ 2 にする)
         samples.add(new String[]{"cff-cidtogidmap", page("<< /Font << /F1 5 0 R >> >>", "0 g BT /F1 100 Tf 50 50 Td <0001> Tj ET",
                 "<< /Type /Font /Subtype /Type0 /BaseFont /T /Encoding /Identity-H /DescendantFonts [6 0 R] >>",
@@ -317,9 +325,14 @@ final class PdfSamples {
 
     // 表を並べたフォントのファイル (sfnt)
     private static byte[] sfnt(int version, String[] tags, byte[][] tables) {
+        return sfnt(version, tags, tables, 0);
+    }
+
+    // 表を並べたフォントのファイル。base はファイルの中での、このフォントの位置 (表の位置はファイルの初めから数える)
+    private static byte[] sfnt(int version, String[] tags, byte[][] tables, int base) {
         final ByteArrayOutputStream out = new ByteArrayOutputStream();
         write(out, version >>> 24, version >> 16 & 0xFF, version >> 8 & 0xFF, version & 0xFF, 0, tables.length, 0, 0, 0, 0, 0, 0);
-        int offset = 12 + 16 * tables.length;
+        int offset = base + 12 + 16 * tables.length;
         for (int i = 0; i < tables.length; i++) {
             for (int k = 0; k < 4; k++) out.write(tags[i].charAt(k));
             write(out, 0, 0, 0, 0, offset >> 24, offset >> 16 & 0xFF, offset >> 8 & 0xFF, offset & 0xFF,
@@ -337,6 +350,32 @@ final class PdfSamples {
      * 2 つのグリフの TrueType。グリフ 1 は x 500 から 900、y 0 から 400 の四角だが、hmtx の lsb は 0。
      */
     static byte[] lsbTrueType() {
+        return squareTrueType(null, false, 0);
+    }
+
+    /**
+     * 2 つのフォントの TrueType の集合 (.ttc)。最初の "Other" はグリフ 1 が空で、2 つ目の "L" は lsbTrueType と同じ。
+     */
+    static byte[] trueTypeCollection() {
+        final int header = 12 + 4 * 2;
+        final byte[] first = squareTrueType("Other", true, header);
+        final byte[] second = squareTrueType("L", false, header + first.length);
+        final ByteArrayOutputStream out = new ByteArrayOutputStream();
+        final int at = header + first.length;
+        write(out, 't', 't', 'c', 'f', 0, 1, 0, 0, 0, 0, 0, 2, 0, 0, 0, header, at >> 24, at >> 16 & 0xFF, at >> 8 & 0xFF, at & 0xFF);
+        out.write(first, 0, first.length);
+        out.write(second, 0, second.length);
+        return out.toByteArray();
+    }
+
+    /**
+     * lsbTrueType の形の TrueType。
+     *
+     * @param name  PostScript 名 (name の表に書く。null なら name の表なし)
+     * @param empty グリフ 1 を空にするか
+     * @param base  ファイルの中での、このフォントの位置
+     */
+    private static byte[] squareTrueType(String name, boolean empty, int base) {
         final byte[] maxp = {0, 0, 0x50, 0, 0, 2};
         // 幅 1000、lsb 0 (グリフ 0)、lsb 0 (グリフ 1)
         final byte[] hmtx = {0x03, (byte) 0xE8, 0, 0, 0, 0};
@@ -345,9 +384,17 @@ final class PdfSamples {
         write(glyf, 0, 1, 0x01, 0xF4, 0, 0, 0x03, 0x84, 0x01, 0x90, 0, 3, 0, 0, 1, 1, 1, 1,
                 0x01, 0xF4, 0x01, 0x90, 0, 0, 0xFE, 0x70, 0, 0, 0, 0, 0x01, 0x90, 0, 0);
         // loca (短い形、2 で割った値): グリフ 0 は空
-        final byte[] loca = {0, 0, 0, 0, 0, (byte) (glyf.size() / 2)};
-        return sfnt(0x00010000, new String[]{"glyf", "head", "hhea", "hmtx", "loca", "maxp"},
-                new byte[][]{glyf.toByteArray(), head(500, 0, 900, 400), hhea(1), hmtx, loca, maxp});
+        final byte[] loca = {0, 0, 0, 0, 0, (byte) (empty ? 0 : glyf.size() / 2)};
+        if (name == null) {
+            return sfnt(0x00010000, new String[]{"glyf", "head", "hhea", "hmtx", "loca", "maxp"},
+                    new byte[][]{glyf.toByteArray(), head(500, 0, 900, 400), hhea(1), hmtx, loca, maxp}, base);
+        }
+        // name の表: Macintosh の英語の PostScript 名 (名前の番号 6) だけ
+        final ByteArrayOutputStream names = new ByteArrayOutputStream();
+        write(names, 0, 0, 0, 1, 0, 18, 0, 1, 0, 0, 0, 0, 0, 6, 0, name.length(), 0, 0);
+        for (int i = 0; i < name.length(); i++) names.write(name.charAt(i));
+        return sfnt(0x00010000, new String[]{"glyf", "head", "hhea", "hmtx", "loca", "maxp", "name"},
+                new byte[][]{glyf.toByteArray(), head(500, 0, 900, 400), hhea(1), hmtx, loca, maxp, names.toByteArray()}, base);
     }
 
     private static void write(ByteArrayOutputStream out, int... bytes) {

@@ -453,6 +453,7 @@ public final class PdfCheck {
                 expect(gray(image, 100, 100) < 30, "CID of a bare CFF font is not used as GID");
                 break;
             case "truetype-lsb":
+            case "truetype-collection":
                 // 四角は原点 (x = 50) から 40 ポイントの幅
                 expect(gray(image, 60, 130) < 30, "left side bearing is ignored");
                 expect(gray(image, 130, 130) > 230, "glyph is drawn at xMin");

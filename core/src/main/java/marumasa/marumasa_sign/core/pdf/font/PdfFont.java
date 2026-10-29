@@ -3,6 +3,7 @@ package marumasa.marumasa_sign.core.pdf.font;
 import marumasa.marumasa_sign.core.pdf.Strict;
 import marumasa.marumasa_sign.core.pdf.cos.PdfArray;
 import marumasa.marumasa_sign.core.pdf.cos.PdfDict;
+import marumasa.marumasa_sign.core.pdf.cos.PdfName;
 import marumasa.marumasa_sign.core.pdf.cos.PdfStream;
 
 import java.awt.geom.GeneralPath;
@@ -148,15 +149,17 @@ public abstract class PdfFont {
                 }
                 return Type1Font.parse(data);
             }
+            // TrueType の集合 (.ttc) をそのまま埋め込んだものもある。FontName のフォントを選ぶ
+            final String name = descriptor.get("FontName") instanceof PdfName ? FontData.stripSubset(descriptor.name("FontName")) : null;
             final PdfStream trueType = descriptor.stream("FontFile2");
-            if (trueType != null) return TrueTypeFont.parse(trueType.decode(MAX_FONT_FILE));
+            if (trueType != null) return TrueTypeFont.parse(trueType.decode(MAX_FONT_FILE), name);
             final PdfStream other = descriptor.stream("FontFile3");
             if (other != null) {
                 final byte[] data = other.decode(MAX_FONT_FILE);
                 final String subtype = other.dict.name("Subtype");
                 if ("OpenType".equals(subtype) || (data.length >= 4 && (startsWith(data, "OTTO") || startsWith(data, "true")
-                        || (data[0] == 0 && data[1] == 1 && data[2] == 0 && data[3] == 0)))) {
-                    return TrueTypeFont.parse(data);
+                        || startsWith(data, "ttcf") || (data[0] == 0 && data[1] == 1 && data[2] == 0 && data[3] == 0)))) {
+                    return TrueTypeFont.parse(data, name);
                 }
                 return new CffFont(new FontBytes(data), null);
             }

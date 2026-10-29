@@ -18,6 +18,8 @@ public final class TrueTypeFont implements UnicodeFont {
     private static final int MAX_COMPOSITE_DEPTH = 8;
     // 1 つのグリフの点の数の上限
     private static final int MAX_POINTS = 65536;
+    // TrueType の集合 (.ttc) の中で調べるフォントの数の上限
+    private static final long MAX_COLLECTION_FONTS = 64;
 
     private static final String[] MAC_GLYPH_NAMES = (".notdef .null nonmarkingreturn space exclam quotedbl numbersign dollar percent "
             + "ampersand quotesingle parenleft parenright asterisk plus comma hyphen period slash zero one two three four five six "
@@ -103,6 +105,30 @@ public final class TrueTypeFont implements UnicodeFont {
 
     public static TrueTypeFont parse(byte[] bytes) {
         return new TrueTypeFont(new FontBytes(bytes), 0);
+    }
+
+    /**
+     * フォントを読む。TrueType の集合 (.ttc) なら、PostScript 名が name のフォント (なければ最初に読めたもの) を選ぶ。
+     *
+     * @param name 欲しいフォントの PostScript 名 (なければ null)
+     */
+    public static TrueTypeFont parse(byte[] bytes, String name) {
+        final FontBytes data = new FontBytes(bytes);
+        if (data.length() < 12 || data.u32(0) != 0x74746366L) return new TrueTypeFont(data, 0); // "ttcf"
+        final long count = Math.min(data.u32(8), MAX_COLLECTION_FONTS);
+        TrueTypeFont first = null;
+        for (int i = 0; i < count; i++) {
+            final TrueTypeFont font;
+            try {
+                font = new TrueTypeFont(data, data.u32(12 + 4L * i));
+            } catch (FontBytes.FontFormatError | ArrayIndexOutOfBoundsException e) {
+                continue;
+            }
+            if (name != null && name.equals(font.postScriptName())) return font;
+            if (first == null) first = font;
+        }
+        if (first == null) throw new FontBytes.FontFormatError("No font in the collection");
+        return first;
     }
 
     public boolean hasTable(String tag) {
