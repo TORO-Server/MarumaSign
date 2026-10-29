@@ -51,6 +51,8 @@ public final class ImageRegressionCheck {
         expect("bmp_argb4444.bmp alpha", argb4444.frames[0][argb4444.width - 1] >>> 24 == 0 && argb4444.frames[0][0] >>> 24 == 255);
         // GIF: 0.01 秒以下の表示時間は、ブラウザと同じく 0.1 秒にする
         for (int delay : decode("gif_anim.gif").delays) expect("gif_anim.gif delay " + delay, delay > 10);
+        checkAnimationBlend();
+        checkGifControlWithoutImage();
         checkSvg();
         // PNG と GIF 以外で、自分のデコーダが知らない形式は (ImageIO が読めても) 読まない
         try {
@@ -62,6 +64,65 @@ public final class ImageRegressionCheck {
 
         System.out.println(checked + " files checked, " + failed + " problems");
         System.exit(failed == 0 ? 0 : 1);
+    }
+
+    /**
+     * APNG の「透明度で重ねる」コマ。半透明の白に半透明の白を重ねても白のまま (透明度は 100 + 100 * 155 / 255)。
+     * 以前は透明度と色を別々に切り捨てて割っていたので、色が 255 を超えてとなりの成分にあふれ、ほぼ黒になっていた。
+     */
+    private static void checkAnimationBlend() throws Exception {
+        final int[] white = new int[4];
+        Arrays.fill(white, 0x64FFFFFF);
+        final int[] red = new int[4];
+        Arrays.fill(red, 0x80FF0000);
+        final byte[] apng = ApngWriter.write(2, 2, new int[][]{white, white, red}, 1, 10, 1);
+        final DecodedImage image = ImageLoader.decode(apng, "blend.png");
+        expect("blended APNG frames", image.frames.length == 3);
+        final int[] colors = {image.frames[1][0], image.frames[2][3]};
+        // 赤 (透明度 128) を、白 (透明度 161) に重ねたもの (RFC 9649 / APNG の式で計算した値)
+        final int total = 128 * 255 + 161 * 127;
+        final int expectedRed = 0xFF << 16 | (255 * 161 * 127 / total) << 8 | 255 * 161 * 127 / total;
+        final int[] expected = {0xA1FFFFFF, ((total + 127) / 255) << 24 | expectedRed};
+        for (int i = 0; i < colors.length; i++) {
+            expect("APNG blend " + i + ": " + Integer.toHexString(colors[i]) + ", expected " + Integer.toHexString(expected[i]),
+                    colors[i] == expected[i]);
+        }
+    }
+
+    /**
+     * 絵の付いていない制御の拡張 (最後に付いたものと、文字の拡張に付いたもの) のある GIF も読める。
+     * 以前はデータのないコマとして展開しようとして例外になり、GIF 全体が読めなかった。
+     */
+    private static void checkGifControlWithoutImage() throws Exception {
+        final java.io.ByteArrayOutputStream out = new java.io.ByteArrayOutputStream();
+        ImageIO.write(new BufferedImage(4, 4, BufferedImage.TYPE_INT_RGB), "gif", out);
+        final byte[] gif = out.toByteArray();
+        final byte[] control = {0x21, (byte) 0xF9, 4, 0, 10, 0, 0, 0};
+        // 文字の拡張 (Plain Text Extension): 見出しの 12 バイトと、文字 1 バイトのブロック
+        final byte[] text = {0x21, 0x01, 12, 0, 0, 0, 0, 4, 0, 4, 0, 4, 4, 1, 0, 1, 'a', 0};
+        final byte[][] tails = {control, concat(control, text)};
+        for (int i = 0; i < tails.length; i++) {
+            // 最後の 0x3B (終わりの印) の前に足す
+            final byte[] file = concat(Arrays.copyOf(gif, gif.length - 1), tails[i], new byte[]{0x3B});
+            try {
+                final DecodedImage image = ImageLoader.decode(file, "a.gif");
+                expect("GIF with a control extension without an image (" + i + ") has 1 frame", image.frames.length == 1);
+            } catch (IOException e) {
+                fail("GIF with a control extension without an image (" + i + "): " + e);
+            }
+        }
+    }
+
+    private static byte[] concat(byte[]... parts) {
+        int length = 0;
+        for (byte[] part : parts) length += part.length;
+        final byte[] all = new byte[length];
+        int p = 0;
+        for (byte[] part : parts) {
+            System.arraycopy(part, 0, all, p, part.length);
+            p += part.length;
+        }
+        return all;
     }
 
     // SVG の描き方と、悪意のあるファイルへの備え。色は、100x100 の SVG の座標 (x, y) で調べる

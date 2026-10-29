@@ -268,9 +268,12 @@ public final class SignManager {
         try {
             final int[] frameEnd = new int[count];
             int time = 0;
+            // 1 コマの時間は、全部を足しても int に収まるまでにする。APNG (1 コマ 65535 秒まで) や WebP (約 4.6 時間まで) の
+            // 長い時間のコマが多いと、足した時間があふれて負や前後の逆転した値になり、違うコマを表示していた
+            final int maxDelay = Integer.MAX_VALUE / count;
             for (int i = 0; i < count; i++) {
                 frames[i] = platform.createTexture(decoded.width, decoded.height, decoded.frames[i]);
-                time += Math.max(1, decoded.delays[i]);
+                time += Math.min(maxDelay, Math.max(1, decoded.delays[i]));
                 frameEnd[i] = time;
             }
             entry.set(TextureEntry.LOADED, decoded.width, decoded.height, frames, frameEnd, decoded.repetitions, true);

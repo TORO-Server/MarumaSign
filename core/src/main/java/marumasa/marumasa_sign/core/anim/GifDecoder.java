@@ -227,6 +227,9 @@ public final class GifDecoder {
             long canvasPixels = 0, framePixels = 0;
 
             for (GifFrame fr : frames) {
+                // 絵のない制御の拡張 (最後に付いたものや、文字の拡張に付いたもの) は、コマにしない (ブラウザと同じ)。
+                // 以前はデータのないまま展開しようとして例外になり、GIF 全体が読めなかった
+                if (fr.data == null) continue;
                 final int[] activeColTbl = fr.hasLocColTbl ? fr.localColTbl : globalColTbl;
                 if (activeColTbl == null) throw new IOException("GIF frame has no color table");
                 canvasPixels += wh;
