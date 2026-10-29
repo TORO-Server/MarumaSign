@@ -116,7 +116,7 @@ public final class TrueTypeFont implements UnicodeFont {
     public static TrueTypeFont parse(byte[] bytes, String name) {
         final FontBytes data = new FontBytes(bytes);
         if (data.length() < 12 || data.u32(0) != 0x74746366L) return new TrueTypeFont(data, 0); // "ttcf"
-        final long count = Math.min(data.u32(8), MAX_COLLECTION_FONTS);
+        final int count = (int) Math.min(data.u32(8), MAX_COLLECTION_FONTS);
         TrueTypeFont first = null;
         for (int i = 0; i < count; i++) {
             final TrueTypeFont font;

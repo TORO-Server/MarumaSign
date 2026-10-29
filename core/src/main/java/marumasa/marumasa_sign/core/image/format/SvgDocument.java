@@ -207,7 +207,11 @@ final class SvgDocument {
         setProperty(parser, "http://www.oracle.com/xml/jaxp/properties/totalEntitySizeLimit", ENTITY_SIZE);
         setProperty(parser, "http://www.oracle.com/xml/jaxp/properties/maxGeneralEntitySizeLimit", ENTITY_SIZE);
         setProperty(parser, "http://www.oracle.com/xml/jaxp/properties/maxParameterEntitySizeLimit", ENTITY_SIZE);
-        return parser.getXMLReader();
+        // 読み手そのものにも、外部の実体を読まない設定をする (工場の設定が読み手に伝わらない XML パーサーのため)
+        final XMLReader reader = parser.getXMLReader();
+        reader.setFeature("http://xml.org/sax/features/external-general-entities", false);
+        reader.setFeature("http://xml.org/sax/features/external-parameter-entities", false);
+        return reader;
     }
 
     private static void setFeature(SAXParserFactory factory, String name, boolean value) {

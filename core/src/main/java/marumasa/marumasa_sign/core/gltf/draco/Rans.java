@@ -142,7 +142,8 @@ final class Rans {
                 cumulative[i] = (int) sum;
                 final long next = sum + prob[i];
                 if (next > precision) throw new IOException("Invalid Draco probability table");
-                for (int j = (int) sum; j < next; j++) lut[j] = i;
+                final int end = (int) next;
+                for (int j = (int) sum; j < end; j++) lut[j] = i;
                 sum = next;
             }
             if (sum != precision) throw new IOException("Invalid Draco probability table");

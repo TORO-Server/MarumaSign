@@ -89,9 +89,10 @@ final class Prediction {
                     if (flags > table.numCorners()) throw new IOException("Too many Draco crease flags");
                     if (flags > 0) {
                         budget.alloc(flags);
-                        crease[i] = new boolean[(int) flags];
+                        final int count = (int) flags;
+                        crease[i] = new boolean[count];
                         final Rans.BitDecoder bits = Rans.BitDecoder.start(in);
-                        for (int j = 0; j < flags; j++) crease[i][j] = bits.next();
+                        for (int j = 0; j < count; j++) crease[i][j] = bits.next();
                     }
                 }
                 transform.decodeData(in);
