@@ -51,6 +51,17 @@ public final class ImageRegressionCheck {
         expect("bmp_argb4444.bmp alpha", argb4444.frames[0][argb4444.width - 1] >>> 24 == 0 && argb4444.frames[0][0] >>> 24 == 255);
         // GIF: 0.01 秒以下の表示時間は、ブラウザと同じく 0.1 秒にする
         for (int delay : decode("gif_anim.gif").delays) expect("gif_anim.gif delay " + delay, delay > 10);
+        // DDS: 行はバイト単位で詰めて並ぶ (1 行が 4 の倍数のバイトでなくても読める)。読めないと FFmpeg に回されて
+        // 隠れてしまうので、DDS のデコーダで直接読む (3D モデルのテクスチャは FFmpeg に回さない)
+        for (String name : new String[]{"dds_rgb24_odd.dds", "dds_l8_odd.dds", "dds_rgb24_dword.dds"}) {
+            try {
+                final BufferedImage dds = marumasa.marumasa_sign.core.texture.DdsDecoder.decode(Files.readAllBytes(resource(name).toPath()));
+                final DecodedImage still = new DecodedImage(dds.getWidth(), dds.getHeight(), new int[][]{ArgbPixels.read(dds)}, new int[]{0}, 0);
+                compare(name + " (DdsDecoder)", still, 0, ImageIO.read(resource(name + ".ref0.png")));
+            } catch (Exception e) {
+                fail(name + " (DdsDecoder): " + e);
+            }
+        }
         checkAnimationBlend();
         checkGifControlWithoutImage();
         checkSvg();
@@ -227,6 +238,10 @@ public final class ImageRegressionCheck {
         final StringBuilder b = new StringBuilder(s.length() * count);
         for (int i = 0; i < count; i++) b.append(s);
         return b.toString();
+    }
+
+    private static File resource(String name) throws Exception {
+        return new File(ImageRegressionCheck.class.getResource("/image/" + name).toURI());
     }
 
     private static DecodedImage decode(String name) throws Exception {
