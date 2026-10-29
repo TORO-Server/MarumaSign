@@ -64,6 +64,78 @@ final class PdfSamples {
     }
 
     /**
+     * 文字列と繰り返しの数を交互に並べたもの (text1, count1, text2, count2, ...) をつないだデータを、全体を配列に作らずに圧縮する。
+     * 展開すると 100 MB を超えるデータでも、試験のメモリを使わずに作れる。
+     */
+    static byte[] deflateRepeated(Object... parts) {
+        final Deflater deflater = new Deflater(6);
+        final ByteArrayOutputStream out = new ByteArrayOutputStream();
+        final byte[] buffer = new byte[65536];
+        for (int i = 0; i + 1 < parts.length; i += 2) {
+            final byte[] unit = ((String) parts[i]).getBytes(StandardCharsets.ISO_8859_1);
+            long remaining = (Integer) parts[i + 1];
+            // 64 KB ほどの塊にまとめて渡す
+            final int perChunk = Math.max(1, 65536 / Math.max(1, unit.length));
+            final byte[] chunk = new byte[perChunk * unit.length];
+            for (int k = 0; k < perChunk; k++) System.arraycopy(unit, 0, chunk, k * unit.length, unit.length);
+            while (remaining > 0) {
+                final int n = (int) Math.min(perChunk, remaining);
+                deflater.setInput(chunk, 0, n * unit.length);
+                while (!deflater.needsInput()) out.write(buffer, 0, deflater.deflate(buffer));
+                remaining -= n;
+            }
+        }
+        deflater.finish();
+        while (!deflater.finished()) out.write(buffer, 0, deflater.deflate(buffer));
+        deflater.end();
+        return out.toByteArray();
+    }
+
+    /**
+     * 1 ページの PDF で、オブジェクトストリーム (5 番から) の中のオブジェクト (100 番から) を、ページの ExtGState から使うもの。
+     * 相互参照ストリームで書く。streams[i] は i 番目のオブジェクトストリームの、圧縮したデータ (中は {@code count} 個のオブジェクト)。
+     */
+    static String objectStreamPage(int[] counts, int first, byte[]... streams) {
+        final StringBuilder gs = new StringBuilder();
+        final StringBuilder content = new StringBuilder();
+        int total = 0;
+        for (int count : counts) total += count;
+        for (int i = 0; i < total; i++) {
+            gs.append(" /G").append(i).append(' ').append(100 + i).append(" 0 R");
+            content.append("/G").append(i).append(" gs ");
+        }
+        content.append("0 g 0 0 10 10 re f");
+        final StringBuilder out = new StringBuilder("%PDF-1.7\n");
+        final List<Integer> offsets = new ArrayList<>();
+        final List<String> objects = new ArrayList<>();
+        objects.add("<< /Type /Catalog /Pages 2 0 R >>");
+        objects.add("<< /Type /Pages /Kids [3 0 R] /Count 1 >>");
+        objects.add("<< /Type /Page /Parent 2 0 R /MediaBox [0 0 100 100] /Contents 4 0 R /Resources << /ExtGState <<" + gs + " >> >> >>");
+        objects.add(stream("", content.toString()));
+        for (int i = 0; i < streams.length; i++) {
+            objects.add(stream("/Type /ObjStm /N " + counts[i] + " /First " + first + " /Filter /FlateDecode", latin1(streams[i])));
+        }
+        for (int i = 0; i < objects.size(); i++) {
+            offsets.add(out.length());
+            out.append(i + 1).append(" 0 obj\n").append(objects.get(i)).append("\nendobj\n");
+        }
+        final int xref = out.length();
+        // /W [1 4 1] の行: 0 番、1 番から並べたオブジェクト、相互参照ストリーム自身、100 番からのオブジェクトストリームの中のもの
+        final ByteArrayOutputStream rows = new ByteArrayOutputStream();
+        write(rows, 0, 0, 0, 0, 0, 0);
+        for (int offset : offsets) write(rows, 1, offset >>> 24, offset >>> 16 & 0xFF, offset >>> 8 & 0xFF, offset & 0xFF, 0);
+        write(rows, 1, xref >>> 24, xref >>> 16 & 0xFF, xref >>> 8 & 0xFF, xref & 0xFF, 0);
+        int number = 100;
+        for (int i = 0; i < counts.length; i++) {
+            for (int k = 0; k < counts[i]; k++, number++) write(rows, 2, 0, 0, 0, 5 + i, k);
+        }
+        final int self = objects.size() + 1;
+        out.append(self).append(" 0 obj\n").append(stream("/Type /XRef /Size " + number + " /Index [0 " + (self + 1) + " 100 " + (number - 100)
+                + "] /W [1 4 1] /Root 1 0 R", latin1(rows.toByteArray()))).append("\nendobj\nstartxref\n").append(xref).append("\n%%EOF\n");
+        return out.toString();
+    }
+
+    /**
      * 機能を確かめる、圧縮していない PDF。{名前, 中身}。
      */
     static List<String[]> synthetic() {
@@ -747,6 +819,29 @@ final class PdfSamples {
         for (int i = 3; i < chain.length - 1; i++) chain[i] = "<< /Length " + (i + 2) + " 0 R >>\nstream\n0 g\nendstream";
         chain[chain.length - 1] = "4";
         samples.add(new String[]{"length-chain", build(chain)});
+        // 空の辞書 780 万個を入れ子の配列に入れた内容 (圧縮して 30 KB ほど。600 MB を超えるオブジェクトを作っていた)
+        final List<Object> nestedDicts = new ArrayList<>();
+        nestedDicts.add("[");
+        nestedDicts.add(1);
+        for (int i = 0; i < 2; i++) java.util.Collections.addAll(nestedDicts, "[", 1, "<<>>", 3900000, "]", 1);
+        java.util.Collections.addAll(nestedDicts, "] TJ 0 g 0 0 10 10 re f", 1);
+        samples.add(new String[]{"nested-empty-dicts", build(
+                "<< /Type /Catalog /Pages 2 0 R >>",
+                "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+                "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 100 100] /Contents 4 0 R >>",
+                stream("/Filter /FlateDecode", latin1(deflateRepeated(nestedDicts.toArray()))))});
+        // 100 万個近い空の辞書の配列 12 個を、1 つのオブジェクトストリームに入れて、すべてページから使う
+        // (1 つずつは上限より少ないが、すべて覚えると 900 MB ほどになっていた)
+        final String inner = "[" + new String(new char[999990]).replace("\0", "<<>>") + "]\n";
+        final StringBuilder header = new StringBuilder();
+        for (int i = 0; i < 12; i++) header.append(100 + i).append(' ').append(i * inner.length()).append(' ');
+        final String headerText = String.format("%-200s", header);
+        samples.add(new String[]{"cached-object-items", objectStreamPage(new int[]{12}, headerText.length(),
+                deflateRepeated(headerText, 1, inner, 12))});
+        // 展開すると 100 MB になるオブジェクトストリーム 6 つ (戻したものをすべて覚えると、600 MB になっていた)
+        final byte[][] large = new byte[6][];
+        for (int i = 0; i < large.length; i++) large[i] = deflateRepeated((100 + i) + " 0\n", 1, " ", 100000000, "<< /ca 1 >>", 1);
+        samples.add(new String[]{"large-object-streams", objectStreamPage(new int[]{1, 1, 1, 1, 1, 1}, 6, large)});
         // V 5 (256 ビット) なのに R 4 の暗号化の辞書: R 4 の鍵の作り方に 32 バイトの鍵の長さを渡して、範囲の外を読んでいた
         final String padding = "(" + new String(new char[32]).replace('\0', 'A') + ")";
         samples.add(new String[]{"encrypt-v5-r4", page("<< >>", "0 g", "<< /Filter /Standard /V 5 /R 4 /Length 256 /CF << /StdCF "

@@ -13,6 +13,10 @@ public final class ObjectParser {
     public static final int MAX_DEPTH = 256;
     // 1 つの配列・辞書の要素の数の上限 (巨大なファイルの読み間違いで、いつまでも読み続けないように)
     private static final int MAX_ITEMS = 1 << 22;
+    // 読む値の要素 (配列と辞書の項目) の数の合計の上限。入れ子の中も数える。数えるのは resetItems で 0 に戻すまでの合計。
+    // 1 つの配列や辞書ごとの上限だけでは、[[<<>><<>>...] [<<>>...] ...] のような入れ子で、圧縮した 100 KB ほどのデータから
+    // 数 GB のオブジェクトを作れてしまう (空の辞書 1 つは 4 バイトだが、Java では 80 バイトほど使う)
+    public static final int MAX_TOTAL_ITEMS = 1 << 20;
 
     /**
      * 文字列を復号するもの。暗号化されたファイルの、間接オブジェクトの中の文字列に使う。
@@ -25,6 +29,8 @@ public final class ObjectParser {
     private final Resolver resolver;
     private final boolean allowReferences;
     private StringDecryptor decryptor;
+    // 読んだ要素の数 (MAX_TOTAL_ITEMS と比べる)
+    private int items;
 
     public ObjectParser(Lexer lexer, Resolver resolver, boolean allowReferences) {
         this.lexer = lexer;
@@ -38,6 +44,16 @@ public final class ObjectParser {
 
     public void setDecryptor(StringDecryptor decryptor) {
         this.decryptor = decryptor;
+    }
+
+    // これまでに読んだ要素の数
+    public int items() {
+        return items;
+    }
+
+    // 要素の数を数え直す (内容のように、命令ごとに引数を捨てるものに使う)
+    public void resetItems() {
+        items = 0;
     }
 
     /**
@@ -94,7 +110,7 @@ public final class ObjectParser {
                 lexer.seek(before);
                 return array;
             }
-            if (array.size() >= MAX_ITEMS) throw new IOException("Array is too large");
+            if (array.size() >= MAX_ITEMS || ++items > MAX_TOTAL_ITEMS) throw new IOException("Array is too large");
             final Object value = value(token, depth);
             // 配列の中の知らない語は、壊れたファイルの読み間違いなので null として残す (位置を保つ)
             array.add(value instanceof Keyword ? null : value);
@@ -109,7 +125,7 @@ public final class ObjectParser {
             final Object token = lexer.next();
             if (token == null || token == Keyword.DICT_END) return dict;
             if (token instanceof PdfName) {
-                if (dict.size() >= MAX_ITEMS) throw new IOException("Dictionary is too large");
+                if (dict.size() >= MAX_ITEMS || ++items > MAX_TOTAL_ITEMS) throw new IOException("Dictionary is too large");
                 final int valueStart = lexer.position();
                 final Object next = lexer.next();
                 if (next == null || next == Keyword.DICT_END) return dict;

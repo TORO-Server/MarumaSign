@@ -40,6 +40,8 @@ final class ContentParser {
      */
     boolean next() {
         operands.clear();
+        // 引数の要素の数は、命令ごとに数える (引数を全部覚えておくので、合わせた数に上限がある)
+        parser.resetItems();
         inlineImage = null;
         while (true) {
             final Object token = lexer.next();
@@ -48,8 +50,9 @@ final class ContentParser {
             try {
                 value = parser.value(token, 0);
             } catch (IOException e) {
-                // 深すぎる入れ子など: この命令は捨てて続ける
+                // 深すぎる入れ子や、要素の多すぎる引数など: この命令は捨てて続ける
                 operands.clear();
+                parser.resetItems();
                 continue;
             }
             if (value instanceof Keyword && value != Keyword.ARRAY_END && value != Keyword.DICT_END
@@ -62,7 +65,10 @@ final class ContentParser {
                 return true;
             }
             if (value instanceof Keyword) continue;
-            if (operands.size() >= MAX_OPERANDS) operands.clear();
+            if (operands.size() >= MAX_OPERANDS) {
+                operands.clear();
+                parser.resetItems();
+            }
             operands.add(value);
         }
     }
