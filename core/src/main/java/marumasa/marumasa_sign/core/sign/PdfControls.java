@@ -289,7 +289,10 @@ public final class PdfControls {
             if (texture != null && textureWidth == width && textureHeight == height) {
                 platform.updateTexture(texture, width, height, pixels);
             } else {
-                MarumaSign.releaseTexture(platform, texture);
+                // 先に手放してから作ると、作るところで例外が出たとき、手放したテクスチャが texture に残り、次にもう一度手放していた
+                final Object old = texture;
+                texture = null;
+                MarumaSign.releaseTexture(platform, old);
                 texture = platform.createTexture(width, height, pixels);
                 textureWidth = width;
                 textureHeight = height;
