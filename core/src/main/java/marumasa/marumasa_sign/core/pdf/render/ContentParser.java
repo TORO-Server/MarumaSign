@@ -151,12 +151,15 @@ final class ContentParser {
      */
     private static boolean followedByOperator(byte[] data, int position, int end) {
         final Lexer lexer = new Lexer(data, position, end);
+        int operands = 0;
         while (true) {
             final Object token = lexer.next();
-            // 内容の終わりまで引数しかない (EI が最後の命令)。範囲の途中で切れたものは決められないので、命令とはしない
-            if (token == null) return end == data.length;
+            // 内容の終わりまで引数しかない (EI が最後の命令) か、範囲の終わりまで引数が続いた (長い TJ の配列など)。
+            // 画像のデータは、引数として読める語が続かず、すぐに命令らしくない語になる
+            if (token == null) return end == data.length || operands >= 2;
             if (!(token instanceof Keyword) || token == Lexer.NULL || token == Keyword.ARRAY_START || token == Keyword.ARRAY_END
                     || token == Keyword.DICT_START || token == Keyword.DICT_END) {
+                operands++;
                 continue;
             }
             return isOperatorName(((Keyword) token).text);
