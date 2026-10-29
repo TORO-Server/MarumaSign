@@ -458,6 +458,11 @@ public final class PdfCheck {
                 expect(dark >= 12, "fallback font is not bold: " + dark);
                 break;
             }
+            case "missing-width":
+                // 2 つの a は、同じ所 (ページの x = 50 から 100) に重なる
+                expect(gray(image, 75, 125) < 30, "glyph is not drawn");
+                expect(gray(image, 125, 125) > 230, "width outside Widths is not MissingWidth");
+                break;
             case "cff-cidtogidmap":
                 // CID 1 は CIDToGIDMap で四角のグリフ 2 (ページの 50 から 150)
                 expect(gray(image, 100, 100) < 30, "CIDToGIDMap of an OpenType CFF font is ignored");

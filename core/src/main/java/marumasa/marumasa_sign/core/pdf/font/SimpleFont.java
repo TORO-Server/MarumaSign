@@ -161,7 +161,8 @@ final class SimpleFont extends PdfFont {
     public double width(long character) {
         final int code = (int) character & 0xFF;
         if (hasExplicitWidth(code)) return widths[code - firstChar] / 1000;
-        if (hasMissingWidth) return missingWidth / 1000;
+        // Widths があれば、その範囲の外のコードは MissingWidth (既定は 0。poppler と pdf.js と同じ)
+        if (hasMissingWidth || widths != null) return missingWidth / 1000;
         if (standard14 != null && metrics != null) {
             final String name = names[code & 0xFF];
             Double width = name == null ? null : metrics.widths.get(name);

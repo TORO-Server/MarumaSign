@@ -273,6 +273,13 @@ final class PdfSamples {
                         + "/Encoding /WinAnsiEncoding >>",
                 "<< /Type /FontDescriptor /FontName /FooSans /Flags 32 /FontWeight 700 /FontBBox [0 -200 1000 900] /ItalicAngle 0 "
                         + "/Ascent 900 /Descent -200 /CapHeight 700 /StemV 140 >>")});
+        // Widths の範囲 (FirstChar 98 から) の外のコード 97 の幅は、フォントの中の幅 (1000) ではなく MissingWidth (なければ 0)
+        samples.add(new String[]{"missing-width", page("<< /Font << /F1 5 0 R >> >>", "0 g BT /F1 50 Tf 50 50 Td (aa) Tj ET",
+                "<< /Type /Font /Subtype /Type1 /BaseFont /T /FirstChar 98 /LastChar 98 /Widths [500] /FontDescriptor 6 0 R >>",
+                "<< /Type /FontDescriptor /FontName /T /Flags 4 /FontBBox [0 0 1000 1000] /ItalicAngle 0 /Ascent 1000 /Descent 0 "
+                        + "/CapHeight 1000 /StemV 80 /FontFile 7 0 R >>",
+                stream("/Length1 " + type1[0].length + " /Length2 " + type1[1].length + " /Length3 0",
+                        latin1(type1[0]) + latin1(type1[1])))});
         // OpenType に入った、CID の決まっていない CFF を使う CIDFontType0 の CIDToGIDMap (CID 1 を、四角のグリフ 2 にする)
         samples.add(new String[]{"cff-cidtogidmap", page("<< /Font << /F1 5 0 R >> >>", "0 g BT /F1 100 Tf 50 50 Td <0001> Tj ET",
                 "<< /Type /Font /Subtype /Type0 /BaseFont /T /Encoding /Identity-H /DescendantFonts [6 0 R] >>",
