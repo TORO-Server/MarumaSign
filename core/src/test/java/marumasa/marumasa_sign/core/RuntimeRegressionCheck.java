@@ -66,11 +66,13 @@ public final class RuntimeRegressionCheck {
         final long start = System.nanoTime();
         try {
             checkTruncatedDownload();
+            checkLyingContentLength();
             checkCacheVanishesDuringRevalidation();
             checkPartialCacheFiles();
             checkCacheUnderConcurrentUse();
             checkCancelledRequestsAreNotLoaded();
             checkTexturesReleasedWhenRegisterFails();
+            checkLongAnimationDelays();
             if (Ffmpeg.isAvailable()) {
                 checkStopWhileStarting();
                 checkClosedVideoDoesNotRestart();
@@ -137,6 +139,66 @@ public final class RuntimeRegressionCheck {
             }
             check("a download cut short is not kept in the cache",
                     requests.size() == 2 && !requests.get(1).toLowerCase(java.util.Locale.ROOT).contains("if-none-match"));
+        } finally {
+            server.close();
+        }
+    }
+
+    /**
+     * Content-Length だけを大きく書いて、ほとんど送らないサーバーに、その大きさのメモリを確保させられない。
+     * 以前は書かれた大きさ (スプラットなら 200 MB まで) の配列を先に確保していたので、そうしたサーバーを指す看板を
+     * いくつも並べるだけで、ゲームのメモリを使い切らせられた。
+     */
+    private static void checkLyingContentLength() throws Exception {
+        final ServerSocket server = new ServerSocket(0, 50, InetAddress.getByName("127.0.0.1"));
+        final Thread thread = new Thread(new Runnable() {
+            @Override
+            public void run() {
+                while (!server.isClosed()) {
+                    try {
+                        final Socket socket = server.accept();
+                        try {
+                            readRequestHead(socket.getInputStream());
+                            final OutputStream output = socket.getOutputStream();
+                            output.write(("HTTP/1.1 200 OK\r\nContent-Length: " + (200 * 1024 * 1024) + "\r\n\r\n")
+                                    .getBytes(StandardCharsets.US_ASCII));
+                            output.write(new byte[1000]);
+                            output.flush();
+                        } finally {
+                            socket.close();
+                        }
+                    } catch (IOException e) {
+                        // 閉じた
+                    }
+                }
+            }
+        });
+        thread.setDaemon(true);
+        thread.start();
+        final String url = "http://127.0.0.1:" + server.getLocalPort() + "/huge.splat";
+        final com.sun.management.ThreadMXBean threads = (com.sun.management.ThreadMXBean) java.lang.management.ManagementFactory.getThreadMXBean();
+        final long id = Thread.currentThread().getId();
+        try {
+            // 1 回目は、クラスの読み込みなどで確保するものを済ませておく
+            for (int round = 0; round < 2; round++) {
+                final long before = threads.getThreadAllocatedBytes(id);
+                boolean failed = false;
+                try {
+                    Http.download(url, new Http.ContentCheck() {
+                        @Override
+                        public int maxBytes(byte[] head, int length, String name) {
+                            return 200 * 1024 * 1024;
+                        }
+                    });
+                } catch (IOException e) {
+                    failed = true;
+                }
+                final long allocated = threads.getThreadAllocatedBytes(id) - before;
+                if (round == 0) continue;
+                check("a download that lies about its Content-Length fails", failed);
+                check("a lying Content-Length does not make the download allocate its size (" + allocated / 1024 + " KB)",
+                        allocated < 32L * 1024 * 1024);
+            }
         } finally {
             server.close();
         }
@@ -423,6 +485,40 @@ public final class RuntimeRegressionCheck {
             check("no texture is released twice", platform.doubleReleases.get() == 0);
         } finally {
             platform.failAfter = -1;
+            MarumaSign.signs().clearCache();
+            server.stop(0);
+        }
+    }
+
+    /**
+     * 表示時間の長いコマがたくさんあるアニメーションでも、コマの終わりの時刻があふれない (正で、順に増えていく)。
+     * 以前は int で足していたので、APNG の 1 コマ 65535 秒のコマが 33 枚あると負になり、違うコマを表示していた。
+     */
+    private static void checkLongAnimationDelays() throws Exception {
+        final int[][] frames = new int[40][];
+        for (int i = 0; i < frames.length; i++) frames[i] = new int[]{0xFF000000 | i * 0x060402};
+        final byte[] apng = marumasa.marumasa_sign.core.image.ApngWriter.write(1, 1, frames, 65535, 1, 0);
+        final HttpServer server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+        server.createContext("/", new HttpHandler() {
+            @Override
+            public void handle(HttpExchange exchange) throws IOException {
+                respond(exchange, apng);
+            }
+        });
+        server.start();
+        try {
+            final String text = sign("http://127.0.0.1:" + server.getAddress().getPort() + "/long.png");
+            MarumaSign.sign(text);
+            run(new String[]{text}, 1.0, 60);
+            final TextureEntry entry = MarumaSign.sign(text).textureEntry();
+            check("the long animation is loaded", entry.state() == TextureEntry.LOADED);
+            final Field field = TextureEntry.class.getDeclaredField("frameEnd");
+            field.setAccessible(true);
+            final int[] frameEnd = (int[]) field.get(entry);
+            boolean increasing = frameEnd != null && frameEnd.length == frames.length && frameEnd[0] > 0;
+            for (int i = 1; increasing && i < frameEnd.length; i++) increasing = frameEnd[i] > frameEnd[i - 1];
+            check("the end times of long frames do not overflow (" + Arrays.toString(frameEnd) + ")", increasing);
+        } finally {
             MarumaSign.signs().clearCache();
             server.stop(0);
         }

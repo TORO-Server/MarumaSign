@@ -111,20 +111,27 @@ public final class Http {
         return readRest(input, new byte[0], -1, limit);
     }
 
+    // 知らされた大きさ (Content-Length) を信じて、先に確保してよい大きさ。これより大きいものは、届いた量に合わせて広げる
+    static final int TRUSTED_PREALLOCATION = 4 * 1024 * 1024;
+
     /**
      * head に続く残りを読み、head とつなげて返す。全体が limit バイトを超えたら IOException。
      * 大きさ (contentLength) が分かっていれば、その大きさの配列に直接読む (大きなファイルで、配列を何度も広げて写さないように)。
+     * ただし先に確保するのは TRUSTED_PREALLOCATION までにし、その先は届いた量に合わせて (最大で contentLength まで) 広げる。
+     * Content-Length はサーバーが自由に書けるので、そのまま確保すると、大きさだけを大きく書いて何も送らないサーバーの
+     * いくつもの看板で、1 つあたり上限 (スプラットなら 200 MB) ずつメモリを確保させられていた。
      */
     private static byte[] readRest(InputStream input, byte[] head, long contentLength, int limit) throws IOException {
         if (contentLength >= head.length && contentLength <= limit) {
-            final byte[] all = new byte[(int) contentLength];
+            byte[] all = new byte[(int) Math.min(contentLength, Math.max(TRUSTED_PREALLOCATION, head.length))];
             System.arraycopy(head, 0, all, 0, head.length);
             int filled = head.length;
-            while (filled < all.length) {
+            while (filled < contentLength) {
+                if (filled == all.length) all = java.util.Arrays.copyOf(all, (int) Math.min(contentLength, 2L * all.length));
                 final int read = input.read(all, filled, all.length - filled);
                 // 知らされた大きさより前に接続が切れた。途中までのものを全体として扱うと、
                 // 壊れたファイルを表示し、残しておく仕組み (DownloadCache) にも残して、次からも使ってしまう
-                if (read < 0) throw new IOException("Connection closed after " + filled + " of " + all.length + " bytes");
+                if (read < 0) throw new IOException("Connection closed after " + filled + " of " + contentLength + " bytes");
                 filled += read;
             }
             // 知らされた大きさより長く送られてきたら、大きさが分からない場合と同じく、上限までは読む
