@@ -7,14 +7,18 @@ import java.io.InputStream;
 import java.util.zip.GZIPInputStream;
 
 /**
- * Niantic の .spz (バージョン 2、3、および 4) を読み込む。
- * バージョン 2 および 3 は全体が gzip 圧縮され、バージョン 4 は平文の 32 バイトヘッダと
- * TOC (目次)、および属性ストリームごとの Zstandard (RFC 8878) 圧縮で構成される。
- * .spz の座標系は仕様上 RUB (+X が右、+Y が上、+Z が手前) で SplatCloud と一致するため、flipYZ は行わない。
+ * Niantic の .spz (バージョン 1、2、3、および 4) を読み込む。
+ * バージョン 1 - 3 は全体が gzip 圧縮され (1 は位置が半精度の浮動小数点数)、バージョン 4 は平文の 32 バイトヘッダと
+ * 拡張、TOC (目次)、および属性ストリームごとの Zstandard (RFC 8878) 圧縮で構成される。
+ * 読んだ結果はファイルの座標のまま。向き (仕様では RUB だが、そうでないファイルも多い) は SplatLoader が SplatCoordinates で直す。
  */
 final class SpzReader {
 
     private static final int NGSP_MAGIC = 0x5053474E;
+    // SPZ_ADOBE_coordinate_system の拡張の種類
+    private static final int EXTENSION_COORDINATE_SYSTEM = 0xADBE0003;
+    // 拡張の記録を読む数の上限
+    private static final int MAX_EXTENSIONS = 64;
     private static final int MAX_POINTS = 10_000_000;
     private static final long MAX_UNCOMPRESSED_BYTES = 512L * 1024L * 1024L;
     private static final float COLOR_SCALE = 0.15f;
@@ -24,7 +28,7 @@ final class SpzReader {
     }
 
     /**
-     * 先頭のバイト列から SPZ (v2 / v3 の gzip、または v4 の平文 NGSP ヘッダ) かどうかを確かめる。
+     * 先頭のバイト列から SPZ (v1 - v3 の gzip、または v4 の平文 NGSP ヘッダ) かどうかを確かめる。
      */
     static boolean isSpz(byte[] head, int length) {
         if (head == null || length < 4) return false;
@@ -48,7 +52,7 @@ final class SpzReader {
                     && tocByteOffset >= 32;
         }
 
-        // バージョン 2 / 3: 全体が gzip 圧縮されたストリーム
+        // バージョン 1 / 2 / 3: 全体が gzip 圧縮されたストリーム
         if (limit < 18) return false;
         if ((head[0] & 0xFF) != 0x1F || (head[1] & 0xFF) != 0x8B) return false;
         try (GZIPInputStream gzip = new GZIPInputStream(new ByteArrayInputStream(head, 0, limit))) {
@@ -61,10 +65,10 @@ final class SpzReader {
             final int fractionalBits = hdr[13] & 0xFF;
             final int reserved = hdr[15] & 0xFF;
             return magic == NGSP_MAGIC
-                    && (version == 2 || version == 3)
+                    && version >= 1 && version <= 3
                     && numPoints > 0 && numPoints <= MAX_POINTS
                     && shDegree <= 3
-                    && fractionalBits <= 24
+                    && (version == 1 || fractionalBits <= 24)
                     && reserved == 0;
         } catch (IOException e) {
             return false;
@@ -79,7 +83,7 @@ final class SpzReader {
             return loadV4(content);
         }
 
-        // バージョン 2 / 3: gzip 圧縮ストリーム
+        // バージョン 1 / 2 / 3: gzip 圧縮ストリーム
         if ((content[0] & 0xFF) == 0x1F && (content[1] & 0xFF) == 0x8B) {
             return loadLegacyGzip(content);
         }
@@ -96,7 +100,7 @@ final class SpzReader {
             if (magic != NGSP_MAGIC) throw new IOException("Invalid SPZ magic");
 
             final int version = readIntLE(hdr, 4);
-            if (version != 2 && version != 3) throw new IOException("Unsupported SPZ version: " + version);
+            if (version < 1 || version > 3) throw new IOException("Unsupported SPZ version: " + version);
 
             final int numPoints = readIntLE(hdr, 8);
             if (numPoints <= 0 || numPoints > MAX_POINTS) {
@@ -106,15 +110,17 @@ final class SpzReader {
             final int shDegree = hdr[12] & 0xFF;
             final int fractionalBits = hdr[13] & 0xFF;
             final int reserved = hdr[15] & 0xFF;
-            if (shDegree > 3 || fractionalBits > 24 || reserved != 0) {
+            // バージョン 1 は位置が半精度の浮動小数点数で、fractionalBits を使わない
+            if (shDegree > 3 || (version != 1 && fractionalBits > 24) || reserved != 0) {
                 throw new IOException("Invalid SPZ header parameters");
             }
 
             final int rotStride = version == 3 ? 4 : 3;
+            final int posStride = version == 1 ? 6 : 9;
             final int shDim = SplatCloud.restCoefficients(shDegree);
             final int shPerPoint = shDim * 3;
 
-            final long posBytesLen = 9L * numPoints;
+            final long posBytesLen = (long) posStride * numPoints;
             final long alphaBytesLen = numPoints;
             final long colorBytesLen = 3L * numPoints;
             final long scaleBytesLen = 3L * numPoints;
@@ -142,12 +148,17 @@ final class SpzReader {
             readFully(gzip, rotBytes, 0, rotBytes.length);
 
             // 1 パス目: 位置と importance の計算
-            final float posScale = 1.0f / (1 << fractionalBits);
+            final float posScale = 1.0f / (1 << Math.min(fractionalBits, 24));
             final float[] rawPositions = new float[numPoints * 3];
             float[] importance = new float[numPoints];
             for (int i = 0; i < numPoints; i++) {
-                final int po = i * 9;
+                final int po = i * posStride;
                 for (int c = 0; c < 3; c++) {
+                    if (version == 1) {
+                        final int co = po + c * 2;
+                        rawPositions[i * 3 + c] = halfToFloat((posBytes[co] & 0xFF) | ((posBytes[co + 1] & 0xFF) << 8));
+                        continue;
+                    }
                     final int co = po + c * 3;
                     int fixed = (posBytes[co] & 0xFF)
                             | ((posBytes[co + 1] & 0xFF) << 8)
@@ -161,6 +172,10 @@ final class SpzReader {
                 final float sy = (float) Math.exp((scaleBytes[so + 1] & 0xFF) / 16.0f - 10.0f);
                 final float sz = (float) Math.exp((scaleBytes[so + 2] & 0xFF) / 16.0f - 10.0f);
                 importance[i] = SplatLoader.importance(opacity, sx, sy, sz);
+            }
+            // 半精度の無限大や NaN (バージョン 1) は描けない
+            for (int i = 0; i < rawPositions.length; i++) {
+                if (!Float.isFinite(rawPositions[i])) throw new IOException("Non-finite SPZ position");
             }
 
             final int[] selected = SplatLoader.select(importance, rawPositions, numPoints, SplatLoader.MAX_SPLATS);
@@ -192,7 +207,7 @@ final class SpzReader {
                 }
 
                 final int ro = i * rotStride;
-                if (version == 2) {
+                if (version <= 2) {
                     final float x = (rotBytes[ro] & 0xFF) / 127.5f - 1.0f;
                     final float y = (rotBytes[ro + 1] & 0xFF) / 127.5f - 1.0f;
                     final float z = (rotBytes[ro + 2] & 0xFF) / 127.5f - 1.0f;
@@ -246,6 +261,49 @@ final class SpzReader {
 
             return new SplatCloud(count, positions, rotations, scales, opacities, colors, shDegree, sh);
         }
+    }
+
+    // IEEE 754 の半精度 (16 ビット) の浮動小数点数
+    static float halfToFloat(int bits) {
+        final int sign = (bits & 0x8000) << 16;
+        final int exponent = (bits >>> 10) & 0x1F;
+        final int mantissa = bits & 0x3FF;
+        if (exponent == 0x1F) return Float.intBitsToFloat(sign | 0x7F800000 | (mantissa << 13));
+        if (exponent == 0) {
+            // 非正規化数 (0 を含む)
+            final float value = mantissa * (1.0f / (1 << 24));
+            return sign != 0 ? -value : value;
+        }
+        return Float.intBitsToFloat(sign | ((exponent + 112) << 23) | (mantissa << 13));
+    }
+
+    /**
+     * バージョン 4 の拡張 SPZ_ADOBE_coordinate_system (0xADBE0003) で宣言された座標の名前 (RUB、RDF など)。
+     * 拡張がない (バージョン 1 - 3 を含む) か、値が 0 (UNSPECIFIED) や範囲外なら null。
+     * 拡張は 32 バイト目から目次 (TOC) の手前まで並ぶ [u32 種類][u32 長さ][中身] の記録で、知らないものは長さで飛ばす
+     */
+    static String declaredCoordinate(byte[] content) {
+        if (content == null || content.length < 32 || readIntLE(content, 0) != NGSP_MAGIC || readIntLE(content, 4) != 4) {
+            return null;
+        }
+        if ((content[14] & 0x02) == 0) return null;
+        final long toc = Math.min(readIntLE(content, 16) & 0xFFFFFFFFL, content.length);
+        long p = 32;
+        String coordinate = null;
+        for (int n = 0; n < MAX_EXTENSIONS && p + 8 <= toc; n++) {
+            final int type = readIntLE(content, (int) p);
+            final long length = readIntLE(content, (int) p + 4) & 0xFFFFFFFFL;
+            final long start = p + 8;
+            if (length > toc - start) break;
+            if (type == EXTENSION_COORDINATE_SYSTEM && length >= 4) {
+                final int value = readIntLE(content, (int) start);
+                if (value >= 1 && value < SplatCoordinates.COORDINATE_SYSTEMS.length) {
+                    coordinate = SplatCoordinates.COORDINATE_SYSTEMS[value];
+                }
+            }
+            p = start + length;
+        }
+        return coordinate;
     }
 
     private static int readIntLE(byte[] b, int o) {
