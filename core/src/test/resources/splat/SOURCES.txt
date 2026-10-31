@@ -10,3 +10,7 @@ SplatFuzz の種と SplatRegressionCheck で使う、小さなガウシアンス
   v4_sh0.spz, v4_sh3.spz    Zstandard の .spz 版 4 (Raw と RLE のブロック、拡張のバイトあり)
   mode0/1/2.ksplat          .ksplat の圧縮の形式 0、1、2 (1 と 2 は SH 1 次、バケットの一部が端数)
   v2.sog                    .sog 版 2 (可逆 WebP、shN あり)
+
+次の 2 つは、Node.js で作ったもの (座標の軸を表す棒と、床の場面)。
+  v1.spz                    gzip の .spz 版 1 (位置が半精度の浮動小数点数)
+  v4_coord.spz              .spz 版 4。拡張 SPZ_ADOBE_coordinate_system で LUB (左右が逆) と宣言したもの
