@@ -8,6 +8,7 @@ import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Locale;
@@ -18,6 +19,7 @@ import java.util.zip.Inflater;
 /**
  * PlayCanvas の .sog (SOGS v1 / v2) を読み込む。
  * ZIP アーカイブ内の meta.json と可逆 WebP 画像を展開してガウス分布を復元する。
+ * zip にしていないもの (meta.json と WebP のファイルが並んだフォルダ) も読む (loadFiles)。
  */
 final class SogReader {
 
@@ -28,6 +30,9 @@ final class SogReader {
     // shN の中心の画像の大きさの上限 (幅 64 x 15 x 3、高さ 1024 で 65536 色)
     private static final long MAX_CENTROID_PIXELS = 64L * 15 * 1024;
     private static final float SQRT2 = 1.4142135623730951f;
+    // zip にしていない .sog の meta.json の大きさと、参照するファイルの数の上限 (v2 で 7 個)
+    static final int MAX_META_BYTES = 65536;
+    private static final int MAX_LOOSE_FILES = 16;
 
     private SogReader() {
     }
@@ -53,7 +58,68 @@ final class SogReader {
         final Map<String, byte[]> entries = readZip(content);
         final byte[] metaBytes = entries.get("meta.json");
         if (metaBytes == null) throw new IOException("SOG archive is missing meta.json");
+        return loadEntries(metaBytes, entries);
+    }
 
+    /**
+     * meta.json の内容が SOG (v1 か v2) の meta.json なら、参照するファイルの名前 (重複なし、meta.json からの相対)。違えば null
+     */
+    static List<String> metaFiles(byte[] meta) {
+        if (meta == null || meta.length > MAX_META_BYTES) return null;
+        final Map<String, Object> json;
+        try {
+            final Object parsed = Json.parse(new String(meta, StandardCharsets.UTF_8));
+            if (!(parsed instanceof Map)) return null;
+            json = Json.object(parsed);
+        } catch (IOException | RuntimeException e) {
+            return null;
+        }
+        final Object version = json.get("version");
+        if (version != null && !(version instanceof Number && ((Number) version).doubleValue() == 2)) return null;
+        final List<String> names = new ArrayList<String>();
+        for (String key : new String[]{"means", "scales", "quats", "sh0", "shN"}) {
+            final Object part = json.get(key);
+            if (part == null && key.equals("shN")) continue;
+            if (!(part instanceof Map)) return null;
+            final Object files = ((Map<?, ?>) part).get("files");
+            if (!(files instanceof List) || ((List<?>) files).isEmpty()) return null;
+            for (Object file : (List<?>) files) {
+                if (!(file instanceof String) || ((String) file).isEmpty() || ((String) file).length() > 256) return null;
+                if (!names.contains(file)) names.add((String) file);
+            }
+        }
+        return names.size() <= MAX_LOOSE_FILES ? names : null;
+    }
+
+    /**
+     * zip にしていない .sog を読む。meta.json が参照するファイルを files で読み、zip の .sog と同じ上限
+     * (1 つ 64 MB、合わせて 128 MB、16 個まで) を当てる。どれも WebP (RIFF....WEBP) でなければならない
+     */
+    static SplatCloud loadFiles(byte[] meta, SplatLoader.SogFiles files) throws IOException {
+        final List<String> names = metaFiles(meta);
+        if (names == null) throw new IOException("Invalid SOG meta.json");
+        final Map<String, byte[]> entries = new HashMap<String, byte[]>();
+        long total = meta.length;
+        for (String name : names) {
+            final long remaining = MAX_TOTAL_BYTES - total;
+            if (remaining <= 0) throw new IOException("SOG files exceed size limit");
+            final byte[] data = files.load(name, (int) Math.min(MAX_ENTRY_BYTES, remaining));
+            if (data == null || data.length > MAX_ENTRY_BYTES || data.length > remaining) {
+                throw new IOException("SOG file exceeds size limit: " + name);
+            }
+            if (!isWebp(data)) throw new IOException("SOG file is not WebP: " + name);
+            total += data.length;
+            entries.put(name, data);
+        }
+        return loadEntries(meta, entries);
+    }
+
+    private static boolean isWebp(byte[] data) {
+        return data.length >= 12 && data[0] == 'R' && data[1] == 'I' && data[2] == 'F' && data[3] == 'F'
+                && data[8] == 'W' && data[9] == 'E' && data[10] == 'B' && data[11] == 'P';
+    }
+
+    private static SplatCloud loadEntries(byte[] metaBytes, Map<String, byte[]> entries) throws IOException {
         final Object parsed = Json.parse(new String(metaBytes, StandardCharsets.UTF_8));
         if (!(parsed instanceof Map)) throw new IOException("Invalid SOG meta.json");
         final Map<String, Object> meta = Json.object(parsed);

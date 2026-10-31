@@ -29,6 +29,9 @@ public final class SplatCheck {
         testFlipYZSignTable();
         testMaxSplatsSelection();
         testCropping();
+        testCoordinateSystems();
+        testSpzV1AndDeclaredCoordinates();
+        testLooseSog();
         testMalformedAndMaliciousInputs();
 
         final File dataDir = findDataDir(args);
@@ -52,6 +55,313 @@ public final class SplatCheck {
             if (f.exists()) return f;
         }
         return null;
+    }
+
+    // 座標の向き (SplatCoordinates): 名前と行列、URL の #coord=、16 通りの向きの変換 (位置・形・視線で変わる色)、上の向きの推定
+    private static void testCoordinateSystems() {
+        System.out.println("[3.6/6] Testing coordinate systems...");
+        for (int v = 1; v < SplatCoordinates.COORDINATE_SYSTEMS.length; v++) {
+            if (SplatCoordinates.matrix(SplatCoordinates.COORDINATE_SYSTEMS[v]) == null) {
+                throw new AssertionError("Coordinate system " + v + " has no matrix");
+            }
+        }
+        for (String bad : new String[]{"RUU", "UBR", "RU", "RUBX", "XYZ", "", null}) {
+            if (SplatCoordinates.matrix(bad) != null) throw new AssertionError("Invalid coordinate accepted: " + bad);
+        }
+        if (!Arrays.equals(SplatCoordinates.matrix("rub"), new double[]{1, 0, 0, 0, 1, 0, 0, 0, 1})) {
+            throw new AssertionError("RUB must be the identity");
+        }
+        assertEquals("RDF", SplatCoordinates.fromUrl("https://example.com/a.spz#coord=rdf"), "#coord=rdf");
+        assertEquals("LUB", SplatCoordinates.fromUrl("https://example.com/a.ply#page=2&coordinates=LUB"), "#...&coordinates=");
+        assertEquals(null, SplatCoordinates.fromUrl("https://example.com/a.spz#coord=RUU"), "invalid #coord=");
+        assertEquals(null, SplatCoordinates.fromUrl("https://example.com/a.spz?coord=RDF"), "query is not a fragment");
+        assertEquals(null, SplatCoordinates.fromUrl(null), "null URL");
+
+        // RDF → RUB は、これまでの flipYZ と同じ結果になる
+        final SplatCloud viaFlip = randomCloud(7, 3, 11);
+        final SplatCloud viaConvert = randomCloud(7, 3, 11);
+        SplatLoader.flipYZ(viaFlip.count, viaFlip.positions, viaFlip.rotations, viaFlip.shDegree, viaFlip.shCoefficients);
+        SplatCoordinates.convert(viaConvert, "RDF", "RUB");
+        assertClose(viaFlip.positions, viaConvert.positions, 1e-6f, "RDF->RUB positions");
+        assertClose(viaFlip.rotations, viaConvert.rotations, 1e-6f, "RDF->RUB rotations");
+        assertClose(viaFlip.shCoefficients, viaConvert.shCoefficients, 1e-5f, "RDF->RUB SH");
+
+        // 16 通りすべて: 位置は行列で移り、分布の形 (共分散) も同じ行列で移り、
+        // 新しい向き M d から見た色は、元の向き d から見た色と同じ
+        for (int v = 1; v < SplatCoordinates.COORDINATE_SYSTEMS.length; v++) {
+            final String name = SplatCoordinates.COORDINATE_SYSTEMS[v];
+            final double[] m = SplatCoordinates.matrix(name);
+            final SplatCloud before = randomCloud(5, 3, 100 + v);
+            final SplatCloud after = randomCloud(5, 3, 100 + v);
+            SplatCoordinates.convert(after, name, "RUB");
+            for (int i = 0; i < before.count; i++) {
+                final double[] p = apply(m, before.positions[i * 3], before.positions[i * 3 + 1], before.positions[i * 3 + 2]);
+                for (int c = 0; c < 3; c++) {
+                    if (Math.abs(p[c] - after.positions[i * 3 + c]) > 1e-5) throw new AssertionError(name + ": position");
+                }
+                final double[] covBefore = covariance(before, i), covAfter = covariance(after, i);
+                for (int r = 0; r < 3; r++) {
+                    for (int c = 0; c < 3; c++) {
+                        double expected = 0;
+                        for (int a = 0; a < 3; a++) {
+                            for (int b = 0; b < 3; b++) expected += m[a * 3 + r] * covBefore[a * 3 + b] * m[b * 3 + c];
+                        }
+                        if (Math.abs(expected - covAfter[r * 3 + c]) > 1e-4) {
+                            throw new AssertionError(name + ": covariance " + expected + " != " + covAfter[r * 3 + c]);
+                        }
+                    }
+                }
+                for (int k = 0; k < 6; k++) {
+                    final double t = k * 1.3 + 0.2, u = k * 0.7 - 1.1;
+                    final double dx = Math.cos(t) * Math.cos(u), dy = Math.sin(u), dz = Math.sin(t) * Math.cos(u);
+                    final double[] d = apply(m, dx, dy, dz);
+                    for (int c = 0; c < 3; c++) {
+                        final double expected = shColor(before, i, c, dx, dy, dz);
+                        final double actual = shColor(after, i, c, d[0], d[1], d[2]);
+                        if (Math.abs(expected - actual) > 1e-4) {
+                            throw new AssertionError(name + ": SH color " + expected + " != " + actual);
+                        }
+                    }
+                }
+            }
+        }
+
+        // 上の向きの推定: 下の端に水平な床がある場面は RUB、上下を逆にすると RDF、手がかりがなければ分からない
+        final SplatCloud floorBelow = floorScene(false);
+        assertEquals("RUB", SplatCoordinates.guessUp(floorBelow), "guess with the floor below");
+        final SplatCloud floorAbove = floorScene(false);
+        SplatCoordinates.convert(floorAbove, "RUB", "RDF");
+        assertEquals("RDF", SplatCoordinates.guessUp(floorAbove), "guess with the floor above");
+        assertEquals(null, SplatCoordinates.guessUp(floorScene(true)), "guess without flat splats");
+    }
+
+    // .spz のバージョン 1 (半精度の位置) と、バージョン 4 の座標の拡張
+    private static void testSpzV1AndDeclaredCoordinates() throws IOException {
+        System.out.println("[3.7/6] Testing SPZ v1 and SPZ_ADOBE_coordinate_system...");
+        if (SpzReader.halfToFloat(0x3C00) != 1f || SpzReader.halfToFloat(0xC000) != -2f
+                || SpzReader.halfToFloat(0x0001) != (float) Math.pow(2, -24) || SpzReader.halfToFloat(0x3555) != 0.33325195f
+                || !Float.isInfinite(SpzReader.halfToFloat(0x7C00)) || !Float.isNaN(SpzReader.halfToFloat(0x7E00))) {
+            throw new AssertionError("halfToFloat");
+        }
+
+        // 位置が (1, 2, -0.5) の 1 点 (16 個並べる)。仕様どおり RUB とみなされ、そのまま読まれる
+        final int n = 16;
+        final ByteBuffer raw = ByteBuffer.allocate(16 + n * (6 + 1 + 3 + 3 + 3)).order(ByteOrder.LITTLE_ENDIAN);
+        raw.putInt(0x5053474E).putInt(1).putInt(n).put((byte) 0).put((byte) 0).put((byte) 0).put((byte) 0);
+        for (int i = 0; i < n; i++) raw.putShort((short) 0x3C00).putShort((short) 0x4000).putShort((short) 0xB800);
+        for (int i = 0; i < n; i++) raw.put((byte) 255);
+        for (int i = 0; i < n * 3; i++) raw.put((byte) 128);
+        for (int i = 0; i < n * 3; i++) raw.put((byte) 112);
+        for (int i = 0; i < n * 3; i++) raw.put((byte) 128);
+        final ByteArrayOutputStream gz = new ByteArrayOutputStream();
+        try (GZIPOutputStream out = new GZIPOutputStream(gz)) {
+            out.write(raw.array());
+        }
+        final byte[] v1 = gz.toByteArray();
+        if (!SplatLoader.isSplat(v1, v1.length, null)) throw new AssertionError("SPZ v1 must be detected");
+        final SplatCloud cloud = SplatLoader.load(v1, "v1.spz");
+        assertClose(new float[]{1, 2, -0.5f}, Arrays.copyOf(cloud.positions, 3), 0f, "SPZ v1 positions");
+        final SplatCloud forced = SplatLoader.load(v1, "v1.spz#coord=RDF");
+        assertClose(new float[]{1, -2, 0.5f}, Arrays.copyOf(forced.positions, 3), 0f, "SPZ v1 with #coord=RDF");
+        final byte[] truncated = Arrays.copyOf(v1, v1.length - 20);
+        expectIOException(truncated, "v1.spz", "truncated SPZ v1");
+
+        // 拡張の記録: 知らない拡張 (飛ばす) のあとに座標 (6 = RDF)
+        assertEquals("RDF", SpzReader.declaredCoordinate(spzV4Header(2, new int[][]{{0xADBE0002, 0, 0, 0}, {0xADBE0003, 6}})),
+                "declared RDF after an unknown extension");
+        assertEquals("LUB", SpzReader.declaredCoordinate(spzV4Header(2, new int[][]{{0xADBE0003, 3}})), "declared LUB");
+        assertEquals(null, SpzReader.declaredCoordinate(spzV4Header(2, new int[][]{{0xADBE0003, 0}})), "UNSPECIFIED");
+        assertEquals(null, SpzReader.declaredCoordinate(spzV4Header(2, new int[][]{{0xADBE0003, 17}})), "out of range");
+        assertEquals(null, SpzReader.declaredCoordinate(spzV4Header(0, new int[][]{{0xADBE0003, 6}})), "extension flag not set");
+        // 長さが目次を越える記録は読まない
+        final byte[] overrun = spzV4Header(2, new int[][]{{0xADBE0003, 6}});
+        ByteBuffer.wrap(overrun).order(ByteOrder.LITTLE_ENDIAN).putInt(36, 1000);
+        assertEquals(null, SpzReader.declaredCoordinate(overrun), "extension longer than the header");
+        assertEquals(null, SpzReader.declaredCoordinate(v1), "no extension in v1");
+    }
+
+    // zip にしていない .sog: zip の .sog と同じ結果、上限、WebP でないファイル
+    private static void testLooseSog() throws IOException {
+        System.out.println("[3.8/6] Testing unzipped SOG...");
+        final byte[] zip = Files.readAllBytes(new File("src/test/resources/splat/v2.sog").toPath());
+        final java.util.Map<String, byte[]> entries = SogReader.readZip(zip);
+        final byte[] meta = entries.get("meta.json");
+        if (!SplatLoader.isSogMeta(meta)) throw new AssertionError("meta.json of v2.sog must be a SOG meta.json");
+        final SplatCloud zipped = SplatLoader.load(zip, "v2.sog");
+        final SplatCloud loose = SplatLoader.loadSogFiles(meta, (name, max) -> {
+            final byte[] data = entries.get(name);
+            if (data == null) throw new IOException("missing " + name);
+            if (data.length > max) throw new IOException("too large");
+            return data;
+        }, "https://example.com/v2/meta.json");
+        if (zipped.count != loose.count) throw new AssertionError("Unzipped SOG count mismatch");
+        assertClose(zipped.positions, loose.positions, 0f, "Unzipped SOG positions");
+        assertClose(zipped.shCoefficients, loose.shCoefficients, 0f, "Unzipped SOG SH");
+
+        // WebP でないファイル
+        try {
+            SplatLoader.loadSogFiles(meta, (name, max) -> "not a webp file".getBytes(StandardCharsets.US_ASCII), null);
+            throw new AssertionError("Non-WebP SOG file must be rejected");
+        } catch (IOException expected) {
+            // 期待通り
+        }
+        // 読む側に渡す上限: 1 つ 64 MB まで、合わせて 128 MB まで
+        final int[] largest = {0};
+        SplatLoader.loadSogFiles(meta, (name, max) -> {
+            largest[0] = Math.max(largest[0], max);
+            return entries.get(name);
+        }, null);
+        if (largest[0] != 64 * 1024 * 1024) throw new AssertionError("SOG file limit: " + largest[0]);
+        try {
+            SplatLoader.loadSogFiles(meta, (name, max) -> {
+                final byte[] big = Arrays.copyOf(entries.get(name), 64 * 1024 * 1024 + 1);
+                return big;
+            }, null);
+            throw new AssertionError("Oversized SOG file must be rejected");
+        } catch (IOException expected) {
+            // 期待通り
+        }
+
+        // meta.json でないもの、ファイルが多すぎるもの、大きすぎるもの
+        final String text = new String(meta, StandardCharsets.UTF_8);
+        if (SplatLoader.isSogMeta("{\"asset\":{\"version\":\"2.0\"}}".getBytes(StandardCharsets.UTF_8))) {
+            throw new AssertionError("glTF JSON is not a SOG meta.json");
+        }
+        final String version3 = text.replaceFirst("\"version\"\\s*:\\s*2", "\"version\":3");
+        if (version3.equals(text)) throw new AssertionError("v2.sog meta.json has no version 2");
+        if (SplatLoader.isSogMeta(version3.getBytes(StandardCharsets.UTF_8))) {
+            throw new AssertionError("SOG version 3 must be rejected");
+        }
+        final StringBuilder many = new StringBuilder("{\"means\":{\"files\":[");
+        for (int i = 0; i < 17; i++) many.append(i == 0 ? "" : ",").append("\"f").append(i).append(".webp\"");
+        many.append("]},\"scales\":{\"files\":[\"a.webp\"]},\"quats\":{\"files\":[\"a.webp\"]},\"sh0\":{\"files\":[\"a.webp\"]}}");
+        if (SplatLoader.isSogMeta(many.toString().getBytes(StandardCharsets.UTF_8))) {
+            throw new AssertionError("SOG meta.json with too many files must be rejected");
+        }
+        final byte[] huge = Arrays.copyOf(meta, SplatLoader.MAX_SOG_META_SIZE + 1);
+        Arrays.fill(huge, meta.length, huge.length, (byte) ' ');
+        if (SplatLoader.isSogMeta(huge)) throw new AssertionError("Oversized meta.json must be rejected");
+    }
+
+    // 32 バイトのヘッダーと拡張の記録だけの .spz バージョン 4 (declaredCoordinate はここまでしか読まない)
+    private static byte[] spzV4Header(int flags, int[][] records) {
+        int length = 32;
+        for (int[] r : records) length += 4 + 4 * r.length;
+        final ByteBuffer b = ByteBuffer.allocate(length).order(ByteOrder.LITTLE_ENDIAN);
+        b.putInt(0x5053474E).putInt(4).putInt(1).put((byte) 0).put((byte) 12).put((byte) flags).put((byte) 5).putInt(length);
+        b.position(32);
+        for (int[] r : records) {
+            b.putInt(r[0]).putInt(4 * (r.length - 1));
+            for (int i = 1; i < r.length; i++) b.putInt(r[i]);
+        }
+        return b.array();
+    }
+
+    // 決まった乱数で作る分布 (回転と SH の係数もばらばら)
+    private static SplatCloud randomCloud(int count, int shDegree, long seed) {
+        final java.util.Random random = new java.util.Random(seed);
+        final int rest = SplatCloud.restCoefficients(shDegree);
+        final float[] positions = new float[count * 3], rotations = new float[count * 4], scales = new float[count * 3];
+        final float[] opacities = new float[count], colors = new float[count * 3], sh = new float[count * rest * 3];
+        for (int i = 0; i < count; i++) {
+            float len = 0;
+            for (int c = 0; c < 4; c++) {
+                rotations[i * 4 + c] = (float) random.nextGaussian();
+                len += rotations[i * 4 + c] * rotations[i * 4 + c];
+            }
+            len = (float) Math.sqrt(len);
+            for (int c = 0; c < 4; c++) rotations[i * 4 + c] /= len;
+            for (int c = 0; c < 3; c++) {
+                positions[i * 3 + c] = random.nextFloat() * 4 - 2;
+                scales[i * 3 + c] = 0.05f + random.nextFloat();
+                colors[i * 3 + c] = random.nextFloat();
+            }
+            opacities[i] = random.nextFloat();
+        }
+        for (int i = 0; i < sh.length; i++) sh[i] = random.nextFloat() * 2 - 1;
+        return new SplatCloud(count, positions, rotations, scales, opacities, colors, shDegree, sh);
+    }
+
+    // 下に平たい分布の床 (y = -1)、その上に丸い分布。flatless なら床も丸い分布にする
+    private static SplatCloud floorScene(boolean flatless) {
+        final int floor = 200, blob = 100, count = floor + blob;
+        final float[] positions = new float[count * 3], rotations = new float[count * 4], scales = new float[count * 3];
+        final float[] opacities = new float[count], colors = new float[count * 3];
+        for (int i = 0; i < count; i++) {
+            final double a = i * 2.399963;
+            rotations[i * 4 + 3] = 1;
+            opacities[i] = 0.9f;
+            if (i < floor) {
+                final double r = 2 * Math.sqrt((i + 0.5) / floor);
+                positions[i * 3] = (float) (r * Math.cos(a));
+                positions[i * 3 + 1] = -1;
+                positions[i * 3 + 2] = (float) (r * Math.sin(a));
+                scales[i * 3] = 0.1f;
+                scales[i * 3 + 1] = flatless ? 0.1f : 0.004f;
+                scales[i * 3 + 2] = 0.1f;
+            } else {
+                final double y = 1 - 2 * (i - floor + 0.5) / blob, r = Math.sqrt(1 - y * y);
+                positions[i * 3] = (float) (0.5 * r * Math.cos(a));
+                positions[i * 3 + 1] = (float) (0.5 * y);
+                positions[i * 3 + 2] = (float) (0.5 * r * Math.sin(a));
+                scales[i * 3] = scales[i * 3 + 1] = scales[i * 3 + 2] = 0.05f;
+            }
+        }
+        return new SplatCloud(count, positions, rotations, scales, opacities, colors, 0, new float[0]);
+    }
+
+    private static double[] apply(double[] m, double x, double y, double z) {
+        return new double[]{m[0] * x + m[3] * y + m[6] * z, m[1] * x + m[4] * y + m[7] * z, m[2] * x + m[5] * y + m[8] * z};
+    }
+
+    // 分布 i の共分散 R S^2 R^T (行優先)
+    private static double[] covariance(SplatCloud cloud, int i) {
+        final double x = cloud.rotations[i * 4], y = cloud.rotations[i * 4 + 1], z = cloud.rotations[i * 4 + 2], w = cloud.rotations[i * 4 + 3];
+        final double[] r = {
+                1 - 2 * (y * y + z * z), 2 * (x * y - w * z), 2 * (x * z + w * y),
+                2 * (x * y + w * z), 1 - 2 * (x * x + z * z), 2 * (y * z - w * x),
+                2 * (x * z - w * y), 2 * (y * z + w * x), 1 - 2 * (x * x + y * y)};
+        final double[] out = new double[9];
+        for (int a = 0; a < 3; a++) {
+            for (int b = 0; b < 3; b++) {
+                double v = 0;
+                for (int k = 0; k < 3; k++) {
+                    final double s = cloud.scales[i * 3 + k];
+                    v += r[a * 3 + k] * s * s * r[b * 3 + k];
+                }
+                out[a * 3 + b] = v;
+            }
+        }
+        return out;
+    }
+
+    // 向き d から見た、色 c の 1 次以上の部分 (SplatScene と同じ基底。符号は evalShBasis15 が持つので、定数は大きさだけ)
+    private static double shColor(SplatCloud cloud, int i, int c, double x, double y, double z) {
+        final float[] basis = evalShBasis15((float) x, (float) y, (float) z);
+        final double[] constants = {
+                0.4886025119029199, 0.4886025119029199, 0.4886025119029199,
+                1.0925484305920792, 1.0925484305920792, 0.31539156525252005, 1.0925484305920792, 0.5462742152960396,
+                0.5900435899266435, 2.890611442640554, 0.4570457994644658, 0.3731763325901154, 0.4570457994644658,
+                1.445305721320277, 0.5900435899266435};
+        final int rest = SplatCloud.restCoefficients(cloud.shDegree);
+        double v = 0;
+        for (int k = 0; k < rest; k++) v += constants[k] * basis[k] * cloud.shCoefficients[(i * rest + k) * 3 + c];
+        return v;
+    }
+
+    private static void assertEquals(String expected, String actual, String desc) {
+        if (expected == null ? actual != null : !expected.equals(actual)) {
+            throw new AssertionError(desc + ": expected " + expected + ", got " + actual);
+        }
+    }
+
+    private static void assertClose(float[] expected, float[] actual, float tolerance, String desc) {
+        if (expected.length != actual.length) throw new AssertionError(desc + ": length " + expected.length + " != " + actual.length);
+        for (int i = 0; i < expected.length; i++) {
+            if (Math.abs(expected[i] - actual[i]) > tolerance) {
+                throw new AssertionError(desc + " [" + i + "]: expected " + expected[i] + ", got " + actual[i]);
+            }
+        }
     }
 
     // 切り落とし (crop) の単体テスト:

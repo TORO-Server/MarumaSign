@@ -6,7 +6,7 @@ Mod 内蔵のセルフテスト (画面を開く -> 画像を選ぶ -> 看板を
 
 使い方:
     python tools/verify/verify.py --minecraft 1.12.2 --loader forge --loader-version 14.23.5.2860 \
-        --mod dist/build/libs/MarumaSign-4.1.1.jar
+        --mod dist/build/libs/MarumaSign-4.2.0.jar
 """
 
 import argparse

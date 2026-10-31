@@ -39,15 +39,18 @@ public final class SplatPreview {
 
         int failures = 0;
         for (int i = 1; i < args.length; i++) {
-            final File file = new File(args[i]);
+            // 「ファイル#coord=RDF」のように、看板の URL と同じ座標の向きの指定を付けてもよい
+            final int hash = args[i].indexOf('#');
+            final String fragment = hash < 0 ? "" : args[i].substring(hash);
+            final File file = new File(hash < 0 ? args[i] : args[i].substring(0, hash));
             try {
                 final long start = System.nanoTime();
-                final byte[] content = Files.readAllBytes(file.toPath());
-                final SplatCloud cloud = SplatLoader.load(content, file.getName());
+                final SplatCloud cloud = load(file, fragment);
                 final SplatScene scene = new SplatScene(cloud);
                 final long loaded = System.nanoTime();
 
-                final String baseName = file.getName().replace('.', '_');
+                final String baseName = (file.isDirectory() ? file.getName() + "_folder" : file.getName()).replace('.', '_')
+                        + (fragment.isEmpty() ? "" : "_" + fragment.replaceAll("[^A-Za-z0-9]+", ""));
                 for (int v = 0; v < views.length; v++) {
                     final int[] frame = render(scene, views[v][0], views[v][1], FRAME_SIZE);
                     final BufferedImage image = new BufferedImage(FRAME_SIZE, FRAME_SIZE, BufferedImage.TYPE_INT_ARGB);
@@ -64,6 +67,24 @@ public final class SplatPreview {
             }
         }
         if (failures > 0) System.exit(1);
+    }
+
+    // ファイルを読む。フォルダか meta.json なら、zip にしていない .sog として、同じフォルダの WebP を読む
+    static SplatCloud load(File file, String fragment) throws IOException {
+        final File meta = file.isDirectory() ? new File(file, "meta.json") : file;
+        final byte[] content = Files.readAllBytes(meta.toPath());
+        if (!meta.getName().equals("meta.json") || !SplatLoader.isSogMeta(content)) {
+            return SplatLoader.load(content, file.getName() + fragment);
+        }
+        final File folder = meta.getAbsoluteFile().getParentFile();
+        return SplatLoader.loadSogFiles(content, new SplatLoader.SogFiles() {
+            @Override
+            public byte[] load(String name, int maxBytes) throws IOException {
+                final File target = new File(folder, name);
+                if (target.length() > maxBytes) throw new IOException("Too large: " + name);
+                return Files.readAllBytes(target.toPath());
+            }
+        }, meta.getName() + fragment);
     }
 
     public static int[] render(SplatScene scene, double yawDeg, double pitchDeg, int size) {

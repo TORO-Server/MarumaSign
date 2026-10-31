@@ -14,6 +14,9 @@ public final class SplatLoader {
     // 読み込むガウス分布の数の上限。これより多いファイルは、目立つものから順にこの数だけ残す
     public static final int MAX_SPLATS = 150000;
 
+    // zip にしていない .sog の meta.json の大きさの上限
+    public static final int MAX_SOG_META_SIZE = SogReader.MAX_META_BYTES;
+
     // 背景の遠い分布を切り落とす、中心からの距離の中央値に対する倍率
     static final float DEFAULT_CROP_FACTOR = 4.0f;
 
@@ -52,33 +55,82 @@ public final class SplatLoader {
 
     /**
      * ファイルの内容を読み込む。ガウス分布が MAX_SPLATS より多ければ、目立つものから順に残す。
+     * name の末尾に「#coord=RDF」のような指定があれば、ファイルの座標の向きをそれとみなす (SplatCoordinates)。
      *
      * @param content ファイルの内容
-     * @param name    ファイル名か URL (拡張子の判定に使う)。わからなければ null
+     * @param name    ファイル名か URL (拡張子の判定と、#coord= の指定に使う)。わからなければ null
      */
     public static SplatCloud load(byte[] content, String name) throws IOException {
         if (content == null || content.length == 0) throw new IOException("Empty splat data");
         final String ext = extension(name);
         try {
             if (PlyReader.isPly(content, content.length) || ".ply".equals(ext)) {
-                return validate(PlyReader.load(content));
+                return validate(orient(PlyReader.load(content), name));
             }
             if (SpzReader.isSpz(content, content.length) || ".spz".equals(ext)) {
-                return validate(SpzReader.load(content));
+                return validate(orientSpz(SpzReader.load(content), content, name));
             }
             if (SogReader.isSog(content, content.length, ext) || ".sog".equals(ext)) {
-                return validate(SogReader.load(content));
+                return validate(orient(SogReader.load(content), name));
             }
             if (".ksplat".equals(ext)) {
-                return validate(KsplatReader.load(content));
+                return validate(orient(KsplatReader.load(content), name));
             }
             if (".splat".equals(ext)) {
-                return validate(loadSplat(content));
+                return validate(orient(loadSplat(content), name));
             }
         } catch (RuntimeException e) {
             throw new IOException("Invalid splat data: " + e, e);
         }
         throw new IOException("Not a Gaussian splatting file");
+    }
+
+    /**
+     * zip にしていない .sog (meta.json と、それが参照する WebP のファイル) を読み込む。
+     *
+     * @param meta  meta.json の内容
+     * @param files meta.json からの相対の名前でファイルを読むもの
+     * @param name  meta.json の URL (#coord= の指定に使う)。わからなければ null
+     */
+    public static SplatCloud loadSogFiles(byte[] meta, SogFiles files, String name) throws IOException {
+        try {
+            return validate(orient(SogReader.loadFiles(meta, files), name));
+        } catch (RuntimeException e) {
+            throw new IOException("Invalid splat data: " + e, e);
+        }
+    }
+
+    /** zip にしていない .sog の WebP のファイルを読むもの */
+    public interface SogFiles {
+        /**
+         * meta.json からの相対の名前 name のファイルを、maxBytes バイトまで読む。超えたら IOException
+         */
+        byte[] load(String name, int maxBytes) throws IOException;
+    }
+
+    /** 内容が、zip にしていない .sog の meta.json らしいかどうか (JSON として読み、参照するファイルの書き方まで確かめる) */
+    public static boolean isSogMeta(byte[] content) {
+        return SogReader.metaFiles(content) != null;
+    }
+
+    // .spz 以外の形式は、読むときに 3DGS の撮影の座標 (RDF) から直してある。#coord= で別の向きと指定されたら、その向きから直し直す
+    private static SplatCloud orient(SplatCloud cloud, String name) {
+        final String coordinate = SplatCoordinates.fromUrl(name);
+        if (coordinate != null && !coordinate.equals("RDF")) {
+            SplatCoordinates.convert(cloud, "RUB", "RDF");
+            SplatCoordinates.convert(cloud, coordinate, "RUB");
+        }
+        return cloud;
+    }
+
+    // .spz はファイルの座標のまま読む。#coord= の指定、拡張での宣言、中身からの推定、仕様の RUB の順に決める
+    private static SplatCloud orientSpz(SplatCloud cloud, byte[] content, String name) {
+        String coordinate = SplatCoordinates.fromUrl(name);
+        if (coordinate == null) coordinate = SpzReader.declaredCoordinate(content);
+        if (coordinate == null) coordinate = SplatCoordinates.guessUp(cloud);
+        if (coordinate == null) coordinate = "RUB";
+        SplatCoordinates.convert(cloud, coordinate, "RUB");
+        return cloud;
     }
 
     /**
