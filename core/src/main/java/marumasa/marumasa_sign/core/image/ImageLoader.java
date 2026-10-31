@@ -166,10 +166,12 @@ public final class ImageLoader {
             // 先頭だけを読んで、画像・3D モデル・ガウシアンスプラッティング・PDF のどれでもなければ残りは読まない
             final int[] kind = new int[]{KIND_NONE};
             final String[] resolvedName = new String[]{url};
-            final byte[] content = Http.download(url, new Http.ContentCheck() {
+            final boolean[] webPage = new boolean[]{false};
+            final Http.ContentCheck check = new Http.ContentCheck() {
                 @Override
                 public int maxBytes(byte[] head, int length, String name) {
                     resolvedName[0] = name;
+                    webPage[0] = looksLikePage(head, length);
                     if (isSupportedImage(head, length, name)) {
                         kind[0] = KIND_IMAGE;
                         return Http.MAX_SIZE;
@@ -196,9 +198,27 @@ public final class ImageLoader {
                     }
                     return 0;
                 }
-            });
+            };
+            final byte[] content;
+            try {
+                content = Http.download(url, check);
+            } catch (IOException e) {
+                // フォルダの URL (zip にしていない .sog) なら、その中の meta.json を読む
+                final SplatScene folder = sogFolder(url);
+                if (folder == null) throw e;
+                if (request.callback.isWanted()) request.callback.onSplat(folder);
+                return;
+            }
             // ダウンロードしている間に要らなくなったものは、時間のかかる読み込み (デコードや 3D モデルの準備) をしない
             if (!request.callback.isWanted()) return;
+            if (content == null && webPage[0]) {
+                // フォルダの一覧などの Web ページが返ってきた。zip にしていない .sog のフォルダかもしれない
+                final SplatScene folder = sogFolder(url);
+                if (folder != null) {
+                    if (request.callback.isWanted()) request.callback.onSplat(folder);
+                    return;
+                }
+            }
             if (content == null) {
                 // FFmpeg を探すのには時間がかかることがあるので、メインスレッドに渡す前にここで済ませておく
                 Ffmpeg.isAvailable();
@@ -210,7 +230,13 @@ public final class ImageLoader {
                 return;
             }
             if (kind[0] == KIND_SPLAT) {
-                request.callback.onSplat(splat(resolvedName[0], content));
+                // 「#coord=RDF」のような座標の向きの指定は、ダウンロードした後の名前には残らないので付け直す
+                request.callback.onSplat(splat(resolvedName[0] + Http.fragment(url), content));
+                return;
+            }
+            if (kind[0] == KIND_MODEL && SplatLoader.isSogMeta(content)) {
+                // zip にしていない .sog の meta.json
+                request.callback.onSplat(sogFiles(url, content));
                 return;
             }
             if (kind[0] == KIND_PDF) {
@@ -254,6 +280,78 @@ public final class ImageLoader {
     // バイト列をガウシアンスプラッティングとして読み込む
     public static SplatScene splat(String name, byte[] content) throws IOException {
         return new SplatScene(SplatLoader.load(content, name));
+    }
+
+    // 先頭が「<」で始まる (HTML などの Web ページらしい)。フォルダの一覧やエラーのページ
+    private static boolean looksLikePage(byte[] head, int length) {
+        int i = 0;
+        if (length >= 3 && (head[0] & 0xFF) == 0xEF && (head[1] & 0xFF) == 0xBB && (head[2] & 0xFF) == 0xBF) i = 3;
+        while (i < length && (head[i] == ' ' || head[i] == '\t' || head[i] == '\r' || head[i] == '\n')) i++;
+        return i < length && head[i] == '<';
+    }
+
+    /**
+     * フォルダの URL (末尾が「/」か、拡張子のない URL) の中の meta.json の URL。フォルダの URL でなければ null。
+     * クエリ (?…) のある URL は、どこに meta.json を付けるか決まらないので扱わない
+     */
+    static String sogFolderMeta(String url) {
+        final String base = Http.withoutFragment(url);
+        if (base.indexOf('?') >= 0) return null;
+        final int scheme = base.indexOf("://");
+        if (scheme < 0) return null;
+        final int slash = base.indexOf('/', scheme + 3);
+        // 「https://example.com」のような、サーバーだけの URL
+        if (slash < 0) return null;
+        if (base.endsWith("/")) return base + "meta.json";
+        if (base.substring(base.lastIndexOf('/') + 1).indexOf('.') >= 0) return null;
+        return base + "/meta.json";
+    }
+
+    // フォルダの URL なら、その中の meta.json を zip にしていない .sog として読む。meta.json がないか、.sog の meta.json でなければ null
+    private static SplatScene sogFolder(String url) throws IOException {
+        final String metaUrl = sogFolderMeta(url);
+        if (metaUrl == null) return null;
+        final byte[] meta;
+        try {
+            meta = Http.download(metaUrl, new Http.ContentCheck() {
+                @Override
+                public int maxBytes(byte[] head, int length, String name) {
+                    return GltfLoader.looksLikeJson(head, length) ? SplatLoader.MAX_SOG_META_SIZE : 0;
+                }
+            });
+        } catch (IOException e) {
+            return null;
+        }
+        if (meta == null || !SplatLoader.isSogMeta(meta)) return null;
+        return sogFiles(metaUrl + Http.fragment(url), meta);
+    }
+
+    /**
+     * zip にしていない .sog を読む。meta.json が参照する WebP は、meta.json の URL からの相対の位置で、
+     * 看板の URL と同じ決まり (手元や家の中のネットワークは読まない) でダウンロードする
+     *
+     * @param metaUrl meta.json の URL (#coord= の指定を含んでよい)
+     */
+    static SplatScene sogFiles(String metaUrl, byte[] meta) throws IOException {
+        final URL base = new URL(Http.withoutFragment(metaUrl));
+        return new SplatScene(SplatLoader.loadSogFiles(meta, new SplatLoader.SogFiles() {
+            @Override
+            public byte[] load(String name, final int maxBytes) throws IOException {
+                final URL resolved = new URL(base, name);
+                final String protocol = resolved.getProtocol();
+                if (!"http".equals(protocol) && !"https".equals(protocol)) {
+                    throw new IOException("Unsupported SOG file location: " + name);
+                }
+                final byte[] content = Http.download(resolved.toString(), new Http.ContentCheck() {
+                    @Override
+                    public int maxBytes(byte[] head, int length, String resolvedName) {
+                        return maxBytes;
+                    }
+                });
+                if (content == null) throw new IOException("Not a file: " + name);
+                return content;
+            }
+        }, metaUrl));
     }
 
     // ファイルをガウシアンスプラッティングとして読み込む
