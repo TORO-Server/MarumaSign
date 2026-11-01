@@ -10,6 +10,7 @@ import net.minecraft.client.Minecraft;
 import java.util.Timer;
 import java.util.TimerTask;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicReference;
 
 /**
  * Minecraft 1.14 以降向けの実装の入口。バージョンによって違う部分は Mc クラスなどにまとめてある。
@@ -19,10 +20,14 @@ public final class Adapter {
 
     // 処理を呼ぶ間隔 (ミリ秒)。ゲームの 1 tick と同じ
     private static final long INTERVAL = 50;
+    // メインスレッドに渡した処理が、これだけ経っても実行されなければ、もう一度渡す (ナノ秒)
+    private static final long RESEND = 1000000000L;
 
     private static final AtomicBoolean started = new AtomicBoolean();
-    // メインスレッドに渡した処理がまだ実行されていないかどうか
-    private static final AtomicBoolean pending = new AtomicBoolean();
+    // メインスレッドに渡した処理のうち、まだ実行されていない最新のもの
+    private static final AtomicReference<Runnable> pending = new AtomicReference<Runnable>();
+    // pending を渡した時刻 (タイマーのスレッドだけが使う)
+    private static long pendingSince;
 
     private static String loaderName;
     // この実装が core を初期化したかどうか (他の経路で既に起動していれば false のまま)
@@ -41,14 +46,26 @@ public final class Adapter {
             @Override
             public void run() {
                 final Minecraft mc = Minecraft.getInstance();
-                if (mc == null || !pending.compareAndSet(false, true)) return;
-                mc.execute(Adapter::tick);
+                if (mc == null) return;
+                // サーバーから切断するとき、ゲームはメインスレッドの処理の待ちを捨てる。
+                // 渡した処理が捨てられると実行されないので、待ち続けずに渡し直す
+                final long now = System.nanoTime();
+                if (pending.get() != null && now - pendingSince < RESEND) return;
+                // 捨てられずに遅れていただけなら、最新のもの以外は何もしない
+                final Runnable task = new Runnable() {
+                    @Override
+                    public void run() {
+                        if (pending.compareAndSet(this, null)) tick();
+                    }
+                };
+                pending.set(task);
+                pendingSince = now;
+                mc.execute(task);
             }
         }, INTERVAL, INTERVAL);
     }
 
     private static void tick() {
-        pending.set(false);
         final Minecraft mc = Minecraft.getInstance();
         if (!initialized) {
             // 設定の読み込みが終わるまで待つ
