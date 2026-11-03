@@ -49,6 +49,7 @@ public final class GltfRegressionCheck {
         meshoptDeclaredCount();
         instancingType();
         percentDataUri();
+        malformedResourceUri();
         emptyPrimitives();
         pointerToDefaultMaterial();
         infiniteTransform();
@@ -288,6 +289,22 @@ public final class GltfRegressionCheck {
                 + "\"meshes\":[{\"primitives\":[{\"attributes\":{\"POSITION\":0}}]}],\"nodes\":[{\"mesh\":0}]}";
         final float[] bounds = new GltfScene(GltfLoader.load(json.getBytes(StandardCharsets.UTF_8), null)).restBounds();
         check(bounds[3] == 2f && bounds[4] == 1f, "percent-encoded data URI is decoded: max " + bounds[3] + ", " + bounds[4]);
+    }
+
+    // 外部ファイルの URI で % の後ろが 16 進数でないと、URLDecoder が実行時例外を投げる。GltfFuzz が夜の試験で見つけた入力
+    private static void malformedResourceUri() throws Exception {
+        final File model = new File("src/test/resources/gltf/external.gltf");
+        for (String uri : new String[]{"ext뿽%l.bin", "externa��%�n", "%", "a%4.bin"}) {
+            final String json = "{\"asset\":{\"version\":\"2.0\"},\"buffers\":[{\"byteLength\":60,\"uri\":\"" + uri + "\"}]}";
+            String result;
+            try {
+                GltfLoader.load(json.getBytes(StandardCharsets.UTF_8), ImageLoader.fileResources(model));
+                result = "loaded";
+            } catch (IOException e) {
+                result = e.getMessage();
+            }
+            check(result.startsWith("Invalid resource location"), "malformed resource URI is refused: " + result);
+        }
     }
 
     // 三角形のない面を何千も並べると、描くたびにすべてをたどっていた
