@@ -34,7 +34,7 @@ public final class MediaPlayer {
 
     // FFmpeg に許可する通信の種類。ローカルのファイルなどは読ませない。
     // http と https の行き先は FilteringProxy が確かめる (手元や家の中のネットワークにはつながせない)
-    static final String PROTOCOLS = "http,https,tcp,tls,crypto,httpproxy";
+    static final String PROTOCOLS = "http,https,tcp,tls,crypto";
     // 通信が止まってから諦めるまでの時間 (マイクロ秒)。止まったライブ配信を待ち続けないようにする
     static final String NETWORK_TIMEOUT = "15000000";
 
