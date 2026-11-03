@@ -138,10 +138,12 @@ final class FormatUtil {
     }
 
     static int s32le(byte[] d, int p) {
+        if (p < 0 || p > d.length - 4) throw new ArrayIndexOutOfBoundsException(p);
         return (d[p] & 0xFF) | (d[p + 1] & 0xFF) << 8 | (d[p + 2] & 0xFF) << 16 | (d[p + 3] & 0xFF) << 24;
     }
 
     static int s32be(byte[] d, int p) {
+        if (p < 0 || p > d.length - 4) throw new ArrayIndexOutOfBoundsException(p);
         return (d[p] & 0xFF) << 24 | (d[p + 1] & 0xFF) << 16 | (d[p + 2] & 0xFF) << 8 | (d[p + 3] & 0xFF);
     }
 

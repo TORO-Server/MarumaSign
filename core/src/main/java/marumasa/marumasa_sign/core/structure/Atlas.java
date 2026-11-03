@@ -62,7 +62,7 @@ final class Atlas {
                 if (total <= 0) continue;
                 long t = tick % total;
                 int k = 0;
-                while (t >= sprite.times[k]) {
+                while (t >= (long) sprite.times[k]) {
                     t -= sprite.times[k];
                     k++;
                 }
