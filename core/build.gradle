@@ -166,6 +166,13 @@ tasks.register('jpegCheck', JavaExec) {
     args 'src/test/resources/jpeg'
 }
 
+// BigTIFF の 64 ビットの値で足し算があふれても、範囲の確認をすり抜けないことを確かめる
+tasks.register('tiffCheck', JavaExec) {
+    classpath = sourceSets.test.runtimeClasspath
+    mainClass = 'marumasa.marumasa_sign.core.image.format.TiffCheck'
+    javaLauncher = javaToolchains.launcherFor(java.toolchain)
+}
+
 // ダウンロードしたファイルを残しておく仕組み (DownloadCache) を、手元の HTTP サーバーで確かめる
 tasks.register('downloadCacheCheck', JavaExec) {
     classpath = sourceSets.test.runtimeClasspath
