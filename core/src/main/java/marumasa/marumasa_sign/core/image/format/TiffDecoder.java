@@ -124,9 +124,10 @@ final class TiffDecoder {
     private long readIfd(long offset, Ifd ifd) throws IOException {
         final int countSize = big ? 8 : 2;
         final int entrySize = big ? 20 : 12;
-        if (offset + countSize > d.length) throw new IOException("Invalid TIFF directory");
+        if (offset < 0 || offset > d.length - countSize) throw new IOException("Invalid TIFF directory");
         final long count = big ? u64((int) offset) : u16((int) offset);
-        if (count > 4096 || offset + countSize + count * entrySize > d.length) throw new IOException("Invalid TIFF directory");
+        // BigTIFF の数は 64 ビットなので、負の値 (あふれた値) も断る
+        if (count < 0 || count > 4096 || offset + countSize + count * entrySize > d.length) throw new IOException("Invalid TIFF directory");
         final int inline = big ? 8 : 4;
         final int entries = (int) count;
         for (int i = 0; i < entries; i++) {
@@ -141,7 +142,8 @@ final class TiffDecoder {
             if (n < 0 || n > (1 << 22) || total > d.length) continue;
             final int valueField = entry + (big ? 12 : 8);
             final long where = total <= inline ? valueField : (big ? u64(valueField) : u32(valueField));
-            if (where < 0 || where + total > d.length) continue;
+            // where は BigTIFF では 64 ビットなので、足し算があふれないように引き算で比べる
+            if (where < 0 || where > d.length - total) continue;
             if (tag == 347) {
                 // JPEG の共通の表は、バイト列のまま残す (位置と長さを覚える)
                 ifd.values.put(-347, new long[]{where, n});
@@ -182,6 +184,7 @@ final class TiffDecoder {
     }
 
     private int u16(int p) {
+        if (p < 0 || p > d.length - 2) throw new ArrayIndexOutOfBoundsException(p);
         return little ? (d[p] & 0xFF) | (d[p + 1] & 0xFF) << 8 : (d[p] & 0xFF) << 8 | (d[p + 1] & 0xFF);
     }
 
@@ -190,6 +193,7 @@ final class TiffDecoder {
     }
 
     private long u64(int p) {
+        if (p < 0 || p > d.length - 8) throw new ArrayIndexOutOfBoundsException(p);
         final long a = u32(p), b = u32(p + 4);
         return little ? a | b << 32 : b | a << 32;
     }
@@ -231,7 +235,7 @@ final class TiffDecoder {
         final int chunkWidth = tiled ? (int) ifd.get(322, 0) : w;
         final long rowsPerStrip = ifd.get(278, h);
         final int chunkHeight = tiled ? (int) ifd.get(323, 0) : (int) Math.max(1, Math.min(rowsPerStrip, h));
-        if (tiled && (chunkWidth <= 0 || chunkHeight <= 0 || chunkWidth > 16384 || chunkHeight > 16384)) throw new IOException("Invalid TIFF tile size");
+        if (chunkWidth <= 0 || chunkHeight <= 0 || chunkWidth > 16384 || chunkHeight > 16384) throw new IOException("Invalid TIFF tile size");
 
         // 1 つの面に入っているサンプルの数 (色が面ごとに分かれているときは 1)
         final int perPixel = planar ? 1 : spp;
@@ -254,7 +258,8 @@ final class TiffDecoder {
                 final long start = offsets[chunk];
                 long length = counts != null && chunk < counts.length ? counts[chunk] : d.length - start;
                 if (start < 0 || start >= d.length || length < 0) throw new IOException("Invalid TIFF strip offset");
-                if (start + length > d.length) length = d.length - start;
+                // length は BigTIFF では 64 ビットなので、足し算があふれないように引き算で比べる
+                if (length > d.length - start) length = d.length - start;
                 final int tx = index % across, ty = index / across;
                 // 絵に入る行だけを展開する (絵より大きなタイルで、使わない部分のために大きな領域を確保しないように)
                 final int rows = Math.min(chunkHeight, h - ty * chunkHeight);
@@ -351,6 +356,7 @@ final class TiffDecoder {
     }
 
     private static byte[] packBits(byte[] d, int start, int length, int expected) throws IOException {
+        if (start < 0 || length < 0 || length > d.length - start) throw new IOException("Invalid TIFF data range");
         final byte[] out = new byte[expected];
         int p = start;
         final int end = start + length;
@@ -376,6 +382,7 @@ final class TiffDecoder {
 
     // TIFF の LZW (上位のビットから詰める。符号の長さは、表が埋まる 1 つ手前で増える)
     private static byte[] lzw(byte[] d, int start, int length, int expected) throws IOException {
+        if (start < 0 || length < 0 || length > d.length - start) throw new IOException("Invalid TIFF data range");
         final byte[] out = new byte[expected];
         final int end = start + length;
         final int[] prefix = new int[4096];
@@ -447,6 +454,7 @@ final class TiffDecoder {
     // JPEG の 1 つ分 (ストリップやタイル) を展開して、8 ビットの色を交互に並べたバイト列にする
     private static byte[] jpeg(byte[] d, int start, int length, byte[] tables, int expected, int width, int chunkHeight, int rows, int perPixel)
             throws IOException {
+        if (start < 0 || length < 0 || length > d.length - start) throw new IOException("Invalid TIFF data range");
         byte[] data;
         if (tables != null && length >= 2) {
             // 表 (SOI から EOI まで) の EOI を除き、本体の SOI を除いてつなぐ

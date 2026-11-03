@@ -236,6 +236,7 @@ public final class SplatLoader {
             }
         }
 
+        if (candCount <= 0) return new int[0];
         if (candCount <= max) {
             if (candidates != null) return candidates;
             final int[] all = new int[count];

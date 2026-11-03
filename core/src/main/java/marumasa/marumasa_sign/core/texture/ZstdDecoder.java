@@ -41,6 +41,7 @@ public final class ZstdDecoder {
      * 展開する。maxSize を超えるときは失敗にする。
      */
     public static byte[] decompress(byte[] src, int offset, int length, int maxSize) throws IOException {
+        if (offset < 0 || length < 0 || length > src.length - offset) throw new IOException("Invalid Zstandard data range");
         try {
             return new Frame(src, offset, offset + length, maxSize).run();
         } catch (RuntimeException e) {
@@ -662,7 +663,7 @@ public final class ZstdDecoder {
         }
 
         private int u8(int index) throws IOException {
-            if (index >= end) throw new IOException("Truncated Zstandard data");
+            if (index < 0 || index >= end || index >= src.length) throw new IOException("Truncated Zstandard data");
             return src[index] & 0xFF;
         }
 
