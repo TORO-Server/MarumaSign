@@ -43,7 +43,8 @@ public final class FilteringProxy {
      */
     public static void apply(ProcessBuilder builder, String input) throws IOException {
         final String address = address();
-        if (input.startsWith("http://") || input.startsWith("https://")) {
+        final String lower = input.toLowerCase(java.util.Locale.ROOT);
+        if (lower.startsWith("http://") || lower.startsWith("https://")) {
             final List<String> command = builder.command();
             command.add(1, "-http_proxy");
             command.add(2, address);
