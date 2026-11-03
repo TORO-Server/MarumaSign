@@ -1,5 +1,6 @@
 package marumasa.marumasa_sign.core.gltf;
 
+import marumasa.marumasa_sign.core.image.ImageLoader;
 import marumasa.marumasa_sign.core.texture.TextureDecoder;
 import marumasa.marumasa_sign.core.util.Json;
 
@@ -43,8 +44,6 @@ public final class GltfFuzz {
 
     // 1 つの場合の時間の上限
     private static final long CASE_TIMEOUT_SECONDS = 20;
-    // 外部ファイルとして読む大きさの上限
-    private static final int MAX_RESOURCE = 16 * 1024 * 1024;
     // 壊したファイルの大きさの上限
     private static final int MAX_INPUT = 16 * 1024 * 1024;
 
@@ -224,7 +223,7 @@ public final class GltfFuzz {
                 }
                 return null;
             }
-            final GltfModel model = GltfLoader.load(data, resources(seed.dir));
+            final GltfModel model = GltfLoader.load(data, resources(seed));
             LOADED.incrementAndGet();
             if (model.triangleCount() > GltfLoader.MAX_TRIANGLES) return "too many triangles: " + model.triangleCount();
             final GltfScene scene = new GltfScene(model);
@@ -274,18 +273,9 @@ public final class GltfFuzz {
         return strict ? "runtime exception wrapped in IOException: " + describe(cause) : null;
     }
 
-    private static GltfLoader.Resources resources(final File dir) {
-        return new GltfLoader.Resources() {
-            @Override
-            public byte[] load(String uri) throws IOException {
-                if (dir == null || uri.contains("..") || uri.startsWith("/") || uri.indexOf(':') >= 0 || uri.indexOf('\\') >= 0) {
-                    throw new IOException("Unsupported resource location: " + uri);
-                }
-                final File file = new File(dir, java.net.URLDecoder.decode(uri.replace("+", "%2B"), "UTF-8"));
-                if (!file.isFile() || file.length() > MAX_RESOURCE) throw new IOException("Missing resource: " + uri);
-                return Files.readAllBytes(file.toPath());
-            }
-        };
+    // 外部ファイルは Mod と同じ読み方で読む。モデルの場所が分からなければ読まない
+    private static GltfLoader.Resources resources(Seed seed) {
+        return seed.dir == null ? null : ImageLoader.fileResources(new File(seed.dir, seed.name));
     }
 
     private static String describe(Throwable e) {
