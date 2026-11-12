@@ -63,7 +63,34 @@ public final class SignSpec {
             if (Float.isNaN(value) || Float.isInfinite(value)) return null;
             values[i] = Math.max(-MAX_VALUE, Math.min(MAX_VALUE, value));
         }
-        return new SignSpec(p[0], values[0], values[1], values[2], values[3], values[4], values[5], values[6], values[7]);
+        return new SignSpec(normalizeUrl(p[0]), values[0], values[1], values[2], values[3], values[4], values[5], values[6], values[7]);
+    }
+
+    /**
+     * URL 文字列に含まれる全角英数記号 (U+FF01–U+FF5E) を半角 ASCII に正規化する。
+     * 日本語ファイル名等の非 ASCII 文字はそのまま保持する。
+     */
+    public static String normalizeUrl(String rawUrl) {
+        if (rawUrl == null || rawUrl.isEmpty()) return rawUrl;
+        boolean hasFw = false;
+        for (int i = 0, len = rawUrl.length(); i < len; i++) {
+            final char c = rawUrl.charAt(i);
+            if (c >= '\uFF01' && c <= '\uFF5E') {
+                hasFw = true;
+                break;
+            }
+        }
+        if (!hasFw) return rawUrl;
+        final StringBuilder sb = new StringBuilder(rawUrl.length());
+        for (int i = 0, len = rawUrl.length(); i < len; i++) {
+            final char c = rawUrl.charAt(i);
+            if (c >= '\uFF01' && c <= '\uFF5E') {
+                sb.append((char) (c - 0xFEE0));
+            } else {
+                sb.append(c);
+            }
+        }
+        return sb.toString();
     }
 
     public static boolean isSign(String text) {

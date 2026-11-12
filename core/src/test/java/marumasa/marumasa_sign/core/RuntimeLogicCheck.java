@@ -215,6 +215,14 @@ public final class RuntimeLogicCheck {
         check(SignSpec.number(-0.0004f).equals("0") && SignSpec.number(0.5f).equals(".5") && SignSpec.number(-1.25f).equals("-1.25")
                 && SignSpec.number(1e9f).equals("1000000000"), "short numbers in " + locale + ": " + SignSpec.number(-0.0004f));
         check(Json.write("\u0001\u00e9").equals("\"\\u0001\\u00e9\""), "JSON escapes in " + locale + ": " + Json.write("\u0001\u00e9"));
+
+        // 全角 URL の正規化 (U+FF01-U+FF5E の半角化および非 ASCII 文字列の保持)
+        final SignSpec fwSpec = SignSpec.parse("ｈｔｔｐｓ：／／ａｓｓｅｔｓ．ｔｏｒｏｓａｂａ．ｎｅｔ／ｔｅｓｔ．ｐｎｇ|0|0|0|1|1|0|0|0");
+        check(fwSpec != null && fwSpec.url.equals("https://assets.torosaba.net/test.png"),
+                "fullwidth URL normalized in SignSpec.parse");
+        check(SignSpec.normalizeUrl("ｈｔｔｐ：／／ｅｘａｍｐｌｅ．ｃｏｍ／画像／テスト１２３．ｐｎｇ")
+                .equals("http://example.com/画像/テスト123.png"),
+                "normalizeUrl preserves non-ASCII characters and normalizes fullwidth ASCII");
     }
 
     // 看板の 4 行に分けるとき、サロゲートペアを 2 行に分けない
