@@ -20,6 +20,8 @@ import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.ThreadFactory;
 import java.util.concurrent.TimeUnit;
 
+import marumasa.marumasa_sign.core.sign.SignSpec;
+
 /**
  * 画像のダウンロード・アップロードと URL の短縮。
  */
@@ -79,6 +81,7 @@ public final class Http {
      *                 つなぐ直前に引いたアドレスを確かめて、そのアドレスにつなぐ (確かめた後に名前の行き先をすり替えられないように)
      */
     private static HttpURLConnection open(String url, boolean filtered) throws IOException {
+        url = SignSpec.normalizeUrl(url);
         if (!isHttpUrl(url)) throw new IOException("Unsupported protocol scheme in URL: " + url);
         final String encoded;
         try {
