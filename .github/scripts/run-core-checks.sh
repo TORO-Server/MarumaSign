@@ -115,6 +115,8 @@ check structureMeshFuzz 3600 -Xmx2g -Xss512k -Dfuzz.mesh=true marumasa.marumasa_
 # 3D モデルのアニメーション、スプラットの色、入力欄、看板の文字、設定ファイル、すべての言語のファイル
 check runtimeLogicCheck 300 -Xmx1g -Xss512k marumasa.marumasa_sign.core.RuntimeLogicCheck
 check langCheck 120 -Xmx256m marumasa.marumasa_sign.core.LangCheck
+# 看板の頂点の計算 (SignImage = 正本) が、共有の基準データ (MarumaSign-Companion の 3D 表示の JS 試験も読む) と合うこと
+check signVectorCheck 120 -Xmx256m marumasa.marumasa_sign.core.sign.SignVectorCheck
 check gltfRegressionCheck 600 -Xmx1g -Xss512k marumasa.marumasa_sign.core.gltf.GltfRegressionCheck
 check splatRegressionCheck 600 -Xmx1g -Xss512k marumasa.marumasa_sign.core.splat.SplatRegressionCheck
 check gltfFuzz 3600 -Xmx1g -Xss512k -Dfuzz.strict=true marumasa.marumasa_sign.core.gltf.GltfFuzz "$gltf_fuzz" \
