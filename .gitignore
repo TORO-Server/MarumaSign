@@ -130,3 +130,6 @@ __pycache__/
 
 # Claude Code の作業用の worktree
 .claude/worktrees/
+
+# 実機確認の記録 (日付つき。tools/verify/report.py が手元で作る)
+docs/verification.md
