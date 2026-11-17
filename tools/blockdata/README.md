@@ -2,18 +2,18 @@
 
 構造物のファイル (`.schem` `.litematic` `.nbt` `.mcstructure` `.schematic`) の表示には、次の表を使います。
 どれも `core/src/main/resources/marumasa_sign/structure` に gzip で圧縮して置いてあり、ビルドには作り直す必要はありません。
-表示に使う Minecraft の版 (`GameAssets.VERSION`、今は 26.3) を変えるときに作り直します。
+表示に使う Minecraft のバージョン (`GameAssets.VERSION`、今は 26.3) を変えるときに作り直します。
 
 | ファイル | 内容 | 作るもの |
 | --- | --- | --- |
 | `blocks.txt.gz` | ブロックの性質 (性質の名前と値、既定の状態、面の隠れ方、衝突の形、光、液体、植物の位置のずれ) | `BlockDataDump.java` |
 | `entity_models.txt.gz` | ゲームのコードで形が決まっているもの (チェスト、旗、頭、ベル、飾り壺、本、コンジット、銅のゴーレムの像、防具立てと防具) の形 | `EntityModelDump.java` |
 | `legacy.txt.gz` | 1.12 までのブロックの番号から今のブロックへの対応 | `gen_tables.py` |
-| `bedrock.txt.gz` | 統合版のブロックから Java 版のブロックへの対応 | `gen_tables.py` |
+| `bedrock.txt.gz` | 統合版のブロックから Java バージョンのブロックへの対応 | `gen_tables.py` |
 
 ## BlockDataDump / EntityModelDump
 
-Minecraft のクライアントのコードを動かして表を書き出します。Java 25 以降と、その版のクライアントの jar とライブラリが必要です。
+Minecraft のクライアントのコードを動かして表を書き出します。Java 25 以降と、そのバージョンのクライアントの jar とライブラリが必要です。
 次の例では、実機確認 (`tools/verify`) がダウンロードしたものを使います。
 
 ```powershell
