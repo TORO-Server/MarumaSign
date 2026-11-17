@@ -7,10 +7,10 @@
 
 ## 対応するバージョンとローダー
 
-対応する Minecraft のバージョンとローダーの組み合わせの正本は、リポジトリ直下の [`targets.json`](../targets.json) です (`tools/gen_targets.py` から作ります)。
+対応する Minecraft のバージョンとローダーの組み合わせの正本は、置き場直下の [`targets.json`](../targets.json) です (`tools/gen_targets.py` から作ります)。
 どのローダーでも、前提にする他の Mod は宣言していません (`dist/build.gradle` が作る Fabric の定義に `depends` はありません)。
 
-実機での動作確認 (`tools/verify`) の結果は、日付つきの記録になるためこのリポジトリには置きません。`python tools/verify/report.py` で手元に `docs/verification.md` として作れます (`.gitignore` で除外しています)。
+実機での動作確認 (`tools/verify`) の結果は、日付つきの記録になるためこの置き場には置きません。`python tools/verify/report.py` で手元に `docs/verification.md` として作れます (`.gitignore` で除外しています)。
 
 ## 対応している形式
 
@@ -268,7 +268,7 @@ python3 .github/scripts/check-no-libraries.py
 | `blocks.txt.gz` | ブロックの性質 (性質の名前と値、既定の状態、面の隠れ方、衝突の形、光、液体、植物の位置のずれ) | `BlockDataDump.java` |
 | `entity_models.txt.gz` | ゲームのコードで形が決まっているもの (チェスト、旗、頭、ベルなど) の形 | `EntityModelDump.java` |
 | `legacy.txt.gz` | 1.12 までのブロックの番号から今のブロックへの対応 | `gen_tables.py` |
-| `bedrock.txt.gz` | 統合版のブロックから Java 版のブロックへの対応 | `gen_tables.py` |
+| `bedrock.txt.gz` | 統合版のブロックから Java バージョンのブロックへの対応 | `gen_tables.py` |
 
 `BlockDataDump` と `EntityModelDump` は、Minecraft のクライアントのコードを動かして表を書き出します。Java 25 以降と、そのバージョンのクライアントの jar とライブラリが必要です。
 次の例では、実機確認 (`tools/verify`) がダウンロードしたものを使います (`<バージョン>` は `GameAssets.VERSION` の値)。
